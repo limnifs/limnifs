@@ -11,7 +11,8 @@ format, crypto, or merge logic lives here.
 
 **Owns:**
 
-- Subcommand UX: `limni limn` (build), `ls`/`cat`/`stat` (inspect), `verify` (hash+AEAD+signature), `deepen` (tier policy), `merge --flatten` / `turnover`, `import-dwarfs`, `export-car`/`import-car`, `dms status|solve|collect`, `mount` (delegates to 11).
+- Subcommand UX: `limni limn` (build), `ls`/`cat`/`stat` (inspect), `verify` (hash+AEAD+signature), `deepen` (tier policy), `merge --flatten` / `turnover`, `export-car`/`import-car`, `dms status|solve|collect`, `mount`/`unmount` (delegates to 11).
+- **No foreign-format commands.** `limni` only reads/writes `.lim`. DwarFS Frozen2 import lives in the separate `limnifs/limnifs-frozen2` repo as its own tool — `limni` never links frozen2 code. This keeps LimniFS's identity clean: one format, one CLI.
 - Machine-readable output: `--json` on every command; stable exit codes.
 - Key/locator UX: recipients, keyring integration, mirror config files.
 
