@@ -3,6 +3,121 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-29 — Phase 0 Track A spec self-sufficiency complete (session 4)
+
+### Done (with evidence)
+
+- **Part IV prose merged via rebase-merge** —
+  [limnifs/spec#6](https://github.com/limnifs/spec/pull/6). §9 Registry
+  format (data file shape, ID stability, "add row + regenerate
+  bindings, no code change" OCP rule, codegen targets with CI diff
+  gate); §10 AEAD registry (5 rows; XChaCha20-Poly1305 mandatory
+  baseline); §11 Codec registry (5 rows; store + lz4 mandatory;
+  determinism requirement as a conformance rule); §12 Locator scheme
+  registry (6 schemes; `file:` mandatory; locator-entry wire format);
+  §13 Classifier class registry (5 Seine classes; binary is fallback);
+  §14 Feature-flag registry (13 v0.1 flags; ID range convention
+  `0x0001–0x00FF` standard, `0x0100–0x01FF` experimental).
+- **Part V prose merged via rebase-merge** —
+  [limnifs/spec#7](https://github.com/limnifs/spec/pull/7). §15
+  Cryptography (image key + HPKE per-recipient wrap; AEAD application
+  rule pinned to `02-algorithms.md §5`; optional sigstore signature
+  bundle); §16 Erasure coding (Reed-Solomon over GF(2^8) per
+  `02-algorithms.md §7`; reconstruction trigger; image-level vs
+  slab-level EC override semantics).
+- **Part VI prose merged via rebase-merge** —
+  [limnifs/spec#8](https://github.com/limnifs/spec/pull/8). §17
+  Versioning policy (per-layer versions; compatibility rules; the
+  "feature flags vs versions" independence rule; "IDs and field
+  offsets NEVER reused" deprecation); §18 Unknown-flag policy
+  (required-unknown ⇒ `UnsupportedFeature`; optional-unknown ⇒ ignore;
+  per-registry behavior on unknown IDs); §19 Conformance (ten vector
+  classes; Python reference reader as spec-sufficiency oracle).
+- **SPEC.md main**: 1339 lines (was 1038). Eight commits in linear
+  history on `limnifs/spec/main`.
+
+### Spec v0.1 self-sufficiency: ACHIEVED
+
+After Parts I–VI, the spec is fully self-sufficient for the
+`01-format-spec-v01` acceptance criterion ("a reader can be implemented
+from it alone"). A reader implementing from the spec can now:
+
+- Decode every semantic type (`DropId`, `ManifestRoot`, `SlabRef`, etc.
+  — Part I, §2.2).
+- Open a manifest, verify the Merkle root, parse every section
+  (Part II, §5).
+- Walk a slice byte range to drops to slab extents, applying the
+  "do not inflate a full slab outside recorded solid blocks" rule
+  (Part III, §6).
+- Resolve an overlay chain with cycle detection and depth limits
+  (Part III, §7).
+- Perform Delta / Flatten / Turnover / Deepen and update history
+  (Part III, §8).
+- Interpret every registry id (AEAD, codec, locator, classifier, flag —
+  Part IV, §9–14).
+- Apply wire-format crypto + EC invariants (Part V, §15–16).
+- Handle versioning and unknown flags, and understand what
+  conformance means (Part VI, §17–19).
+
+The Python reference reader (`limnifs/limnifs-py`) can now be
+written **from the spec only** — it doesn't need to read the Rust
+implementation. That's the spec-sufficiency oracle (Part VI, §19.2).
+
+### Architectural improvements (the "retain best code only" pass in this session)
+
+- Caught and fixed a character-level mismatch in §5's Merkle formula
+  text (Edit tool failed on a 24-line block; used Python via Bash
+  for byte-exact substitution — added the trailing blank line that
+  the actual file had but my old block missed).
+- Pinned the **registry ID width convention** as per-registry (u8 for
+  AEAD/codec/classifier, u16 for feature flags) rather than a single
+  global width — matches the cardinality differences between
+  registries.
+- Strengthened §18.3 to include the compile-time vs runtime registry
+  reader split: a generated-enum reader cannot encounter "unknown"
+  rows (it fails to compile); a forward-compatible in-memory parser
+  follows the per-registry rules.
+- Strengthened §19.1 with ten concrete vector classes — a strict
+  enumeration of what conformance vectors must cover, so the
+  `02-conformance` task has a checklist.
+- Cross-references tightened: §10 → `02-algorithms.md §5`; §11 →
+  determinism (§1.4); §13 → `02-algorithms.md §4`; §16 →
+  `02-algorithms.md §7`; §15 → `02-algorithms.md §5`. Every
+  cross-reference is now an exact section pointer.
+
+### Decisions (session 4)
+
+- **Scratch location**: workspace-local
+  `/Users/mulgogi/src/limnifs/.scratch/`, NOT `/tmp/`. Reason:
+  `/tmp/` is OS-managed ephemeral scratch; project work — even
+  intermediate, non-committed work — belongs in the project's
+  workspace. `/tmp/` stays reserved for OS-level ephemeral use
+  (lock files, sockets, mktemp outputs).
+- **Spec v0.1 frozen at Part VI**: Parts I–VI cover everything a
+  reader needs to decode a `.limni` image. Parts VII (§20–21
+  resolved/deferred — already in good shape) and VIII (§22 worked
+  examples — stubs only) are supplementary.
+
+### Next (session 5 candidates)
+
+- **Part VII polish** (§20–21): tighten cross-references; ensure §20
+  decisions and §21 deferrals read as normative prose rather than
+  stub bullets.
+- **Part VIII worked examples** (§22): byte-level walks for the
+  four cases (single uncompressed, delta chain depth 2, encrypted
+  single-recipient, EC k=4 m=2). Stubs currently; full walks require
+  matching conformance vectors.
+- **Then in parallel**: [01-flatbuffers-schema] (consumes Part II §3–§5
+  wire-format details + Part IV §10–§14 AEAD/codec/locator/classifier/
+  feature-flag IDs) and [01-feature-flag-registry] (produces the
+  actual `registries/*.toml` data files matching Part IV §9 format).
+
+### In progress / Blockers
+
+- Nothing mid-flight. No blockers.
+
+---
+
 ## 2026-07-29 — Phase 0 Track A prose ramp (session 3)
 
 ### Done (with evidence)
