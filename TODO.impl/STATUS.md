@@ -3,6 +3,95 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — ManifestCursor refactor + drop-store parsers (session 9)
+
+### Done (with evidence)
+
+- **Architectural refactor: ManifestCursor** —
+  [limnifs/limnifs#15](https://github.com/limnifs/limnifs/pull/15).
+  Centralises bounds checks and position tracking in one type
+  (`cursor::ManifestCursor<'a>`). Every parser takes
+  `&mut ManifestCursor` and returns just the parsed value. The
+  module split is MECE: `cursor`, `error`, `header`,
+  `feature_flags` each own one concern. Adding a section is a new
+  module + parser fn — no edits to existing parsers (OCP).
+  Run https://github.com/limnifs/limnifs/actions/runs/30495743346
+  (all three CI checks green on ubuntu + macOS).
+- **Layer 3 spec for slab header (§3.2)** —
+  [limnifs/spec#16](https://github.com/limnifs/spec/pull/16).
+  `bit-level/30-slab-header.md` documents the 56-byte fixed prefix:
+  magic `LIM1`, u16 LE `format_version`, `SlabId` (ordinal u64 LE +
+  32-byte hash), u64 LE `total_length`, u8 `ec_descriptor`, u8
+  `crypto_hint`. Two worked examples (plaintext slab; EC + sealed
+  slab).
+- **Layer 3 spec for drop record (§3.3)** —
+  [limnifs/spec#17](https://github.com/limnifs/spec/pull/17).
+  `bit-level/31-drop-record.md` documents the 48-byte descriptor:
+  drop_id, plaintext_len, representation triple, solid_window_index,
+  offset_in_window, len_in_window. Pins the slab-vs-record
+  cross-field consistency rules (`aead` must be 0 in plaintext slab,
+  `ec` must be 0 in no-EC slab).
+- **Drop-store parsers** —
+  [limnifs/limnifs#16](https://github.com/limnifs/limnifs/pull/16).
+  Two new modules in `limnifs-core`:
+  - `slab` — `parse_slab_header` validates magic LIM1,
+    `format_version=1`, `total_length` floor and ceiling (default
+    64 MiB per §3.1; overridable via `parse_slab_header_with_ceiling`).
+    Rejects `ec_descriptor=0xFF` and `crypto_hint=0xFF` (extended
+    sentinels, post-v1).
+  - `drop_record` — `parse_drop_record` performs the cross-field
+    consistency checks against the parsed slab header, the u32
+    overflow check on `offset_in_window + len_in_window`, and a
+    caller-overridable ceiling on `plaintext_len`.
+  - 19 new unit tests (10 slab + 9 drop record), workspace test
+    count 60 → 79.
+  - Run https://github.com/limnifs/limnifs/actions/runs/30496254812.
+
+### Architecture: cursor pattern pays off
+
+The cursor refactor was the right move at the right time. The two
+new parsers (`slab`, `drop_record`) landed with zero changes to the
+existing parsers (`header`, `feature_flags`) — pure OCP. Each new
+parser is ~100 lines plus tests; without the cursor, each would
+have re-implemented bounds checking (~30 lines per parser) and
+offset bookkeeping. The `&SlabHeader` parameter on
+`parse_drop_record` makes the cross-field dependency explicit in
+the type signature — readers can't accidentally parse a drop record
+without first having parsed its containing slab.
+
+### DoS hardening
+
+The cursor refactor introduced an explicit pre-allocation check in
+the feature flags parser: the declared `entry_count` is verified
+to fit the remaining buffer BEFORE `Vec::with_capacity` is called.
+Without this, a malicious manifest declaring `u32::MAX` entries
+would request a multi-GB allocation and abort the reader.
+
+### In progress / Next
+
+- **Layer 3 spec for locator entry** (`bit-level/37-locator-entry.md`)
+  — unblocks §5.3 metadata reference parser. Locator wire form is
+  `scheme ":" scheme_specific_part` per [§12](https://github.com/limnifs/spec/blob/main/registries/12-locator.md);
+  the bit-level file pins the length-prefix and the per-scheme body
+  shape.
+- **Layer 3 spec for §5.3 metadata reference** — needs locators
+  first. Section carries H(metadata) + locator entries + optional
+  inline blob.
+- **Extend `limnifs-core` to parse §5.3 metadata reference** —
+  depends on the two spec increments above.
+- **Layer 3 spec for inode, Merkle B-tree node** (§4) — bigger
+  chunks; needed before the metadata layer can be walked.
+- **02-conformance bootstrap** — declarative YAML vector format
+  plus a tiny generator that emits a header-only valid image. The
+  Rust reader's existing parsers already cover this case; the
+  bootstrap establishes the framework.
+
+### Blockers
+
+- None. User delegation in effect for green PRs (rebase-merge).
+
+---
+
 ## 2026-07-30 — Spec Layer 3 seeded + feature flags parser (session 8)
 
 ### Done (with evidence)
