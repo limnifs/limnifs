@@ -3,6 +3,80 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — Rust workspace skeleton merged (session 7)
+
+### Done (with evidence)
+
+- **Three-crate Rust workspace merged via rebase-merge** —
+  [limnifs/limnifs#11](https://github.com/limnifs/limnifs/pull/11).
+  Run https://github.com/limnifs/limnifs/actions/runs/30474110443 (all
+  three CI checks green on ubuntu-latest and macos-latest):
+  - `limnifs-format` — semantic types per spec §2.2: `DropId`,
+    `SlabId`, `ManifestRoot`, `Tier`, `Representation`. Distinct
+    newtypes (not bare aliases). RFC 4648 base32 lowercase no-pad
+    encode/decode for the `b3:<base32>` multihash display form. Magic
+    constants for manifest (`LMFS`) and slab (`LIM1`) headers.
+  - `limnifs-core` — manifest header parser per spec §5.1: validates
+    magic, parses three independent u16 LE version fields (drop store
+    / metadata / manifest), enforces the reserved-zero invariant.
+    `CoreError` enum (`TooShort` / `BadMagic` / `Corrupt`) with
+    human-readable `Display`.
+  - `limni` — clap-based CLI exposing `limni verify <image> [--json]`
+    with stable exit codes (0 success, 1 read/format, 2 usage).
+  - Workspace lints: `unsafe_code = "forbid"`, `clippy::pedantic =
+    "warn"`. `rust-toolchain.toml` pins stable + rustfmt + clippy +
+    rust-docs.
+  - Local CI matrix all green: `fmt --check`, `clippy --all-targets
+    --all-features -- -W clippy::pedantic -D warnings`,
+    `build --all-targets --all-features --locked`, `test --all-targets
+    --all-features` (31 tests), `RUSTDOCFLAGS="-D warnings" cargo doc`.
+- **Spec §5.1 clarification merged via rebase-merge** —
+  [limnifs/spec#13](https://github.com/limnifs/spec/pull/13). The
+  section table now states reserved = 6 bytes, reconciling the
+  "first 16 bytes" opener with the field sum (4 + 2 + 2 + 2 + 6 = 16).
+  Reader-side rejection rule for non-zero reserved values pinned.
+  Caught while writing the Rust manifest header parser.
+
+### A spec inconsistency found and fixed
+
+The first integration of spec → code surfaced an internal
+inconsistency in §5.1 (table summed to 14 bytes; section opener said
+"first 16 bytes"). Per "spec-first" (CAMPAIGN.md non-negotiable rules),
+the spec was fixed in lockstep with the code — not the other way
+around. Pattern to repeat: any code that finds a spec inconsistency
+gets a spec PR alongside.
+
+### CI caught a local-only miss
+
+Local clippy (Rust 1.94) accepted `map().unwrap_or()`; CI clippy
+(Rust 1.97) flagged `clippy::map_unwrap_or`. Fix landed as a NEW
+commit on the PR branch (`map_or(0u128, |d| d.as_nanos())`). Takeaway:
+local Rust toolchain should track CI's, or the workspace should pin a
+minimum clippy version. Worth a follow-up in `13-ci-releases`.
+
+### In progress / Next
+
+- **Layer 3 bit-level spec for manifest sections** — §5.2 (feature
+  flags), §5.3 (metadata reference), §5.4 (slab index), §5.5 (crypto
+  params), §5.6 (EC params), §5.7 (DMS policy), §5.8 (delta linkage),
+  §5.9 (history), §5.10 (Merkle root). Current §5 is at the "what
+  each section means" level; the bit-level layout is what the Rust
+  reader needs next.
+- **03-core-reader (manifest parser)** — extend `limnifs-core` to
+  parse section bodies, one section per PR. Order: feature flags →
+  metadata reference → slab index → Merkle root. Then 03-drop-store
+  reader, then 03-overlay-resolver.
+- **02-conformance (bootstrap)** — define the test vector format
+  ([02-test-vector-format.md](02-conformance/02-test-vector-format.md))
+  and the smallest valid manifest vector so the Rust and Python
+  readers have a shared target.
+
+### Blockers
+
+- None. User delegation in effect for green PRs (rebase-merge).
+
+---
+
 ## 2026-07-29 — Wire format pivot + plan updates (session 6)
 
 ### Done
