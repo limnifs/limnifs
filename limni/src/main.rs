@@ -148,8 +148,7 @@ mod tests {
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
+                .map_or(0u128, |d| d.as_nanos()),
         ));
         let mut file = std::fs::File::create(&dir).expect("create temp file");
         file.write_all(contents).expect("write temp file");
