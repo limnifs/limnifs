@@ -3,6 +3,87 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-29 — Part VII polish + initial FlatBuffers schema (session 5)
+
+### Done (with evidence)
+
+- **Part VII polish merged via rebase-merge** —
+  [limnifs/spec#9](https://github.com/limnifs/spec/pull/9). §20
+  resolved + §21 deferred now declare normative status explicitly,
+  both §20 decisions framed as the reversible option, and every
+  cross-reference points to a specific subsection (§3.3 DropRecord
+  fields, §3.4 Solid windows, §5.7 DMS policy, §5.8 TreeOp, §14
+  feature flags, §18 unknown-flag policy).
+- **Initial FlatBuffers schema merged via rebase-merge** —
+  [limnifs/spec#10](https://github.com/limnifs/spec/pull/10). Two
+  files in `limnifs/spec/schema/`:
+  - `schema/types.fbs` — semantic types per §2.2: `Hash` (generic
+    32-byte BLAKE3), `DropId`, `SlabId`, `ManifestRoot`,
+    `Representation`, `Tier` enum.
+  - `schema/manifest.fbs` — manifest sections per §5: `MagicHeader`,
+    `FeatureFlag`, `MetadataReference`, `CryptoParams`, `HPKEEnvelope`,
+    `SignatureBundle`, `ECParams`, `ECOverride`, `DMSPolicy`,
+    `ShareRecord`, `DeltaLinkage`, `TreeOp`, `HistoryEntry`,
+    `SlabIndexEntry`, `LocatorEntry`, `Manifest` (root_type).
+  - Spec-lint job ran `flatc --schema --binary --no-warnings` on both
+    files in CI; both compiled in 48s. Schema is valid FlatBuffers.
+- **SPEC.md main**: 1359 lines (was 1339). Schema files: 210 lines.
+
+### Architectural improvements made on review (the "retain best code only" pass)
+
+- **`Hash` struct introduced** — caught during drafting: FlatBuffers
+  only allows fixed-size `[ubyte:N]` arrays inside structs, not
+  inside tables. SPEC.md uses `[ubyte:32]` notation liberally for
+  non-identity hashes (H(metadata), H(section_i), shard hashes,
+  etc.). The `Hash` struct lets tables carry 32-byte hashes while
+  preserving the exact-width guarantee from §2.2 — without falling
+  back to variable-length `[ubyte]` vectors.
+- **Semantic types throughout** — `ManifestRoot` for the merkle root
+  and `base_root`, not bare `Hash`. Identity types stay distinct so
+  the Rust/Python type systems can enforce them at module boundaries
+  (per §2.2 "implementations MUST emit them as newtypes, not
+  aliases"). A `Hash` field in a struct signals "any 32-byte BLAKE3";
+  a `ManifestRoot` field signals "the image identity".
+- **`image_key: [ubyte]` (variable-length)** in CryptoParams —
+  deferred introducing a `Key32` struct until the pattern recurs.
+  Reader-side validation enforces 32-byte length on read.
+- **`inputs: [ManifestRoot]`** in HistoryEntry — vector of structs
+  (FlatBuffers supports this directly); cleaner than a vector of
+  fixed-size arrays.
+
+### Workspace scratch discipline (the /tmp/ correction)
+
+All scratch work in this session went to
+`/Users/mulgogi/src/limnifs/.scratch/` (PR body files, extracted
+Part VII stub, replacement prose). `/tmp/` left alone. The feedback
+memory at `~/.claude/projects/-Users-mulgogi-src-limnifs/memory/`
+records the rule so it persists across sessions.
+
+### Next
+
+- **Schema follow-ups** (in priority order):
+  1. `schema/slab.fbs` — slab header, DropRecord, SlabRef, shard
+     records (per §3, §16).
+  2. `schema/fs.fbs` — inode, directory entries, slice map, xattrs,
+     Seine per-class records (per §4).
+  3. `schema/delta.fbs` — delta manifest specializations (per §5.8,
+     §8.1) — or fold into manifest.fbs if the specializations are
+     minimal.
+- **Rust workspace + `limnifs-format` crate** — generates bindings
+  from the schema files. Lands once `slab.fbs` and `fs.fbs` exist
+  (the reader needs both to be useful).
+- **Python bindings** — same schema, different generator. Lands
+  alongside or just after the Rust crate.
+- **Registries as data** (`01-feature-flag-registry`): produces the
+  actual `registries/*.toml` files matching the format pinned in §9.
+  Can run in parallel with the schema work.
+
+### In progress / Blockers
+
+- Nothing mid-flight. No blockers.
+
+---
+
 ## 2026-07-29 — Phase 0 Track A spec self-sufficiency complete (session 4)
 
 ### Done (with evidence)
