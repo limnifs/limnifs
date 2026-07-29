@@ -1,10 +1,9 @@
-//! `LimniFS` core reader: manifest header parser.
+//! `LimniFS` core reader: manifest header + feature flags parser.
 //!
-//! Source of truth: `limnifs/spec` §5.1 (Magic + format header).
-//! The first 16 bytes of every `.lim` image manifest carry the magic,
-//! the three independent per-layer version numbers, and a 4-byte
-//! reserved field that MUST be zero. See `limnifs-format` for the
-//! semantic types and magic constants.
+//! Source of truth: `limnifs/spec` §5.1 (Magic + format header),
+//! §5.2 (Feature flags), and `bit-level/35-manifest-header.md` +
+//! `bit-level/36-feature-flags.md` for byte-level layouts.
+//! See `limnifs-format` for the semantic types and magic constants.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -14,18 +13,23 @@ use limnifs_format::MANIFEST_MAGIC;
 
 pub use limnifs_format::MANIFEST_HEADER_LEN;
 
-/// Error reading a manifest header.
+/// Error reading a manifest header or section.
 ///
 /// Errors are surfaced verbatim to callers; the `limni` CLI maps them
 /// to stable exit codes (see component 10-cli).
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum CoreError {
-    /// Fewer than 16 bytes available; cannot parse a header.
+    /// Fewer than the required bytes available.
     TooShort { have: usize, need: usize },
     /// Magic bytes did not match `LMFS`.
     BadMagic { found: [u8; 4] },
-    /// Header parsed, but a structural invariant was violated.
+    /// A structural invariant was violated (nonzero reserved, bad
+    /// section version, duplicate flag, out-of-range value, etc.).
     Corrupt { reason: String },
+    /// The image uses a feature the reader does not implement.
+    /// Carries the flag id (for feature flags) or the section version
+    /// (for unknown section layouts); callers disambiguate via context.
+    UnsupportedFeature { feature: String },
 }
 
 impl fmt::Display for CoreError {
@@ -43,6 +47,9 @@ impl fmt::Display for CoreError {
                 found
             ),
             Self::Corrupt { reason } => write!(f, "manifest corrupt: {reason}"),
+            Self::UnsupportedFeature { feature } => {
+                write!(f, "unsupported feature: {feature}")
+            }
         }
     }
 }
@@ -147,6 +154,160 @@ pub fn parse_manifest_header(bytes: &[u8]) -> Result<ManifestHeader, CoreError> 
         metadata_version,
         manifest_version,
     })
+}
+
+/// Current layout version of the feature flags section
+/// (`bit-level/36-feature-flags.md`).
+pub const FEATURE_FLAGS_SECTION_VERSION: u8 = 1;
+
+/// Width of the fixed-size prefix of the feature flags section
+/// (version byte + u32 LE entry count).
+const FEATURE_FLAGS_PREFIX_LEN: usize = 5;
+
+/// Width of a single feature flag entry (`u16 LE` flag id + `u8` required).
+const FEATURE_FLAG_ENTRY_LEN: usize = 3;
+
+/// One row of the manifest's feature flags section (spec §5.2,
+/// `bit-level/36-feature-flags.md`).
+///
+/// `flag_id` references the feature-flag registry (spec §14).
+/// `required` reflects the wire byte: a required flag the reader does
+/// not know causes `UnsupportedFeature`; an optional flag is silently
+/// ignored (spec §18).
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct FeatureFlag {
+    pub flag_id: u16,
+    pub required: bool,
+}
+
+/// Parsed feature flags section.
+///
+/// `entries` is in wire order (declaration order in the manifest).
+/// Duplicate flag ids are rejected at parse time per
+/// `bit-level/36-feature-flags.md` validation rule 6.
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct FeatureFlags {
+    pub entries: Vec<FeatureFlag>,
+}
+
+impl FeatureFlags {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Look up the entry for `flag_id`, if present.
+    #[must_use]
+    pub fn get(&self, flag_id: u16) -> Option<FeatureFlag> {
+        self.entries
+            .iter()
+            .copied()
+            .find(|entry| entry.flag_id == flag_id)
+    }
+
+    /// True iff `flag_id` is declared with `required = true`.
+    #[must_use]
+    pub fn is_required(&self, flag_id: u16) -> bool {
+        self.get(flag_id).is_some_and(|entry| entry.required)
+    }
+}
+
+/// Parse the feature flags section starting at byte `offset` of `bytes`.
+///
+/// Returns the parsed flags and the number of bytes consumed (the
+/// section's total width: `5 + 3 × N`). Callers advance the cursor by
+/// the returned count to reach the next section.
+///
+/// # Errors
+///
+/// - [`CoreError::TooShort`] if `bytes[offset..]` is shorter than the
+///   fixed prefix or the declared payload.
+/// - [`CoreError::UnsupportedFeature`] if the section version is not
+///   [`FEATURE_FLAGS_SECTION_VERSION`].
+/// - [`CoreError::Corrupt`] for: zero `flag_id`, `required` byte
+///   outside `{0, 1}`, duplicate `flag_id`.
+pub fn parse_feature_flags_section(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<(FeatureFlags, usize), CoreError> {
+    if offset
+        .checked_add(FEATURE_FLAGS_PREFIX_LEN)
+        .map_or(true, |end| end > bytes.len())
+    {
+        return Err(CoreError::TooShort {
+            have: bytes.len().saturating_sub(offset),
+            need: FEATURE_FLAGS_PREFIX_LEN,
+        });
+    }
+    let section_version = bytes[offset];
+    if section_version != FEATURE_FLAGS_SECTION_VERSION {
+        return Err(CoreError::UnsupportedFeature {
+            feature: format!(
+                "feature_flags section version {section_version} (supported: {FEATURE_FLAGS_SECTION_VERSION})"
+            ),
+        });
+    }
+    let entry_count = u32::from_le_bytes([
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+        bytes[offset + 4],
+    ]);
+    let entry_count = usize::try_from(entry_count).map_err(|_| CoreError::Corrupt {
+        reason: format!("feature_flags entry count {entry_count} exceeds usize"),
+    })?;
+    let payload_len = entry_count
+        .checked_mul(FEATURE_FLAG_ENTRY_LEN)
+        .and_then(|product| product.checked_add(FEATURE_FLAGS_PREFIX_LEN))
+        .ok_or_else(|| CoreError::Corrupt {
+            reason: format!("feature_flags entry count {entry_count} overflows section size"),
+        })?;
+    if offset
+        .checked_add(payload_len)
+        .map_or(true, |end| end > bytes.len())
+    {
+        return Err(CoreError::TooShort {
+            have: bytes.len().saturating_sub(offset),
+            need: payload_len,
+        });
+    }
+    let mut entries = Vec::with_capacity(entry_count);
+    for index in 0..entry_count {
+        let entry_offset = offset + FEATURE_FLAGS_PREFIX_LEN + index * FEATURE_FLAG_ENTRY_LEN;
+        let flag_id = u16::from_le_bytes([bytes[entry_offset], bytes[entry_offset + 1]]);
+        if flag_id == 0 {
+            return Err(CoreError::Corrupt {
+                reason: format!("feature_flags entry {index}: flag_id 0x0000 is reserved"),
+            });
+        }
+        let required_byte = bytes[entry_offset + 2];
+        let required = match required_byte {
+            0x00 => false,
+            0x01 => true,
+            other => {
+                return Err(CoreError::Corrupt {
+                    reason: format!(
+                        "feature_flags entry {index}: required byte must be 0x00 or 0x01, got 0x{other:02X}"
+                    ),
+                });
+            }
+        };
+        if entries
+            .iter()
+            .any(|existing: &FeatureFlag| existing.flag_id == flag_id)
+        {
+            return Err(CoreError::Corrupt {
+                reason: format!("feature_flags entry {index}: duplicate flag_id 0x{flag_id:04X}"),
+            });
+        }
+        entries.push(FeatureFlag { flag_id, required });
+    }
+    Ok((FeatureFlags { entries }, payload_len))
 }
 
 #[cfg(test)]
@@ -262,5 +423,188 @@ mod tests {
             reason: "test".into(),
         };
         assert!(corrupt.to_string().contains("test"));
+
+        let unsupported = CoreError::UnsupportedFeature {
+            feature: "feature_flags section version 7".into(),
+        };
+        let s = unsupported.to_string();
+        assert!(s.contains("unsupported"), "got: {s}");
+        assert!(s.contains("version 7"));
+    }
+
+    fn make_flags_bytes(version: u8, entries: &[(u16, u8)]) -> Vec<u8> {
+        let mut bytes =
+            Vec::with_capacity(FEATURE_FLAGS_PREFIX_LEN + entries.len() * FEATURE_FLAG_ENTRY_LEN);
+        bytes.push(version);
+        let count = u32::try_from(entries.len()).expect("test entries fit in u32");
+        bytes.extend_from_slice(&count.to_le_bytes());
+        for (flag_id, required) in entries {
+            bytes.extend_from_slice(&flag_id.to_le_bytes());
+            bytes.push(*required);
+        }
+        bytes
+    }
+
+    #[test]
+    fn feature_flags_parses_empty_section() {
+        let bytes = make_flags_bytes(FEATURE_FLAGS_SECTION_VERSION, &[]);
+        let (flags, consumed) =
+            parse_feature_flags_section(&bytes, 0).expect("empty section parses");
+        assert!(flags.is_empty());
+        assert_eq!(flags.len(), 0);
+        assert_eq!(consumed, FEATURE_FLAGS_PREFIX_LEN);
+    }
+
+    #[test]
+    fn feature_flags_parses_single_required_ec_flag() {
+        let bytes = make_flags_bytes(FEATURE_FLAGS_SECTION_VERSION, &[(0x0001, 0x01)]);
+        let (flags, consumed) = parse_feature_flags_section(&bytes, 0).expect("single flag parses");
+        assert_eq!(consumed, FEATURE_FLAGS_PREFIX_LEN + FEATURE_FLAG_ENTRY_LEN);
+        assert_eq!(flags.len(), 1);
+        assert_eq!(
+            flags.entries[0],
+            FeatureFlag {
+                flag_id: 0x0001,
+                required: true,
+            }
+        );
+        assert!(flags.is_required(0x0001));
+        assert!(!flags.is_required(0x0002));
+    }
+
+    #[test]
+    fn feature_flags_parses_mixed_required_and_optional() {
+        let bytes = make_flags_bytes(
+            FEATURE_FLAGS_SECTION_VERSION,
+            &[(0x0001, 0x01), (0x0012, 0x00), (0x0020, 0x01)],
+        );
+        let (flags, consumed) = parse_feature_flags_section(&bytes, 0).expect("mixed flags parse");
+        assert_eq!(
+            consumed,
+            FEATURE_FLAGS_PREFIX_LEN + 3 * FEATURE_FLAG_ENTRY_LEN
+        );
+        assert_eq!(flags.len(), 3);
+        assert!(flags.is_required(0x0001));
+        assert!(!flags.is_required(0x0012));
+        assert!(flags.is_required(0x0020));
+        assert_eq!(flags.get(0x0012).unwrap().flag_id, 0x0012);
+    }
+
+    #[test]
+    fn feature_flags_parses_at_nonzero_offset() {
+        let mut bytes = vec![0u8; 16];
+        let section = make_flags_bytes(FEATURE_FLAGS_SECTION_VERSION, &[(0x0001, 0x01)]);
+        bytes.extend_from_slice(&section);
+        let (flags, consumed) = parse_feature_flags_section(&bytes, 16).expect("offset parse");
+        assert_eq!(consumed, section.len());
+        assert_eq!(flags.len(), 1);
+    }
+
+    #[test]
+    fn feature_flags_rejects_unknown_section_version() {
+        let bytes = make_flags_bytes(7, &[]);
+        match parse_feature_flags_section(&bytes, 0) {
+            Err(CoreError::UnsupportedFeature { feature }) => {
+                assert!(feature.contains("version 7"), "got: {feature}");
+            }
+            other => panic!("expected UnsupportedFeature, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feature_flags_rejects_short_prefix() {
+        let bytes = [0u8; 4];
+        match parse_feature_flags_section(&bytes, 0) {
+            Err(CoreError::TooShort { have, need }) => {
+                assert_eq!(have, 4);
+                assert_eq!(need, FEATURE_FLAGS_PREFIX_LEN);
+            }
+            other => panic!("expected TooShort, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feature_flags_rejects_truncated_entries() {
+        // Declare count = 10 but only provide one entry. Parser must
+        // detect the shortfall when checking 5 + 3 * 10 > available.
+        let mut bytes = Vec::new();
+        bytes.push(FEATURE_FLAGS_SECTION_VERSION);
+        bytes.extend_from_slice(&10u32.to_le_bytes());
+        bytes.extend_from_slice(&[0x01, 0x00, 0x01]); // only one entry provided
+        match parse_feature_flags_section(&bytes, 0) {
+            Err(CoreError::TooShort { have, need }) => {
+                assert_eq!(have, bytes.len());
+                assert_eq!(need, FEATURE_FLAGS_PREFIX_LEN + 10 * FEATURE_FLAG_ENTRY_LEN);
+            }
+            other => panic!("expected TooShort, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feature_flags_rejects_zero_flag_id() {
+        let bytes = make_flags_bytes(FEATURE_FLAGS_SECTION_VERSION, &[(0x0000, 0x01)]);
+        match parse_feature_flags_section(&bytes, 0) {
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(reason.contains("0x0000"), "got: {reason}");
+                assert!(reason.contains("reserved"));
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feature_flags_rejects_bad_required_byte() {
+        let bytes = make_flags_bytes(FEATURE_FLAGS_SECTION_VERSION, &[(0x0001, 0x05)]);
+        match parse_feature_flags_section(&bytes, 0) {
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(reason.contains("required"), "got: {reason}");
+                assert!(reason.contains("0x05"));
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feature_flags_rejects_duplicate_flag_id() {
+        let bytes = make_flags_bytes(
+            FEATURE_FLAGS_SECTION_VERSION,
+            &[(0x0001, 0x01), (0x0001, 0x00)],
+        );
+        match parse_feature_flags_section(&bytes, 0) {
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(reason.contains("duplicate"), "got: {reason}");
+                assert!(reason.contains("0x0001"));
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feature_flags_round_trip_all_standard_flags() {
+        let standard: &[(u16, u8)] = &[
+            (0x0001, 0x01),
+            (0x0002, 0x00),
+            (0x0010, 0x00),
+            (0x0011, 0x00),
+            (0x0012, 0x01),
+            (0x0013, 0x00),
+            (0x0014, 0x00),
+            (0x0020, 0x01),
+            (0x0021, 0x00),
+            (0x0022, 0x00),
+            (0x0100, 0x00),
+            (0x0101, 0x00),
+        ];
+        let bytes = make_flags_bytes(FEATURE_FLAGS_SECTION_VERSION, standard);
+        let (flags, consumed) = parse_feature_flags_section(&bytes, 0).expect("all standard parse");
+        assert_eq!(flags.len(), standard.len());
+        assert_eq!(
+            consumed,
+            FEATURE_FLAGS_PREFIX_LEN + standard.len() * FEATURE_FLAG_ENTRY_LEN
+        );
+        for (entry, (flag_id, required)) in flags.entries.iter().zip(standard.iter()) {
+            assert_eq!(entry.flag_id, *flag_id);
+            assert_eq!(entry.required, *required != 0);
+        }
     }
 }
