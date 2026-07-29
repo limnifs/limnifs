@@ -25,6 +25,11 @@ Where documents conflict: `00-architecture` beats component READMEs beats the de
 - **No shims, no stubs.** Nothing merges with `todo!()`, `unimplemented!()`, placeholder returns, no-op impls, or skipped tests without a linked task. Partial work stays on branches. If a task is too big to finish whole, split its task file first.
 - **GitHub Actions is the proof.** A task is `done` only when its acceptance criteria run green in CI (matrix: linux + macOS, stable Rust) and the task file links the run. Local results alone do not count.
 - **Spec-first.** Wire-format and interface changes update `limnifs/spec` / `00-architecture` before code. Code follows spec, never the reverse.
+- **Custom wire format.** No FlatBuffers, no Avro, no Cap'n Proto, no SBE, no MessagePack. LimniFS owns its wire format end-to-end (drop store, metadata, manifest). Schema source = SPEC.md; codegen derives from Rust types via `serde`. See [2026-07-29-wire-format-pivot.md](../docs/superpowers/specs/2026-07-29-wire-format-pivot.md) decision D1.
+- **Deterministic Merkle B-tree.** The metadata directory tree is a deterministic Merkle B-tree (Prolly-inspired, but with spec-pinned split rules per §1.4 determinism). See pivot D2.
+- **Per-section versioning.** Schema versioning at section / blob level (one u16 version field), not per record. See pivot D3.
+- **File extension `.lim`.** Every LimniFS image file uses `.lim`. See pivot D4.
+- **Multi-language adapters.** Ruby/TS/Python adapters choose: spec-only implementation (true spec-first oracle) OR Rust FFI/WASM wrap. Both supported. See pivot D5.
 - **No GPL-3 anywhere**, including transitive deps. License scan is a hard CI gate.
 - **Principles:** OCP via registries (AEAD/codec/locator/classifier/feature-flag), encapsulation via the three format layers, SSOT (schema in `limnifs/spec`), model-driven codegen, semantic newtypes (`DropId`, `SlabId`, `ManifestRoot`, `Tier`), zero-copy reads, bounded memory, `clippy::pedantic` clean, no `unsafe` outside vetted FFI.
 - **Identity rule:** `DropId = BLAKE3(plaintext)`; codec/encryption/erasure are representations, never identity. Do not violate this for convenience.

@@ -28,12 +28,13 @@ from below.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│ MANIFEST (small, signed)                                    │
+│ MANIFEST (small, signed, custom binary)                     │
 │  versions · feature flags · slab index · crypto params      │
 │  EC params · delta linkage (base_root) · DMS policy         │
 │  MERKLE ROOT  ← this hash is the image's identity           │
 ├────────────────────────────────────────────────────────────┤
-│ FILESYSTEM METADATA (FlatBuffers, our schema)               │
+│ FILESYSTEM METADATA (custom binary; deterministic Merkle    │
+│  B-tree for the directory)                                  │
 │  inodes · dir tree · xattrs · slice→drop maps · class info  │
 ├────────────────────────────────────────────────────────────┤
 │ DROP STORE (bulk bytes)                                     │
