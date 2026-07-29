@@ -1,0 +1,19 @@
+[package]
+name = "limni"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "LimniFS CLI — one format, one CLI"
+
+[[bin]]
+name = "limni"
+path = "src/main.rs"
+
+[dependencies]
+limnifs-core = { path = "../limnifs-core", version = "0.1.0" }
+clap.workspace = true
+
+[lints]
+workspace = true

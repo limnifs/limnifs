@@ -1,0 +1,21 @@
+[workspace]
+members = ["limnifs-format", "limnifs-core", "limni"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/limnifs/limnifs"
+homepage = "https://www.limnifs.org"
+description = "LimniFS — Layered, Immutable, Merkle-rooted, Network Image filesystem"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = "warn"
+
+[workspace.dependencies]
+clap = { version = "4.5", features = ["derive", "string"] }
