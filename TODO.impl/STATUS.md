@@ -3,6 +3,75 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — Spec Layer 3 seeded + feature flags parser (session 8)
+
+### Done (with evidence)
+
+- **Layer 3 spec directory seeded** —
+  [limnifs/spec#14](https://github.com/limnifs/spec/pull/14).
+  `bit-level/` is now a first-class layer of the spec, parallel to
+  `wire-format/`, `algorithms/`, `registries/`. Established the
+  documentation pattern (byte-offset table, ASCII bit-position
+  diagram, validation rules, worked example, cross-references) with
+  the simplest fixed-width type — the 16-byte manifest header — that
+  the Rust workspace had just implemented. README updates at the top
+  level and within `bit-level/` itself.
+- **Layer 3 bit-level layout for §5.2 feature flags** —
+  [limnifs/spec#15](https://github.com/limnifs/spec/pull/15).
+  v1 wire format: `[section_version: u8][entry_count: u32 LE]
+  [entry × N]` where each entry is `[flag_id: u16 LE][required: u8]`
+  (3 bytes). Validation rules: buffer-overflow, duplicate-flag
+  detection, required-byte constraint (only `0x00`/`0x01`; other
+  values are `Corrupt`, not silently coerced).
+- **Rust feature flags parser** —
+  [limnifs/limnifs#13](https://github.com/limnifs/limnifs/pull/13).
+  Run https://github.com/limnifs/limnifs/actions/runs/30475163840 (all
+  three CI checks green on ubuntu-latest and macos-latest):
+  - `FeatureFlag { flag_id, required }` and `FeatureFlags { entries }`
+    types with `is_empty`, `len`, `get`, `is_required` helpers.
+  - `parse_feature_flags_section(bytes, offset) ->
+    Result<(FeatureFlags, usize), CoreError>` returning parsed flags
+    plus bytes consumed (so callers can advance to the next section).
+  - `CoreError` gains `UnsupportedFeature { feature }` for unknown
+    section versions — surfaces §18 policy cleanly.
+  - 11 new unit tests covering happy paths (empty, single, mixed,
+    nonzero offset, all standard flags) and rejection paths
+    (unknown version, short prefix, truncated entries, zero flag_id,
+    bad required byte, duplicate flag_id).
+  - Workspace test count: 31 → 42 (15 format, 20 core, 7 cli).
+
+### Layer 3 pattern is now established
+
+The shape of every future Layer 3 file is pinned by these two PRs.
+Next Layer 3 files (`37-locator-entry.md`,
+`38-metadata-reference.md`, `30-slab-header.md`, `31-drop-record.md`,
+etc.) follow the same template: heading → total width → byte-offset
+table → ASCII diagram → field semantics → validation rules →
+worked example → cross-references. No more "how should I write
+this?" deliberation for the next dozen files.
+
+### In progress / Next
+
+- **Layer 3 spec for locators** (`bit-level/37-locator-entry.md`) —
+  the locator-entry wire form is `scheme ":" scheme_specific_part`
+  per [§12](https://github.com/limnifs/spec/blob/main/registries/12-locator.md);
+  the bit-level file needs to pin the length-prefix and the
+  per-scheme body shape.
+- **Layer 3 spec for metadata reference** (§5.3) — needs the
+  locator-entry layout above first; section carries H(metadata)
+  plus one or more locator entries plus an optional inline blob.
+- **Extend `limnifs-core` to parse §5.3 metadata reference** —
+  depends on the two spec increments above.
+- **02-conformance bootstrap** — define the smallest valid manifest
+  vector (header + empty feature flags + minimal metadata reference)
+  so the Rust and Python readers have a shared target.
+
+### Blockers
+
+- None. User delegation in effect for green PRs (rebase-merge).
+
+---
+
 ## 2026-07-30 — Rust workspace skeleton merged (session 7)
 
 ### Done (with evidence)
