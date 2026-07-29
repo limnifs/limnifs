@@ -3,6 +3,82 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-29 — Wire format pivot + plan updates (session 6)
+
+### Done
+
+- **Wire format pivot accepted** — user greenlit all 7 decisions
+  after a 2024–2026 literature review (Prolly Trees, CDMT, EROFS,
+  Avro, FlatBuffers, Cap'n Proto, SBE, MessagePack, Frozen2, SolFS,
+  OCI Image Format, Lite2/Lite3, Apache Fury, Postcard). The pivot
+  doc
+  ([docs/superpowers/specs/2026-07-29-wire-format-pivot.md](../docs/superpowers/specs/2026-07-29-wire-format-pivot.md))
+  records the seven decisions and the research basis. Memory entry
+  `project_wire_format_pivot` persists the decisions across sessions.
+- **The seven decisions** (all user-approved):
+  1. **Custom wire format everywhere** — drop FlatBuffers; reject
+     Avro, Cap'n Proto, SBE, MessagePack.
+  2. **Deterministic Merkle B-tree** for the directory tree
+     (Prolly-inspired, deterministic per §1.4).
+  3. **Per-section / per-blob version byte** for schema versioning
+     (no per-record vtables).
+  4. **File extension `.lim`** (supersedes design doc's `.limni`).
+  5. **Multi-language adapters**: spec-only OR Rust FFI/WASM wrap.
+  6. **Multi-file, onion-layered spec** with bit-level detail (~40
+     files in 7 layers).
+  7. **Inode-granular delta ops in v0.1** (no SolFS-style partial-file
+     ops; reversible via feature flag if Phase 1+ benchmarks demand).
+
+### Plan updates this session
+
+- `TODO.impl/CAMPAIGN.md` — non-negotiable rules now include custom
+  wire format, deterministic Merkle B-tree, per-section versioning,
+  `.lim` extension, multi-language adapter model. Each rule links to
+  the pivot doc.
+- `TODO.impl/README.md` — component map row for 01-spec updated
+  (drop FlatBuffers); `.limni` → `.lim` references.
+- `TODO.impl/01-spec/README.md` — full rewrite; drops FlatBuffers,
+  adds custom wire format + Merkle B-tree + multi-file spec + adapter
+  model.
+- `TODO.impl/01-spec/01-spec-restructure-plan.md` — NEW task file
+  planning the multi-file spec migration (file tree, 9-step migration
+  plan, acceptance criteria, open questions).
+- `TODO.impl/00-architecture/00-overview.md` — layer cake ASCII
+  updated: "FlatBuffers, our schema" → "custom binary; deterministic
+  Merkle B-tree for the directory".
+- `docs/superpowers/specs/2026-07-29-wire-format-pivot.md` — NEW
+  amendment to the original design doc. Comprehensive ADR-style
+  record of all 7 decisions with rationale, impact, research basis.
+
+### In progress / Next
+
+- **Schema deprecation** (next PR): `limnifs/spec/schema/DEPRECATED.md`
+  marks the FlatBuffers files as deprecated (not deleted, per
+  never-delete rule).
+- **Spec restructure step 1** (next session): seed the multi-file
+  directory tree + Layer 0 files (README, how-to-read, glossary,
+  conformance summary).
+- **Spec restructure steps 2–9** (subsequent sessions): port content
+  from current SPEC.md into the layered files; author Layer 3
+  (bit-level) as new content; replace SPEC.md with a redirect when
+  migration completes.
+
+### Architectural decisions (permanent)
+
+See `docs/superpowers/specs/2026-07-29-wire-format-pivot.md` for the
+full ADR-style record. See also the project memory entry
+`project_wire_format_pivot` (in
+`~/.claude/projects/-Users-mulgogi-src-limnifs/memory/`).
+
+### Blockers
+
+- None. User delegation in effect for green PRs (rebase-merge).
+- All session-6 scratch work went to `~/src/limnifs/.scratch/` per
+  the workspace-local scratch rule (memory:
+  `feedback_scratch_location`).
+
+---
+
 ## 2026-07-29 — Part VII polish + initial FlatBuffers schema (session 5)
 
 ### Done (with evidence)

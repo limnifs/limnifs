@@ -15,7 +15,7 @@ is the **why**; this tree is the **what**; each component README is the
 | **Modularity** | One crate per component (design §14). `limnifs-core` stays minimal and no-std-adjacent; everything else is a plugin. |
 | **Extensibility** | Feature flags gate every post-v1 capability; unknown flags degrade to clean errors, never to misreads. |
 | **MECE** | The component map (§3 below) partitions the system with no overlap and no gap. If a task doesn't fit exactly one component, the map is wrong — fix the map, not the task. |
-| **SSOT** | The FlatBuffers schema (`01-spec`) is the single source of truth for all wire formats; this tree is the SSOT for work state; the design doc is the SSOT for decisions. Nothing is specified twice. |
+| **SSOT** | The custom wire format specified in `01-spec` (multi-file, bit-level) is the single source of truth for all wire formats; this tree is the SSOT for work state; the design doc + wire format pivot are the SSOT for decisions. Nothing is specified twice. |
 | **DRY** | All language bindings, test vectors, and doc tables are *generated* from the schema and registries, never hand-copied. |
 | **Model-driven** | Code is generated from models (schema, registries, test-vector definitions). Hand-written code implements behavior only. |
 | **Semantically-driven** | Semantic newtypes everywhere (`DropId`, `SlabId`, `ManifestRoot`, `Tier`); no bare `u64`/`[u8; 32]` crosses a module boundary. Vocabulary follows design §3 (drop, slab, epilimnion, turnover…). |
@@ -42,7 +42,7 @@ atomic cross-crate PRs matter:
 | Repo | Contains | Why separate (or not) |
 |---|---|---|
 | `limnifs/limnifs` | Rust workspace: `limnifs-format`, `-core`, `-write`, `-crypto`, `-delta`, `-ec`, `limnifs-locator-*`, `limni` CLI, `limnifs-fuse`; `TODO.impl/` + `docs/` migrate here | one workspace = atomic PRs across crates, single lockfile |
-| `limnifs/spec` | `SPEC.md`, `schema/*.fbs`, registries, conformance vectors + harness | spec-first: independently tagged (spec v0.1, v0.2…); third-party implementations subscribe without Rust code; consumers pin a spec tag |
+| `limnifs/spec` | multi-file `spec/` (onion-layered, bit-level), `registries/*.toml`, conformance vectors + harness, deprecated `schema/*.fbs` | spec-first: independently tagged (spec v0.1, v0.2…); third-party implementations subscribe without Rust code; consumers pin a spec tag |
 | `limnifs/limnifs-py` | Python reference reader | independence is its purpose: written from spec only, no shared repo to peek at |
 | `limnifs/limnifs-frozen2` | legacy Frozen2 read adapter | license-scan boundary: the only repo where third-party (MIT/Apache) DwarFS code may appear |
 | `limnifs/limnifs.org` | the website (Astro 7 + Vite 8 + Tailwind 4 + Vue islands) | public face; renders spec from pinned tag, never copies it |
@@ -59,7 +59,7 @@ component 14), with `limnifs.com` and `limnifs.net` held and redirecting to
 | # | Component | Crate(s) | Owns | Does NOT own | Phase |
 |---|---|---|---|---|---|
 | 00 | [architecture](00-architecture/README.md) | docs only | Normative architecture: module interaction points, interface contracts, algorithm specs, comparison with extant filesystems | implementation, task state | 0 |
-| 01 | [spec](01-spec/README.md) | `limnifs-format` + `spec/` | FlatBuffers schema, registries, feature flags, versioning, codegen | reader/writer behavior | 0 |
+| 01 | [spec](01-spec/README.md) | `limnifs-format` + `spec/` | Custom wire format (no FlatBuffers/Avro/Cap'n Proto), deterministic Merkle B-tree for directory, registries as TOML, feature flags, per-section versioning, multi-file bit-level spec | reader/writer behavior | 0 |
 | 02 | [conformance](02-conformance/README.md) | `conformance/` | test vectors, harness, fuzz corpus, differential testing | implementation code | 0+ |
 | 03 | [core-reader](03-core-reader/README.md) | `limnifs-core` | manifest parse, drop read, overlay resolution, tier-agnostic read path | writing, networking, FUSE | 0 |
 | 04 | [writer-pipeline](04-writer-pipeline/README.md) | `limnifs-write` | chunking, classification, ingest, deepening, slab packing, GC | delta semantics, crypto primitives | 1 |
@@ -70,7 +70,7 @@ component 14), with `limnifs.com` and `limnifs.net` held and redirecting to
 | 09 | [legacy-frozen2](09-legacy-frozen2/README.md) | `limnifs-frozen2` | read-only DwarFS Frozen2 adapter, one-way import | Frozen2 writing (never built) | 1 |
 | 10 | [cli](10-cli/README.md) | `limni` | the `limni` binary UX, subcommands, machine-readable output | library logic (delegates to crates) | 1 |
 | 11 | [mount](11-mount/README.md) | `limnifs-fuse` | FUSE daemon, composefs-style kernel path | caching policy (08), image semantics (03) | 1, 3 |
-| 12 | [tebako-integration](12-tebako-integration/README.md) | tebako-side glue | press/mount consuming `.limni`, parity tests | LimniFS internals | 1 |
+| 12 | [tebako-integration](12-tebako-integration/README.md) | tebako-side glue | press/mount consuming `.lim`, parity tests | LimniFS internals | 1 |
 | 13 | [ci-releases](13-ci-releases/README.md) | `.github/workflows/` | GitHub Actions matrix, merge gates, fuzz/bench schedules, reproducible releases, SBOM, license scan | test content (02), code (all others) | 0+ |
 | 14 | [website](14-website/README.md) | `limnifs/limnifs.org` (Astro 7) | limnifs.org: pages, design system, Vue islands, site CI/deploy | spec content (01), release artifacts (13), product code | 1 |
 
