@@ -3,6 +3,64 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — LZ4 deepening + VFS + FUSE mount + delta builder (session 20)
+
+### Done
+
+- **LZ4 deepening stage** —
+  [limnifs/limnifs#50](https://github.com/limnifs/limnifs/pull/50).
+  Per-class LZ4 compression. `limnifs-core/src/codec.rs` codec
+  registry (store=0x00, lz4=0x01). Writer compresses Text/Code/Binary
+  drops with LZ4; Compressed/Media/Sparse stay as store. Slab reader
+  decompresses on read. End-to-end verified: text compresses ~200x,
+  random data stays store. 8 codec tests.
+- **Python LZ4 codec** —
+  [limnifs/limnifs-py#8](https://github.com/limnifs/limnifs-py/pull/8).
+  `limnifs/codec.py` mirrors the Rust codec. Slab reader updated to
+  decompress LZ4 drops. 10 codec tests.
+- **VFS layer** —
+  [limnifs/limnifs#51](https://github.com/limnifs/limnifs/pull/51).
+  `limni/src/vfs.rs` — pure-functional virtual filesystem that
+  bridges the LimniFS reader to any filesystem frontend. Supports
+  lookup, getattr, readdir, read. 6 unit tests.
+- **FUSE mount frontend** —
+  [limnifs/limnifs#51](https://github.com/limnifs/limnifs/pull/51).
+  `limni/src/fuse_vfs.rs` behind a `fuse` feature flag. Implements
+  `fuser::Filesystem` for read-only mounting. `limni mount` command
+  (conditional on feature). Requires system FUSE libraries.
+- **Delta builder** —
+  [limnifs/limnifs#49](https://github.com/limnifs/limnifs/pull/49).
+  `limnifs-write/src/delta_builder.rs` computes tree operations
+  (Add/Remove/Replace) between two images. `limni diff` CLI command.
+  6 tests.
+
+### Workspace state
+
+- Rust tests: 282 → 293 (+11 across codec, VFS, FUSE helper).
+- Python tests: 27 → 37 (+10 codec).
+- All `fmt`/`clippy`/`test`/`ruff`/`pytest` green.
+- CLI now has 8 commands: verify, limn, ls, cat, stat, extract, diff,
+  mount (behind fuse feature).
+
+### Phase 1 progress
+
+| Task | Status |
+|---|---|
+| 04-chunking-fastcdc | ✅ done |
+| 04-classifier-seine | ✅ done |
+| 04-deepening-compactor | ✅ done (LZ4) |
+| 04-ingest-epilimnion | ✅ done (inline deepening) |
+| 04-slab-packing-gc | partially (single window; GC pending) |
+| 10-cli | ✅ 8 commands |
+| 11-mount | ✅ VFS + FUSE frontend (read-only) |
+
+### Next
+
+- Slab packing optimization (per-class solid windows).
+- GC / turnover (remove unreferenced drops).
+- FUSE CI integration (Linux runner with libfuse-dev).
+- Phase 2: AEAD registry, locator trait, delta application.
+
 ## 2026-07-30 — Seine classifier + limni stat/extract + Layer 2 diff (session 18)
 
 ### Done
