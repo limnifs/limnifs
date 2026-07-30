@@ -3,6 +3,84 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — Optional section parsers (EC params, DMS policy) (session 13)
+
+### Done (with evidence)
+
+- **Layer 3 spec for §5.6 EC params** —
+  [limnifs/spec#23](https://github.com/limnifs/spec/pull/23).
+  `bit-level/43-ec-params.md` pins the Reed-Solomon configuration
+  layout: default `(k, m)` pair, GF(2^8) polynomial (`0x011D`
+  default), per-slab overrides (40-byte SlabId + 2 bytes for `(k,
+  m)`).
+- **Layer 3 spec for §5.7 DMS policy** —
+  [limnifs/spec#24](https://github.com/limnifs/spec/pull/24).
+  `bit-level/44-dms-policy.md` pins the Shamir k-of-n layout:
+  scheme selector, `(k, n)`, share records (length-prefixed
+  custodian_id + share_data), optional reconstruction_hint.
+- **Layer 3 spec for §2.2 Representation triple** —
+  [limnifs/spec#22](https://github.com/limnifs/spec/pull/22).
+  `bit-level/32-representation.md` — the smallest primitive type
+  (3 bytes: codec, aead, ec).
+- **EC params parser** —
+  [limnifs/limnifs#31](https://github.com/limnifs/limnifs/pull/31).
+  Run https://github.com/limnifs/limnifs/actions/runs/30514838976.
+  `EcParams`, `EcOverride`, `parse_ec_params`. Validates `k >= 1`,
+  `m >= 1`, `k + m <= 255` (GF(2^8)), polynomial `== 0x011D`,
+  unique override slab_ids. DoS check on override_count × 42 bytes.
+- **DMS policy parser** —
+  [limnifs/limnifs#32](https://github.com/limnifs/limnifs/pull/32).
+  Run https://github.com/limnifs/limnifs/actions/runs/30515300104.
+  `DmsPolicy`, `ShareRecord`, `parse_dms_policy`. Validates scheme
+  (Shamir only in v0.1), `1 <= k <= n <= 255`, `share_count == n`,
+  unique non-empty custodian_ids, UTF-8 reconstruction_hint.
+  Refactored into three focused functions for MECE.
+
+### Coverage matrix grows
+
+| Section | Layer 3 spec | Rust parser | Python parser |
+|---|---|---|---|
+| §5.1 manifest header | yes | yes | yes |
+| §5.2 feature flags | yes | yes | yes |
+| §5.3 metadata reference | yes | yes | yes |
+| §5.4 slab index | yes | yes | yes |
+| §5.5 crypto params | — | — | — |
+| §5.6 EC params | yes | yes | — |
+| §5.7 DMS policy | yes | yes | — |
+| §5.8 delta linkage | — | — | — |
+| §5.9 history | yes | yes | yes |
+| §5.10 Merkle root | yes | yes | yes |
+| §3.2 slab header | yes | yes | — |
+| §3.3 drop record | yes | yes | — |
+| §2.2 Representation | yes | yes | yes |
+| §12 locator entry | yes | yes | yes |
+
+Workspace test count: 179 → 195 (Rust) + 17 (Python, unchanged
+this turn).
+
+### In progress / Next
+
+- **Python reader parity for EC params + DMS policy** — keeps the
+  differential test green when the conformance crate adds vectors
+  that exercise these sections.
+- **Conformance crate vectors for EC + DMS** — extend
+  `ManifestBuilder` with optional `ec_params` and `dms_policy`
+  fields; encode in spec section order; recompute Merkle root with
+  non-empty crypto/ec/dms slots.
+- **§5.5 crypto params** (needs HPKEEnvelope + SignatureBundle
+  sub-specs).
+- **§5.8 delta linkage** (needs TreeOp sub-spec).
+- **§4 metadata layer Layer 3** (inode, Merkle B-tree node) — gates
+  the drop-store reader's full walk; needed before Phase 1 writer
+  pipeline.
+
+### Blockers
+
+- None. Phase 0 exited. User delegation in effect for green PRs
+  (rebase-merge).
+
+---
+
 ## 2026-07-30 — Phase 0 exit gate LIVE and GREEN (session 12)
 
 ### Done (with evidence)
