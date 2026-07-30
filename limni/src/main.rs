@@ -28,7 +28,7 @@ use clap::{Parser, Subcommand};
 use limnifs_core::{
     compute_merkle_root, hash_empty_section, hash_section, parse_dms_policy, parse_ec_params,
     parse_feature_flags_section, parse_history, parse_manifest_header, parse_metadata_blob,
-    parse_metadata_reference, parse_slab_index, ContentHandle, CoreError, FeatureFlags,
+    parse_metadata_reference, parse_slab_index, ContentHandle, CoreError, FeatureFlags, HistoryOp,
     ManifestCursor, ManifestHeader, ManifestRoot, MetadataBlob, SectionHashes,
 };
 
@@ -137,6 +137,11 @@ enum Command {
         /// Path to the `.lim` image.
         image: PathBuf,
     },
+    /// Print the history section: operations that produced this image.
+    History {
+        /// Path to the `.lim` image.
+        image: PathBuf,
+    },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -164,6 +169,7 @@ fn run() -> Result<(), CliError> {
         Command::Inspect { image } => inspect(&image),
         Command::Slab { slab } => slab_cmd(&slab),
         Command::Gc { image } => gc_cmd(&image),
+        Command::History { image } => history_cmd(&image),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -1064,6 +1070,41 @@ fn gc_cmd(image: &Path) -> Result<(), CliError> {
         println!("  status: clean (no garbage)");
     } else {
         println!("  status: {garbage_drops} drops can be reclaimed");
+    }
+    Ok(())
+}
+
+/// Print the history section of an image.
+fn history_cmd(image: &Path) -> Result<(), CliError> {
+    let bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let mut cursor = ManifestCursor::new(&bytes);
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let _ = parse_manifest_header(&mut cursor).map_err(map_err)?;
+    let _ = parse_feature_flags_section(&mut cursor).map_err(map_err)?;
+    let _ = limnifs_core::parse_metadata_reference(&mut cursor).map_err(map_err)?;
+    let _ = parse_slab_index(&mut cursor).map_err(map_err)?;
+    let history = parse_history(&mut cursor).map_err(map_err)?;
+    println!("{}: {} history entries", image.display(), history.len());
+    for (i, entry) in history.entries.iter().enumerate() {
+        let op_name = match entry.op {
+            HistoryOp::Build => "build",
+            HistoryOp::Delta => "delta",
+            HistoryOp::Flatten => "flatten",
+            HistoryOp::Turnover => "turnover",
+            HistoryOp::Deepen => "deepen",
+        };
+        let ts_secs = entry.timestamp_ns / 1_000_000_000;
+        println!(
+            "  [{i}] {op_name:<8} ts={ts_secs} inputs={} params={}b",
+            entry.inputs.len(),
+            entry.params.len(),
+        );
     }
     Ok(())
 }
