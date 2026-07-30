@@ -26,8 +26,12 @@
 #![warn(clippy::pedantic)]
 
 pub mod builder;
+pub mod differential;
 pub mod harness;
 pub mod vectors;
 
 pub use builder::{ManifestArtifact, ManifestBuilder, ManifestSpec};
+pub use differential::{
+    differential_root, run_limni_py, run_limni_rust, should_run, CliReport, DIFFERENTIAL_ENV_VAR,
+};
 pub use vectors::minimal_v0_1;
