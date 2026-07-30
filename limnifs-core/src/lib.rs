@@ -21,6 +21,7 @@
 //! | [`feature_flags`] | [`FeatureFlag`], [`FeatureFlags`] + [`parse_feature_flags_section`] |
 //! | [`metadata_reference`] | [`MetadataReference`] + [`parse_metadata_reference`] |
 //! | [`slab_index`] | [`SlabIndex`], [`SlabIndexEntry`] + [`parse_slab_index`] |
+//! | [`history`] | [`HistoryEntry`], [`History`] + [`parse_history`] |
 //! | [`slab`] | [`SlabHeader`] + [`parse_slab_header`] |
 //! | [`drop_record`] | [`DropRecord`] + [`parse_drop_record`] |
 //! | [`locator`] | [`LocatorEntry`] + [`parse_locator_entry`] |
@@ -33,6 +34,7 @@ pub mod drop_record;
 pub mod error;
 pub mod feature_flags;
 pub mod header;
+pub mod history;
 pub mod locator;
 pub mod metadata_reference;
 pub mod slab;
@@ -47,6 +49,10 @@ pub use feature_flags::{
     parse_feature_flags_section, FeatureFlag, FeatureFlags, FEATURE_FLAGS_SECTION_VERSION,
 };
 pub use header::{parse_manifest_header, ManifestHeader};
+pub use history::{
+    parse_history, parse_history_with_ceiling, History, HistoryEntry, HistoryOp,
+    DEFAULT_HISTORY_PARAMS_MAX_BYTES, HISTORY_SECTION_VERSION, OP_EXTENDED,
+};
 pub use locator::{
     parse_locator_entries, parse_locator_entries_with_ceiling, parse_locator_entry,
     parse_locator_entry_with_ceiling, LocatorEntry, DEFAULT_LOCATOR_MAX_URI_BYTES,
