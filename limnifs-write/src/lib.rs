@@ -8,9 +8,13 @@
 //! ## Usage
 //!
 //! ```no_run
+//! use std::path::Path;
 //! use limnifs_write::write_directory;
-//! let artifact = write_directory("/path/to/dir")?;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let artifact = write_directory(Path::new("/path/to/dir"))?;
 //! std::fs::write("output.lim", &artifact.bytes)?;
+//! # Ok(())
+//! # }
 //! ```
 
 #![forbid(unsafe_code)]
@@ -41,6 +45,11 @@ pub struct WriteArtifact {
     pub file_count: usize,
     pub dir_count: usize,
     pub drop_count: usize,
+    /// Inode number of the root directory (i.e. the inode that
+    /// represents the source directory itself, not a child of it).
+    /// Always a directory and always referenced by the inlined
+    /// metadata blob's directory inode table.
+    pub root_inode_number: u64,
 }
 
 /// Error during writing.
@@ -322,6 +331,7 @@ impl WriteContext {
             file_count: self.file_count,
             dir_count,
             drop_count,
+            root_inode_number: self.root_inode_number,
         }
     }
 

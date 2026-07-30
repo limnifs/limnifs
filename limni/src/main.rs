@@ -21,9 +21,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use limnifs_core::{
     compute_merkle_root, hash_empty_section, hash_section, parse_dms_policy, parse_ec_params,
-    parse_feature_flags_section, parse_history, parse_manifest_header, parse_metadata_reference,
-    parse_slab_index, CoreError, FeatureFlags, ManifestCursor, ManifestHeader, ManifestRoot,
-    SectionHashes,
+    parse_feature_flags_section, parse_history, parse_manifest_header, parse_metadata_blob,
+    parse_metadata_reference, parse_slab_index, ContentHandle, CoreError, FeatureFlags,
+    ManifestCursor, ManifestHeader, ManifestRoot, MetadataBlob, SectionHashes,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -76,6 +76,21 @@ enum Command {
         /// Output `.lim` file path.
         output: PathBuf,
     },
+    /// List the contents of a directory inside a `.lim` image.
+    ///
+    /// Resolves the inlined metadata blob, walks the directory tree
+    /// from the root inode, and prints one line per entry at the
+    /// requested path. The path is slash-separated and relative to
+    /// the image's root directory; pass `/` (or omit the argument)
+    /// to list the root.
+    Ls {
+        /// Path to the `.lim` image to inspect.
+        image: PathBuf,
+        /// Slash-separated directory path inside the image. Use `/`
+        /// or pass nothing to list the root directory.
+        #[arg(default_value = "/")]
+        path: String,
+    },
 }
 
 fn run() -> Result<(), CliError> {
@@ -83,6 +98,7 @@ fn run() -> Result<(), CliError> {
     match cli.command {
         Command::Verify { image, json } => verify(&image, json),
         Command::Limn { source, output } => limn(&source, &output),
+        Command::Ls { image, path } => ls(&image, &path),
     }
 }
 
@@ -256,6 +272,149 @@ fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
         artifact.inode_count, artifact.file_count, artifact.dir_count, artifact.drop_count
     );
     Ok(())
+}
+
+/// Read a `.lim` manifest, extract its inlined metadata blob, and list
+/// the entries of the directory at `path` (slash-separated, relative
+/// to the image's root; `/` lists the root).
+fn ls(image: &Path, path: &str) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let mut cursor = ManifestCursor::new(&manifest_bytes);
+    let _ = parse_manifest_header(&mut cursor).map_err(map_err)?;
+    let _ = parse_feature_flags_section(&mut cursor).map_err(map_err)?;
+    let meta_ref = parse_metadata_reference(&mut cursor).map_err(map_err)?;
+    let blob_bytes = meta_ref
+        .inline_metadata
+        .as_deref()
+        .ok_or_else(|| CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: "limni ls requires inlined metadata (external-metadata images not yet supported)".into(),
+            },
+        })?;
+    let mut blob_cursor = ManifestCursor::new(blob_bytes);
+    let blob = parse_metadata_blob(&mut blob_cursor).map_err(map_err)?;
+
+    let root_inode_number = blob
+        .root_inode_number()
+        .ok_or_else(|| CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: "metadata blob: could not identify a unique root directory inode".into(),
+            },
+        })?;
+
+    let root_inode =
+        blob.inode_by_number(root_inode_number)
+            .ok_or_else(|| CliError::FormatFailed {
+                path: image.to_path_buf(),
+                source: CoreError::Corrupt {
+                    reason: format!("metadata blob: root inode {root_inode_number} missing"),
+                },
+            })?;
+
+    let target_dir_inode =
+        resolve_path(&blob, root_inode, path).ok_or_else(|| CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!("metadata blob: path {path:?} not found in tree"),
+            },
+        })?;
+
+    let target_hash = match &target_dir_inode.content_handle {
+        ContentHandle::Directory(hash) => *hash,
+        other => {
+            return Err(CliError::FormatFailed {
+                path: image.to_path_buf(),
+                source: CoreError::Corrupt {
+                    reason: format!(
+                        "metadata blob: path {path:?} resolves to a non-directory inode (content_handle: {other:?})"
+                    ),
+                },
+            });
+        }
+    };
+
+    let dir_node = blob
+        .dir_node_by_hash(&target_hash)
+        .ok_or_else(|| CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!(
+                    "metadata blob: directory node for hash {} missing",
+                    format_hex(&target_hash)
+                ),
+            },
+        })?;
+
+    print_directory_listing(image, path, dir_node);
+    Ok(())
+}
+
+/// Walk a slash-separated path from `root_inode` and return the inode
+/// it resolves to. Empty path or `/` returns the root inode itself.
+/// Returns `None` if any component is missing or non-directory.
+fn resolve_path<'a>(
+    blob: &'a MetadataBlob,
+    root_inode: &'a limnifs_core::Inode,
+    path: &str,
+) -> Option<&'a limnifs_core::Inode> {
+    let trimmed = path.trim_start_matches('/').trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Some(root_inode);
+    }
+    let mut current_inode = root_inode;
+    for component in trimmed.split('/') {
+        if component.is_empty() || component.contains('\0') {
+            return None;
+        }
+        let hash = match &current_inode.content_handle {
+            ContentHandle::Directory(h) => *h,
+            _ => return None,
+        };
+        let node = blob.dir_node_by_hash(&hash)?;
+        let entry = node.entries.iter().find(|e| e.name == component)?;
+        current_inode = blob.inode_by_number(entry.inode_number)?;
+    }
+    Some(current_inode)
+}
+
+fn print_directory_listing(image: &Path, path: &str, node: &limnifs_core::DirectoryNode) {
+    println!("{}: directory listing of {path:?}", image.display());
+    if node.entries.is_empty() {
+        println!("  (empty)");
+        return;
+    }
+    println!("  entries: {}", node.entries.len());
+    for entry in &node.entries {
+        let kind = match entry.entry_type {
+            limnifs_core::directory_node::entry_type::FILE => "file",
+            limnifs_core::directory_node::entry_type::DIRECTORY => "dir",
+            limnifs_core::directory_node::entry_type::SYMLINK => "symlink",
+            limnifs_core::directory_node::entry_type::SPECIAL => "special",
+            other => panic!("invalid entry type 0x{other:02X} from parsed node"),
+        };
+        println!(
+            "  inode={:<6} kind={kind:<8} name={}",
+            entry.inode_number, entry.name
+        );
+    }
+}
+
+fn format_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 #[allow(clippy::too_many_arguments)]
 fn print_report(
@@ -608,5 +767,63 @@ mod tests {
             source: std::io::Error::from(std::io::ErrorKind::NotFound),
         };
         assert!(format!("{err:?}").contains("ReadFailed"));
+    }
+
+    fn make_source_tree() -> std::path::PathBuf {
+        let id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "limni-ls-source-{pid}-{id}-{nanos}",
+            pid = std::process::id(),
+            nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0u128, |d| d.as_nanos()),
+        ));
+        std::fs::create_dir_all(&dir).expect("create source root");
+        std::fs::create_dir_all(dir.join("sub")).expect("create subdir");
+        std::fs::write(dir.join("a.txt"), b"aaa").expect("write a.txt");
+        std::fs::write(dir.join("b.txt"), b"bbb").expect("write b.txt");
+        std::fs::write(dir.join("sub").join("c.txt"), b"ccc").expect("write c.txt");
+        dir
+    }
+
+    #[test]
+    fn ls_root_lists_sorted_entries() {
+        let source = make_source_tree();
+        let image = make_temp_file(&[]);
+        std::fs::remove_file(&image).ok();
+        limn(&source, &image).expect("write image");
+        std::fs::remove_dir_all(&source).ok();
+
+        // ls should not error; we do not capture stdout here, but
+        // the absence of a return Err proves the metadata-blob parser
+        // + path resolver both worked end-to-end.
+        ls(&image, "/").expect("ls root succeeds");
+        ls(&image, "/sub").expect("ls subdir succeeds");
+        let _ = std::fs::remove_file(&image);
+    }
+
+    #[test]
+    fn ls_missing_path_reports_corrupt() {
+        let source = make_source_tree();
+        let image = make_temp_file(&[]);
+        std::fs::remove_file(&image).ok();
+        limn(&source, &image).expect("write image");
+        std::fs::remove_dir_all(&source).ok();
+        match ls(&image, "/does-not-exist") {
+            Err(CliError::FormatFailed { source, .. }) => {
+                assert!(matches!(source, CoreError::Corrupt { .. }));
+            }
+            other => panic!("expected FormatFailed, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&image);
+    }
+
+    #[test]
+    fn ls_missing_image_reports_read_failed() {
+        let path = PathBuf::from("/nonexistent/limni-ls-test-does-not-exist.lim");
+        match ls(&path, "/") {
+            Err(CliError::ReadFailed { .. }) => {}
+            other => panic!("expected ReadFailed, got {other:?}"),
+        }
     }
 }
