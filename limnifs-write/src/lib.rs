@@ -171,10 +171,7 @@ impl WriteContext {
             self.file_count += 1;
             let inode_number = self.alloc_inode();
             let size = meta.len();
-            if usize::try_from(size)
-                .map(|s| s > INLINE_THRESHOLD)
-                .unwrap_or(true)
-            {
+            if usize::try_from(size).map_or(true, |s| s > INLINE_THRESHOLD) {
                 return Err(WriteError::FileTooLarge {
                     path: path.display().to_string(),
                     size,
