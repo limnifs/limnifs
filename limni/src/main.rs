@@ -142,6 +142,11 @@ enum Command {
         /// Path to the `.lim` image.
         image: PathBuf,
     },
+    /// Analyze dedup: show how many drops are shared across files.
+    Dedup {
+        /// Path to the `.lim` image.
+        image: PathBuf,
+    },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -170,6 +175,7 @@ fn run() -> Result<(), CliError> {
         Command::Slab { slab } => slab_cmd(&slab),
         Command::Gc { image } => gc_cmd(&image),
         Command::History { image } => history_cmd(&image),
+        Command::Dedup { image } => dedup_cmd(&image),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -1106,6 +1112,61 @@ fn history_cmd(image: &Path) -> Result<(), CliError> {
             entry.params.len(),
         );
     }
+    Ok(())
+}
+
+/// Analyze dedup: how many drops are shared across files.
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
+fn dedup_cmd(image: &Path) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, _, _) = load_image(&manifest_bytes, image, map_err)?;
+
+    let mut drop_refs: HashSet<[u8; 32]> = HashSet::new();
+    let mut total_refs = 0usize;
+    let mut drop_backed_files = 0usize;
+    let mut inline_files = 0usize;
+
+    for inode in &blob.inodes {
+        match &inode.content_handle {
+            ContentHandle::SliceMap(slices) => {
+                drop_backed_files += 1;
+                for slice in slices {
+                    drop_refs.insert(*slice.drop_id.as_bytes());
+                    total_refs += 1;
+                }
+            }
+            ContentHandle::InlineData(_) => {
+                inline_files += 1;
+            }
+            _ => {}
+        }
+    }
+
+    let unique_drops = drop_refs.len();
+    let dup_refs = total_refs.saturating_sub(unique_drops);
+    let dedup_ratio = if total_refs > 0 {
+        dup_refs as f64 / total_refs as f64
+    } else {
+        0.0
+    };
+
+    println!("dedup analysis: {}", image.display());
+    println!("  files (inline):      {inline_files}");
+    println!("  files (drop-backed): {drop_backed_files}");
+    println!("  total drop refs:     {total_refs}");
+    println!("  unique drops:        {unique_drops}");
+    println!("  duplicate refs:      {dup_refs}");
+    println!(
+        "  dedup ratio:         {dedup_ratio:.2} ({:.0}% of refs deduplicated)",
+        dedup_ratio * 100.0
+    );
     Ok(())
 }
 
