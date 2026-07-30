@@ -108,6 +108,12 @@ enum Command {
         /// Slash-separated file path inside the image.
         path: String,
     },
+    /// Print an inode's metadata (number, mode, sizes, content handle).
+    Stat { image: PathBuf, path: String },
+    /// Extract an image's contents to a filesystem directory.
+    Extract { image: PathBuf, dest: PathBuf },
+    /// Compute tree operations between a parent and child image.
+    Diff { parent: PathBuf, child: PathBuf },
     /// Print a comprehensive overview of an image: manifest summary,
     /// metadata blob stats, slab stats, and per-class drop counts.
     Inspect {
@@ -134,6 +140,9 @@ fn run() -> Result<(), CliError> {
         Command::Limn { source, output } => limn(&source, &output),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat { image, path } => cat(&image, &path),
+        Command::Stat { image, path } => stat(&image, &path),
+        Command::Extract { image, dest } => extract(&image, &dest),
+        Command::Diff { parent, child } => diff(&parent, &child),
         Command::Inspect { image } => inspect(&image),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
@@ -596,6 +605,216 @@ fn inspect(image: &Path) -> Result<(), CliError> {
 
     println!("  limni version: {VERSION}");
     Ok(())
+}
+
+/// Print an inode's metadata.
+fn stat(image: &Path, path: &str) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, root_inode_number, _) = load_image(&manifest_bytes, image, map_err)?;
+    let root_inode = blob.inode_by_number(root_inode_number).expect("validated");
+    let inode = resolve_path(&blob, root_inode, path).ok_or_else(|| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source: CoreError::Corrupt {
+            reason: format!("path {path:?} not found"),
+        },
+    })?;
+    println!("{}: stat {path:?}", image.display());
+    println!("  inode:   {}", inode.number);
+    println!("  mode:    0o{:o}", inode.mode & 0o7777);
+    println!("  type:    {}", format_file_type(inode.file_type()));
+    println!("  nlink:   {}", inode.nlink);
+    match &inode.content_handle {
+        ContentHandle::InlineData(d) => println!("  content: inline ({} bytes)", d.len()),
+        ContentHandle::SliceMap(s) => println!("  content: slice map ({} slices)", s.len()),
+        ContentHandle::Directory(h) => println!("  content: directory (hash {})", format_hex(h)),
+        ContentHandle::Symlink(t) => println!("  content: symlink -> {t:?}"),
+        ContentHandle::Device(d) => println!("  content: device ({d})"),
+        ContentHandle::Pipe(p) => println!("  content: pipe ({p})"),
+    }
+    Ok(())
+}
+
+/// Extract an image to a filesystem directory.
+fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, root_inode_number, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+    std::fs::create_dir_all(dest).map_err(|source| CliError::ReadFailed {
+        path: dest.to_path_buf(),
+        source,
+    })?;
+    let root_inode = blob.inode_by_number(root_inode_number).expect("validated");
+    let mut files = 0usize;
+    let mut dirs = 0usize;
+    extract_dir(
+        &blob,
+        root_inode,
+        dest,
+        image,
+        &slab_index,
+        &mut files,
+        &mut dirs,
+    )?;
+    println!(
+        "{}: extracted {files} files, {dirs} directories",
+        dest.display()
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extract_dir(
+    blob: &MetadataBlob,
+    dir_inode: &limnifs_core::Inode,
+    dir_path: &Path,
+    image: &Path,
+    slab_index: &limnifs_core::SlabIndex,
+    files: &mut usize,
+    dirs: &mut usize,
+) -> Result<(), CliError> {
+    let hash = match &dir_inode.content_handle {
+        ContentHandle::Directory(h) => *h,
+        _ => return Ok(()),
+    };
+    let node = blob
+        .dir_node_by_hash(&hash)
+        .ok_or_else(|| CliError::FormatFailed {
+            path: dir_path.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: "dir node missing".into(),
+            },
+        })?;
+    for entry in &node.entries {
+        let child =
+            blob.inode_by_number(entry.inode_number)
+                .ok_or_else(|| CliError::FormatFailed {
+                    path: dir_path.to_path_buf(),
+                    source: CoreError::Corrupt {
+                        reason: format!("inode {} missing", entry.inode_number),
+                    },
+                })?;
+        let child_path = dir_path.join(&entry.name);
+        match entry.entry_type {
+            0x01 => {
+                write_file(blob, child, &child_path, image, slab_index)?;
+                *files += 1;
+            }
+            0x02 => {
+                std::fs::create_dir_all(&child_path).map_err(|source| CliError::ReadFailed {
+                    path: child_path.clone(),
+                    source,
+                })?;
+                *dirs += 1;
+                extract_dir(blob, child, &child_path, image, slab_index, files, dirs)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn write_file(
+    _blob: &MetadataBlob,
+    inode: &limnifs_core::Inode,
+    target: &Path,
+    image: &Path,
+    slab_index: &limnifs_core::SlabIndex,
+) -> Result<(), CliError> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(target).map_err(|source| CliError::ReadFailed {
+        path: target.to_path_buf(),
+        source,
+    })?;
+    match &inode.content_handle {
+        ContentHandle::InlineData(d) => {
+            file.write_all(d).map_err(|source| CliError::ReadFailed {
+                path: target.to_path_buf(),
+                source,
+            })?;
+        }
+        ContentHandle::SliceMap(slices) => {
+            for slice in slices {
+                let slab_path = resolve_slab_path(image, slab_index)?;
+                let slab_bytes =
+                    std::fs::read(&slab_path).map_err(|source| CliError::ReadFailed {
+                        path: slab_path.clone(),
+                        source,
+                    })?;
+                let view = limnifs_core::parse_slab(&slab_bytes).map_err(|source| {
+                    CliError::FormatFailed {
+                        path: slab_path.clone(),
+                        source,
+                    }
+                })?;
+                let plaintext = view
+                    .plaintext_for(slice.drop_id.as_bytes())
+                    .ok_or_else(|| CliError::FormatFailed {
+                        path: slab_path.clone(),
+                        source: CoreError::Corrupt {
+                            reason: "drop not found".into(),
+                        },
+                    })?
+                    .map_err(|source| CliError::FormatFailed {
+                        path: slab_path.clone(),
+                        source,
+                    })?;
+                file.write_all(&plaintext)
+                    .map_err(|source| CliError::ReadFailed {
+                        path: target.to_path_buf(),
+                        source,
+                    })?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Compute the delta between two images and print tree operations.
+fn diff(parent: &Path, child: &Path) -> Result<(), CliError> {
+    let artifact = limnifs_write::delta_builder::compute_delta(parent, child).map_err(|e| {
+        CliError::FormatFailed {
+            path: parent.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!("delta: {e}"),
+            },
+        }
+    })?;
+    println!("ops: {}", artifact.tree_ops.len());
+    for op in &artifact.tree_ops {
+        let kind = match op.kind {
+            limnifs_core::delta_linkage::TreeOpKind::Add => "A",
+            limnifs_core::delta_linkage::TreeOpKind::Remove => "R",
+            limnifs_core::delta_linkage::TreeOpKind::Replace => "M",
+        };
+        let inode = op
+            .inode_number
+            .map_or_else(|| "-".to_string(), |n| n.to_string());
+        println!("{kind} {} inode={inode}", op.path);
+    }
+    Ok(())
+}
+
+fn format_file_type(file_type: u32) -> &'static str {
+    match file_type {
+        limnifs_core::S_IFREG => "regular file",
+        limnifs_core::S_IFDIR => "directory",
+        limnifs_core::S_IFLNK => "symlink",
+        _ => "other",
+    }
 }
 
 /// Derive the path to the slab file that holds a slice's drop. Uses
