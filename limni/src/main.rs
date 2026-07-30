@@ -64,12 +64,25 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Build a `.lim` image from a directory tree.
+    ///
+    /// The MVP writer walks the directory recursively and emits a
+    /// self-contained manifest with inlined metadata. Files at or
+    /// below the inline threshold (4 KiB) are stored inline; larger
+    /// files are rejected.
+    Limn {
+        /// Source directory to package.
+        source: PathBuf,
+        /// Output `.lim` file path.
+        output: PathBuf,
+    },
 }
 
 fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     match cli.command {
         Command::Verify { image, json } => verify(&image, json),
+        Command::Limn { source, output } => limn(&source, &output),
     }
 }
 
@@ -84,6 +97,10 @@ fn run_with_exit_code() -> ExitCode {
             eprintln!("limni: {}: {source}", path.display());
             ExitCode::FAILURE
         }
+        Err(CliError::WriteFailed { source }) => {
+            eprintln!("limni: write failed: {source}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -92,6 +109,7 @@ fn main() -> ExitCode {
 }
 
 #[derive(Debug)]
+#[allow(clippy::enum_variant_names)]
 enum CliError {
     ReadFailed {
         path: PathBuf,
@@ -100,6 +118,9 @@ enum CliError {
     FormatFailed {
         path: PathBuf,
         source: CoreError,
+    },
+    WriteFailed {
+        source: limnifs_write::WriteError,
     },
 }
 
@@ -198,6 +219,25 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
+fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
+    let artifact = limnifs_write::write_directory(source)
+        .map_err(|source| CliError::WriteFailed { source })?;
+    std::fs::write(output, &artifact.bytes).map_err(|source| CliError::ReadFailed {
+        path: output.to_path_buf(),
+        source,
+    })?;
+    println!(
+        "{}: wrote {} bytes, {manifest_root}",
+        output.display(),
+        artifact.bytes.len(),
+        manifest_root = artifact.merkle_root,
+    );
+    println!(
+        "  inodes: {}  files: {}  dirs: {}",
+        artifact.inode_count, artifact.file_count, artifact.dir_count
+    );
+    Ok(())
+}
 #[allow(clippy::too_many_arguments)]
 fn print_report(
     path: &Path,
