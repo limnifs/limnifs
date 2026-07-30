@@ -1,5 +1,5 @@
 [workspace]
-members = ["limnifs-format", "limnifs-core", "limni"]
+members = ["limnifs-format", "limnifs-core", "limnifs-conformance", "limni"]
 resolver = "2"
 
 [workspace.package]
