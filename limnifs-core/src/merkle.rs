@@ -222,37 +222,28 @@ mod tests {
             history: one_hash(10),
         };
         let baseline = compute_merkle_root(&base);
-        // Flip each slot to a different value and assert the root changes.
-        for field_name in [
-            "metadata",
-            "format_header",
-            "feature_flags",
-            "metadata_reference",
-            "slab_index",
-            "crypto_params",
-            "ec_params",
-            "dms_policy",
-            "delta_linkage",
-            "history",
-        ] {
+        // Walk each field by index and assert mutating it changes the root.
+        for slot_index in 0..10_u32 {
             let mut mutated = base;
-            match field_name {
-                "metadata" => mutated.metadata = zero_hash(),
-                "format_header" => mutated.format_header = zero_hash(),
-                "feature_flags" => mutated.feature_flags = zero_hash(),
-                "metadata_reference" => mutated.metadata_reference = zero_hash(),
-                "slab_index" => mutated.slab_index = zero_hash(),
-                "crypto_params" => mutated.crypto_params = zero_hash(),
-                "ec_params" => mutated.ec_params = zero_hash(),
-                "dms_policy" => mutated.dms_policy = zero_hash(),
-                "delta_linkage" => mutated.delta_linkage = zero_hash(),
-                "history" => mutated.history = zero_hash(),
-                _ => unreachable!(),
+            let zero = zero_hash();
+            match slot_index {
+                0 => mutated.metadata = zero,
+                1 => mutated.format_header = zero,
+                2 => mutated.feature_flags = zero,
+                3 => mutated.metadata_reference = zero,
+                4 => mutated.slab_index = zero,
+                5 => mutated.crypto_params = zero,
+                6 => mutated.ec_params = zero,
+                7 => mutated.dms_policy = zero,
+                8 => mutated.delta_linkage = zero,
+                9 => mutated.history = zero,
+                // No default arm: slot_index is bounded by 0..10 above.
+                _ => continue,
             }
             let mutated_root = compute_merkle_root(&mutated);
             assert_ne!(
                 mutated_root, baseline,
-                "changing {field_name} did not change the root"
+                "changing slot {slot_index} did not change the root"
             );
         }
     }
