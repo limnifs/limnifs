@@ -126,6 +126,92 @@ pub fn differential_root(vector: &Vector) -> Result<(ManifestRoot, ManifestRoot)
     Ok((rust_root_typed, py_root_typed))
 }
 
+/// A mutation to apply to a fixture's bytes for rejection testing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mutation {
+    /// Truncate the bytes to the given length (MUST be < original length).
+    Truncate { new_len: usize },
+    /// Replace the first 4 bytes with `XXXX` to break the magic.
+    BadMagic,
+    /// XOR a single byte at `offset` with `mask`.
+    FlipByte { offset: usize, mask: u8 },
+}
+
+impl Mutation {
+    /// Apply this mutation to a byte buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutation is out of bounds for `original`:
+    /// - [`Mutation::Truncate`] requires `new_len < original.len()`.
+    /// - [`Mutation::FlipByte`] requires `offset < original.len()`.
+    #[must_use]
+    pub fn apply(self, original: &[u8]) -> Vec<u8> {
+        match self {
+            Self::Truncate { new_len } => {
+                assert!(
+                    new_len < original.len(),
+                    "Truncate requires new_len < original length"
+                );
+                original[..new_len].to_vec()
+            }
+            Self::BadMagic => {
+                let mut out = original.to_vec();
+                out[..4].copy_from_slice(b"XXXX");
+                out
+            }
+            Self::FlipByte { offset, mask } => {
+                assert!(offset < original.len(), "FlipByte offset out of bounds");
+                let mut out = original.to_vec();
+                out[offset] ^= mask;
+                out
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Truncate { .. } => "truncate",
+            Self::BadMagic => "bad-magic",
+            Self::FlipByte { .. } => "flip-byte",
+        }
+    }
+}
+
+/// Run a rejection differential: encode the vector, mutate, run both
+/// CLIs, and assert BOTH reject (exit non-zero).
+///
+/// Returns `Ok(())` if both readers reject; `Err(String)` describing
+/// which reader (or both) incorrectly accepted the corrupted input.
+///
+/// # Errors
+///
+/// See [`run_limni_rust`] and [`run_limni_py`].
+pub fn differential_rejection(vector: &Vector, mutation: Mutation) -> Result<(), String> {
+    let artifact: ManifestArtifact = ManifestBuilder::new(vector.spec.clone()).build();
+    let corrupted = mutation.apply(&artifact.bytes);
+    let rust = run_limni_rust(&corrupted)?;
+    let py = run_limni_py(&corrupted)?;
+    if rust.exit_code == 0 {
+        return Err(format!(
+            "vector {} / mutation {}: rust accepted corrupted input (exit 0, root {:?})",
+            vector.name,
+            mutation.label(),
+            rust.merkle_root
+        ));
+    }
+    if py.exit_code == 0 {
+        return Err(format!(
+            "vector {} / mutation {}: python accepted corrupted input (exit 0, root {:?})",
+            vector.name,
+            mutation.label(),
+            py.merkle_root
+        ));
+    }
+    Ok(())
+}
+
 fn run_cli(binary: &str, fixture_path: &PathBuf, label: &str) -> Result<CliReport, String> {
     let Output {
         status,
@@ -260,5 +346,97 @@ mod tests {
     #[test]
     fn decode_b3_rejects_bad_prefix() {
         assert!(decode_b3("x3:abc").is_err());
+    }
+
+    #[test]
+    fn differential_rejects_bad_magic_or_skip() {
+        if !should_run() {
+            eprintln!(
+                "skipping differential rejection test: {DIFFERENTIAL_ENV_VAR} unset and adapters not on PATH"
+            );
+            return;
+        }
+        for vector in all_vectors() {
+            differential_rejection(&vector, Mutation::BadMagic)
+                .unwrap_or_else(|e| panic!("vector {} bad-magic: {e}", vector.name));
+        }
+    }
+
+    #[test]
+    fn differential_rejects_truncated_or_skip() {
+        if !should_run() {
+            eprintln!("skipping differential rejection test");
+            return;
+        }
+        for vector in all_vectors() {
+            let artifact = ManifestBuilder::new(vector.spec.clone()).build();
+            let original_len = artifact.bytes.len();
+            // Truncate to the manifest header (16 bytes) — every parser
+            // after the header will reject for lack of bytes.
+            let truncate_len = 16_usize.min(original_len.saturating_sub(1));
+            differential_rejection(
+                &vector,
+                Mutation::Truncate {
+                    new_len: truncate_len,
+                },
+            )
+            .unwrap_or_else(|e| panic!("vector {} truncate: {e}", vector.name));
+        }
+    }
+
+    #[test]
+    fn differential_rejects_history_byte_flip_or_skip() {
+        if !should_run() {
+            eprintln!("skipping differential rejection test");
+            return;
+        }
+        for vector in all_vectors() {
+            let artifact = ManifestBuilder::new(vector.spec.clone()).build();
+            let original_len = artifact.bytes.len();
+            // Flip the last byte (in the history section, always present).
+            let offset = original_len - 1;
+            differential_rejection(&vector, Mutation::FlipByte { offset, mask: 0xFF })
+                .unwrap_or_else(|e| panic!("vector {} flip-byte: {e}", vector.name));
+        }
+    }
+
+    #[test]
+    fn mutation_truncate_panics_on_zero_or_negative_growth() {
+        let original = b"hello".to_vec();
+        let truncated = Mutation::Truncate { new_len: 3 }.apply(&original);
+        assert_eq!(truncated, b"hel");
+    }
+
+    #[test]
+    fn mutation_bad_magic_overwrites_first_four_bytes() {
+        let original = b"LMFS_rest_of_the_buffer".to_vec();
+        let mutated = Mutation::BadMagic.apply(&original);
+        assert_eq!(&mutated[..4], b"XXXX");
+        assert_eq!(&mutated[4..], &original[4..]);
+    }
+
+    #[test]
+    fn mutation_flip_byte_xors_single_byte() {
+        let original = vec![0x00, 0xAA, 0xFF];
+        let mutated = Mutation::FlipByte {
+            offset: 1,
+            mask: 0xFF,
+        }
+        .apply(&original);
+        assert_eq!(mutated, vec![0x00, 0x55, 0xFF]);
+    }
+
+    #[test]
+    fn mutation_label_is_human_readable() {
+        assert_eq!(Mutation::Truncate { new_len: 10 }.label(), "truncate");
+        assert_eq!(Mutation::BadMagic.label(), "bad-magic");
+        assert_eq!(
+            Mutation::FlipByte {
+                offset: 0,
+                mask: 0xFF
+            }
+            .label(),
+            "flip-byte"
+        );
     }
 }
