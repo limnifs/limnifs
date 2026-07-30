@@ -97,7 +97,23 @@ pub fn write_directory(root: &Path) -> Result<WriteArtifact, WriteError> {
 struct PendingDrop {
     id: [u8; 32],
     plaintext: Vec<u8>,
+    compressed: Vec<u8>,
+    codec: u8,
     offset_in_window: u32,
+}
+
+impl PendingDrop {
+    /// The byte length stored in the slab's solid window. Equals
+    /// `plaintext.len()` for store codec, or the compressed size for
+    /// LZ4.
+    fn len_in_window(&self) -> u32 {
+        u32::try_from(self.compressed.len()).expect("compressed fits u32")
+    }
+
+    /// The original (decompressed) byte length.
+    fn plaintext_len(&self) -> u32 {
+        u32::try_from(self.plaintext.len()).expect("plaintext fits u32")
+    }
 }
 
 /// One slice of a file backed by drops. Records which drop holds
@@ -142,6 +158,7 @@ struct WriteContext {
     dir_count: usize,
     root_inode_number: u64,
     chunker: FastCDC,
+    classifier: classifier::Classifier,
 }
 
 impl WriteContext {
@@ -156,6 +173,7 @@ impl WriteContext {
             dir_count: 0,
             root_inode_number: 0,
             chunker: FastCDC::default(),
+            classifier: classifier::Classifier,
         }
     }
 
@@ -163,6 +181,28 @@ impl WriteContext {
         let n = self.next_inode;
         self.next_inode += 1;
         n
+    }
+
+    /// Apply the seine classifier to a chunk and compress it if the
+    /// class is compressible. Text, Code, and Binary drops get LZ4;
+    /// Compressed, Media, and Sparse drops stay as store (re-compressing
+    /// already-compressed data wastes CPU for no gain).
+    fn deepen_drop(&self, drop_id: [u8; 32], plaintext: &[u8]) -> PendingDrop {
+        let class = self.classifier.classify(plaintext);
+        let (codec, compressed) = match class {
+            classifier::Class::Text | classifier::Class::Code | classifier::Class::Binary => {
+                let c = limnifs_core::codec::compress_lz4_with_size(plaintext);
+                (limnifs_core::codec::CODEC_LZ4, c)
+            }
+            _ => (limnifs_core::codec::CODEC_STORE, plaintext.to_vec()),
+        };
+        PendingDrop {
+            id: drop_id,
+            plaintext: plaintext.to_vec(),
+            compressed,
+            codec,
+            offset_in_window: 0,
+        }
     }
 
     fn walk(&mut self, path: &Path) -> Result<u64, WriteError> {
@@ -221,16 +261,17 @@ impl WriteContext {
                     let chunk_len = u64::try_from(chunk.len()).expect("chunk len fits u64");
                     let drop_id = hash_section(chunk);
                     if !self.drop_index.contains_key(&drop_id) {
+                        let drop = self.deepen_drop(drop_id, chunk);
                         let offset = self
                             .drops
                             .iter()
                             .map(PendingDrop::len_in_window)
                             .sum::<u32>();
-                        let len = u32::try_from(chunk.len()).expect("chunk fits u32");
+                        let len = drop.len_in_window();
+                        let _ = len;
                         self.drops.push(PendingDrop {
-                            id: drop_id,
-                            plaintext: chunk.to_vec(),
                             offset_in_window: offset,
+                            ..drop
                         });
                         self.drop_index.insert(drop_id, (offset, len));
                     }
@@ -379,13 +420,14 @@ impl WriteContext {
                     out.extend_from_slice(&slice.file_byte_start.to_le_bytes());
                     out.extend_from_slice(&slice.file_byte_end.to_le_bytes());
                     out.extend_from_slice(&slice.drop_id);
-                    let &(offset_in_window, len_in_window) = self
-                        .drop_index
-                        .get(&slice.drop_id)
-                        .expect("drop must exist for slice");
-                    let _ = offset_in_window;
+                    // drop_byte_start = 0 (slice covers the whole drop)
                     out.extend_from_slice(&0u32.to_le_bytes());
-                    out.extend_from_slice(&len_in_window.to_le_bytes());
+                    // drop_byte_len = the byte length of this slice in the
+                    // drop's decompressed plaintext. Each slice maps to
+                    // exactly one chunk, so this equals the file range.
+                    let drop_byte_len = u32::try_from(slice.file_byte_end - slice.file_byte_start)
+                        .expect("slice range fits u32");
+                    out.extend_from_slice(&drop_byte_len.to_le_bytes());
                 }
                 let _ = file_len;
             }
@@ -399,12 +441,6 @@ impl WriteContext {
                 out.extend_from_slice(&node.hash);
             }
         }
-    }
-}
-
-impl PendingDrop {
-    fn len_in_window(&self) -> u32 {
-        u32::try_from(self.plaintext.len()).expect("drop plaintext fits u32")
     }
 }
 
@@ -434,14 +470,16 @@ fn encode_slab(drops: &[PendingDrop]) -> (Vec<u8>, SlabId) {
     let mut solid_window = Vec::new();
 
     for drop in drops {
-        let plaintext_len = drop.len_in_window();
+        let plaintext_len = drop.plaintext_len();
+        let window_len = drop.len_in_window();
         drop_records.extend_from_slice(&drop.id);
         drop_records.extend_from_slice(&plaintext_len.to_le_bytes());
-        drop_records.extend_from_slice(&[0x00, 0x00, 0x00]);
-        drop_records.push(0x00);
+        // representation: (codec, aead=0, ec=0)
+        drop_records.extend_from_slice(&[drop.codec, 0x00, 0x00]);
+        drop_records.push(0x00); // solid_window_index
         drop_records.extend_from_slice(&drop.offset_in_window.to_le_bytes());
-        drop_records.extend_from_slice(&plaintext_len.to_le_bytes());
-        solid_window.extend_from_slice(&drop.plaintext);
+        drop_records.extend_from_slice(&window_len.to_le_bytes());
+        solid_window.extend_from_slice(&drop.compressed);
     }
 
     let slab_content = [&drop_records[..], &solid_window[..]].concat();
