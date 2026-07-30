@@ -126,6 +126,11 @@ enum Command {
         /// Path to the `.lim` image to inspect.
         image: PathBuf,
     },
+    /// Inspect a slab file: list drop records, codecs, and sizes.
+    Slab {
+        /// Path to the slab file (.bin).
+        slab: PathBuf,
+    },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -151,6 +156,7 @@ fn run() -> Result<(), CliError> {
         Command::Extract { image, dest } => extract(&image, &dest),
         Command::Diff { parent, child } => diff(&parent, &child),
         Command::Inspect { image } => inspect(&image),
+        Command::Slab { slab } => slab_cmd(&slab),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -932,6 +938,60 @@ fn format_file_type(file_type: u32) -> &'static str {
         limnifs_core::S_IFLNK => "symlink",
         _ => "other",
     }
+}
+
+/// Inspect a slab file: header, drop records, codecs, sizes.
+fn slab_cmd(slab_path: &Path) -> Result<(), CliError> {
+    let bytes = std::fs::read(slab_path).map_err(|source| CliError::ReadFailed {
+        path: slab_path.to_path_buf(),
+        source,
+    })?;
+    let view = limnifs_core::parse_slab(&bytes).map_err(|source| CliError::FormatFailed {
+        path: slab_path.to_path_buf(),
+        source,
+    })?;
+    let header = view.header();
+    println!("slab: {}", slab_path.display());
+    println!("  format_version: {}", header.format_version);
+    println!("  total_length:   {}", header.total_length);
+    println!("  drops:          {}", view.drop_records().len());
+    println!();
+    let mut total_pt = 0u64;
+    let mut total_win = 0u64;
+    for (i, record) in view.drop_records().iter().enumerate() {
+        let codec_name = match record.representation.codec {
+            limnifs_core::codec::CODEC_STORE => "store",
+            limnifs_core::codec::CODEC_LZ4 => "lz4",
+            _ => "??",
+        };
+        let ratio = if record.plaintext_len > 0 {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                f64::from(record.len_in_window) / f64::from(record.plaintext_len)
+            }
+        } else {
+            1.0
+        };
+        println!(
+            "  [{i:3}] drop=b3:{:52} codec={codec_name:<5} pt={:>8} win={:>8} ratio={ratio:.2}",
+            record.drop_id.to_text(),
+            record.plaintext_len,
+            record.len_in_window,
+        );
+        total_pt += u64::from(record.plaintext_len);
+        total_win += u64::from(record.len_in_window);
+    }
+    println!();
+    #[allow(clippy::cast_precision_loss)]
+    let overall = if total_pt > 0 {
+        total_win as f64 / total_pt as f64
+    } else {
+        1.0
+    };
+    println!(
+        "  total plaintext: {total_pt}, total on disk: {total_win}, overall ratio: {overall:.2}"
+    );
+    Ok(())
 }
 
 /// Derive the path to the slab file that holds a slice's drop. Uses
