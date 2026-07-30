@@ -1830,4 +1830,89 @@ mod tests {
         }
         let _ = std::fs::remove_file(&image);
     }
+
+    #[test]
+    fn e2e_full_lifecycle() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static E2E_ID: AtomicU64 = AtomicU64::new(0);
+
+        let id = E2E_ID.fetch_add(1, Ordering::SeqCst);
+        let src = std::env::temp_dir().join(format!("limnifs-e2e-{id}-src"));
+        let modified = std::env::temp_dir().join(format!("limnifs-e2e-{id}-mod"));
+        let img = std::env::temp_dir().join(format!("limnifs-e2e-{id}.lim"));
+        let img2 = std::env::temp_dir().join(format!("limnifs-e2e-{id}-mod.lim"));
+        let dest = std::env::temp_dir().join(format!("limnifs-e2e-{id}-dest"));
+
+        // Create source tree with mixed content.
+        std::fs::create_dir_all(src.join("sub")).expect("create dirs");
+        std::fs::write(src.join("small.txt"), b"small inline file").expect("write");
+        std::fs::write(src.join("sub").join("nested.txt"), b"nested content").expect("write");
+        std::fs::write(src.join("repeated.txt"), b"AABBCCDDEE".repeat(500)).expect("write");
+
+        // Build image.
+        limn(&src, &img).expect("limn succeeds");
+
+        // Verify.
+        verify(&img, false).expect("verify succeeds");
+        verify(&img, true).expect("verify --json succeeds");
+
+        // List root.
+        ls(&img, "/").expect("ls succeeds");
+
+        // Cat a file.
+        cat(&img, "/small.txt").expect("cat succeeds");
+
+        // Tree.
+        tree(&img, "/").expect("tree succeeds");
+
+        // Stat a file.
+        stat(&img, "/small.txt").expect("stat succeeds");
+
+        // Extract and verify round-trip.
+        extract(&img, &dest).expect("extract succeeds");
+        let orig = std::fs::read(src.join("small.txt")).expect("read orig");
+        let extracted = std::fs::read(dest.join("small.txt")).expect("read extracted");
+        assert_eq!(orig, extracted, "small.txt round-trip mismatch");
+
+        let orig_rep = std::fs::read(src.join("repeated.txt")).expect("read orig rep");
+        let extracted_rep = std::fs::read(dest.join("repeated.txt")).expect("read extracted rep");
+        assert_eq!(orig_rep, extracted_rep, "repeated.txt round-trip mismatch");
+
+        // Inspect.
+        inspect(&img).expect("inspect succeeds");
+
+        // History.
+        history_cmd(&img).expect("history succeeds");
+
+        // Dedup analysis.
+        dedup_cmd(&img).expect("dedup succeeds");
+
+        // GC analysis.
+        gc_cmd(&img).expect("gc succeeds");
+
+        // Create modified image for diff.
+        std::fs::create_dir_all(modified.join("sub")).expect("create mod dir");
+        std::fs::write(modified.join("small.txt"), b"small inline file").expect("copy");
+        std::fs::write(modified.join("sub").join("nested.txt"), b"nested content").expect("copy");
+        std::fs::write(modified.join("repeated.txt"), b"AABBCCDDEE".repeat(500)).expect("copy");
+        std::fs::write(modified.join("new.txt"), b"newly added").expect("add new");
+        limn(&modified, &img2).expect("limn modified");
+
+        // Diff should show one Add op.
+        diff(&img, &img2).expect("diff succeeds");
+
+        // Compact.
+        compact(
+            &img,
+            &std::env::temp_dir().join(format!("limnifs-e2e-{id}-compact.lim")),
+        )
+        .expect("compact succeeds");
+
+        // Cleanup.
+        std::fs::remove_dir_all(&src).ok();
+        std::fs::remove_dir_all(&modified).ok();
+        std::fs::remove_dir_all(&dest).ok();
+        std::fs::remove_file(&img).ok();
+        std::fs::remove_file(&img2).ok();
+    }
 }
