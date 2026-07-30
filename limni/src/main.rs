@@ -108,6 +108,17 @@ enum Command {
         /// Slash-separated file path inside the image.
         path: String,
     },
+    /// Mount a `.lim` image as a read-only filesystem.
+    ///
+    /// Requires the `fuse` feature (built with `--features fuse`) and
+    /// FUSE kernel support (macFUSE on macOS, libfuse on Linux).
+    #[cfg(feature = "fuse")]
+    Mount {
+        /// Path to the `.lim` image to mount.
+        image: PathBuf,
+        /// Mount point directory (must exist).
+        mountpoint: PathBuf,
+    },
 }
 
 fn run() -> Result<(), CliError> {
@@ -117,6 +128,8 @@ fn run() -> Result<(), CliError> {
         Command::Limn { source, output } => limn(&source, &output),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat { image, path } => cat(&image, &path),
+        #[cfg(feature = "fuse")]
+        Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
 }
 
@@ -431,6 +444,36 @@ fn cat(image: &Path, path: &str) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+/// Mount a `.lim` image as a read-only FUSE filesystem.
+#[cfg(feature = "fuse")]
+fn mount(image: &Path, mountpoint: &Path) -> Result<(), CliError> {
+    let vfs = crate::vfs::Vfs::open(image).map_err(|e| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source: match e {
+            crate::vfs::VfsError::Core(c) => c,
+            crate::vfs::VfsError::Io(io) => {
+                return Err(CliError::ReadFailed {
+                    path: image.to_path_buf(),
+                    source: io,
+                })
+            }
+            crate::vfs::VfsError::NotFound => CoreError::Corrupt {
+                reason: "mount: image content not found".into(),
+            },
+        },
+    })?;
+    eprintln!(
+        "limni: mounting {} at {}",
+        image.display(),
+        mountpoint.display()
+    );
+    eprintln!("limni: press Ctrl-C to unmount");
+    crate::fuse_vfs::mount(vfs, mountpoint).map_err(|source| CliError::ReadFailed {
+        path: mountpoint.to_path_buf(),
+        source,
+    })
 }
 
 /// Derive the path to the slab file that holds a slice's drop. Uses
