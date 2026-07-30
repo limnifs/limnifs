@@ -110,6 +110,12 @@ enum Command {
     },
     /// Print an inode's metadata (number, mode, sizes, content handle).
     Stat { image: PathBuf, path: String },
+    /// Print the directory tree recursively (like the `tree` command).
+    Tree {
+        image: PathBuf,
+        #[arg(default_value = "/")]
+        path: String,
+    },
     /// Extract an image's contents to a filesystem directory.
     Extract { image: PathBuf, dest: PathBuf },
     /// Compute tree operations between a parent and child image.
@@ -141,6 +147,7 @@ fn run() -> Result<(), CliError> {
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat { image, path } => cat(&image, &path),
         Command::Stat { image, path } => stat(&image, &path),
+        Command::Tree { image, path } => tree(&image, &path),
         Command::Extract { image, dest } => extract(&image, &dest),
         Command::Diff { parent, child } => diff(&parent, &child),
         Command::Inspect { image } => inspect(&image),
@@ -693,6 +700,62 @@ fn stat(image: &Path, path: &str) -> Result<(), CliError> {
         ContentHandle::Pipe(p) => println!("  content: pipe ({p})"),
     }
     Ok(())
+}
+
+/// Print the directory tree recursively.
+fn tree(image: &Path, path: &str) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, root_inode_number, _) = load_image(&manifest_bytes, image, map_err)?;
+    let root_inode = blob.inode_by_number(root_inode_number).expect("validated");
+    let start_inode =
+        resolve_path(&blob, root_inode, path).ok_or_else(|| CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!("path {path:?} not found"),
+            },
+        })?;
+    println!("{}", path.trim_start_matches('/'));
+    print_tree(&blob, start_inode, "", &mut Vec::new());
+    Ok(())
+}
+
+fn print_tree(
+    blob: &MetadataBlob,
+    dir_inode: &limnifs_core::Inode,
+    prefix: &str,
+    visited: &mut Vec<u64>,
+) {
+    let hash = match &dir_inode.content_handle {
+        ContentHandle::Directory(h) => *h,
+        _ => return,
+    };
+    if visited.contains(&dir_inode.number) {
+        return;
+    }
+    visited.push(dir_inode.number);
+    let Some(node) = blob.dir_node_by_hash(&hash) else {
+        return;
+    };
+    let entries: Vec<_> = node.entries.iter().collect();
+    for (i, entry) in entries.iter().enumerate() {
+        let last = i + 1 == entries.len();
+        let branch = if last { "└── " } else { "├── " };
+        let kind = if entry.entry_type == 0x02 { "dir" } else { "" };
+        println!("{prefix}{branch}{} {kind}", entry.name);
+        if entry.entry_type == 0x02 {
+            if let Some(child) = blob.inode_by_number(entry.inode_number) {
+                let np = if last { "    " } else { "│   " };
+                print_tree(blob, child, &format!("{prefix}{np}"), visited);
+            }
+        }
+    }
 }
 
 /// Extract an image to a filesystem directory.
