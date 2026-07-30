@@ -19,6 +19,7 @@ pub mod vfs;
 #[cfg(feature = "fuse")]
 pub mod fuse_vfs;
 
+use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -131,6 +132,11 @@ enum Command {
         /// Path to the slab file (.bin).
         slab: PathBuf,
     },
+    /// Analyze garbage: find unreferenced drops in the slab vs the manifest.
+    Gc {
+        /// Path to the `.lim` image.
+        image: PathBuf,
+    },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -157,6 +163,7 @@ fn run() -> Result<(), CliError> {
         Command::Diff { parent, child } => diff(&parent, &child),
         Command::Inspect { image } => inspect(&image),
         Command::Slab { slab } => slab_cmd(&slab),
+        Command::Gc { image } => gc_cmd(&image),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -991,6 +998,73 @@ fn slab_cmd(slab_path: &Path) -> Result<(), CliError> {
     println!(
         "  total plaintext: {total_pt}, total on disk: {total_win}, overall ratio: {overall:.2}"
     );
+    Ok(())
+}
+
+/// Analyze garbage: find unreferenced drops in the slab.
+fn gc_cmd(image: &Path) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, _, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+
+    let mut referenced: HashSet<[u8; 32]> = HashSet::new();
+    for inode in &blob.inodes {
+        if let ContentHandle::SliceMap(slices) = &inode.content_handle {
+            for slice in slices {
+                referenced.insert(*slice.drop_id.as_bytes());
+            }
+        }
+    }
+
+    let mut total_drops = 0;
+    let mut garbage_drops = 0;
+    let mut garbage_bytes = 0u64;
+
+    for entry in &slab_index.entries {
+        for locator in &entry.locators {
+            let name = locator.uri.strip_prefix("file:").unwrap_or(&locator.uri);
+            let slab_path = image
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join(name);
+            if !slab_path.exists() {
+                continue;
+            }
+            let slab_bytes = std::fs::read(&slab_path).map_err(|source| CliError::ReadFailed {
+                path: slab_path.clone(),
+                source,
+            })?;
+            let view =
+                limnifs_core::parse_slab(&slab_bytes).map_err(|source| CliError::FormatFailed {
+                    path: slab_path.clone(),
+                    source,
+                })?;
+            for record in view.drop_records() {
+                total_drops += 1;
+                if !referenced.contains(record.drop_id.as_bytes()) {
+                    garbage_drops += 1;
+                    garbage_bytes += u64::from(record.len_in_window);
+                }
+            }
+            break;
+        }
+    }
+
+    println!("gc analysis: {}", image.display());
+    println!("  total drops in slab(s): {total_drops}");
+    println!("  referenced by manifest: {}", referenced.len());
+    println!("  garbage (unreferenced):  {garbage_drops} drops, {garbage_bytes} bytes");
+    if garbage_drops == 0 {
+        println!("  status: clean (no garbage)");
+    } else {
+        println!("  status: {garbage_drops} drops can be reclaimed");
+    }
     Ok(())
 }
 
