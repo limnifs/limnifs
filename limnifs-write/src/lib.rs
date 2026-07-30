@@ -20,9 +20,12 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+pub mod chunker;
+
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::chunker::FastCDC;
 use limnifs_core::{
     compute_merkle_root, hash_empty_section, hash_section, ManifestHeader, SectionHashes,
     FEATURE_FLAGS_SECTION_VERSION, HISTORY_SECTION_VERSION, METADATA_REFERENCE_SECTION_VERSION,
@@ -96,6 +99,16 @@ struct PendingDrop {
     offset_in_window: u32,
 }
 
+/// One slice of a file backed by drops. Records which drop holds
+/// this slice's bytes and which byte range of the original file
+/// the slice covers. The slice always spans the entire drop (the
+/// chunker never splits a drop across multiple slices).
+struct PendingSlice {
+    drop_id: [u8; 32],
+    file_byte_start: u64,
+    file_byte_end: u64,
+}
+
 struct PendingInode {
     number: u64,
     mode: u32,
@@ -106,10 +119,8 @@ struct PendingInode {
 enum PendingContent {
     Inline(Vec<u8>),
     DropBacked {
-        drop_id: [u8; 32],
         file_len: u64,
-        offset_in_window: u32,
-        len_in_window: u32,
+        slices: Vec<PendingSlice>,
     },
     Directory(Vec<(String, u64, u8)>),
 }
@@ -129,6 +140,7 @@ struct WriteContext {
     file_count: usize,
     dir_count: usize,
     root_inode_number: u64,
+    chunker: FastCDC,
 }
 
 impl WriteContext {
@@ -142,6 +154,7 @@ impl WriteContext {
             file_count: 0,
             dir_count: 0,
             root_inode_number: 0,
+            chunker: FastCDC::default(),
         }
     }
 
@@ -200,33 +213,40 @@ impl WriteContext {
                     content: PendingContent::Inline(data),
                 });
             } else {
-                let drop_id = hash_section(&data);
-                let (offset, len) = if let Some(&existing) = self.drop_index.get(&drop_id) {
-                    existing
-                } else {
-                    let offset = self
-                        .drops
-                        .iter()
-                        .map(PendingDrop::len_in_window)
-                        .sum::<u32>();
-                    let len = u32::try_from(file_len).expect("file fits u32");
-                    self.drops.push(PendingDrop {
-                        id: drop_id,
-                        plaintext: data,
-                        offset_in_window: offset,
+                let chunks = self.chunker.chunk_slice(&data);
+                let mut slices = Vec::with_capacity(chunks.len());
+                let mut file_offset: u64 = 0;
+                for chunk in chunks {
+                    let chunk_len = u64::try_from(chunk.len()).expect("chunk len fits u64");
+                    let drop_id = hash_section(chunk);
+                    if !self.drop_index.contains_key(&drop_id) {
+                        let offset = self
+                            .drops
+                            .iter()
+                            .map(PendingDrop::len_in_window)
+                            .sum::<u32>();
+                        let len = u32::try_from(chunk.len()).expect("chunk fits u32");
+                        self.drops.push(PendingDrop {
+                            id: drop_id,
+                            plaintext: chunk.to_vec(),
+                            offset_in_window: offset,
+                        });
+                        self.drop_index.insert(drop_id, (offset, len));
+                    }
+                    slices.push(PendingSlice {
+                        drop_id,
+                        file_byte_start: file_offset,
+                        file_byte_end: file_offset + chunk_len,
                     });
-                    self.drop_index.insert(drop_id, (offset, len));
-                    (offset, len)
-                };
+                    file_offset += chunk_len;
+                }
                 self.inodes.push(PendingInode {
                     number: inode_number,
                     mode: 0o100_644,
                     mtime_ns,
                     content: PendingContent::DropBacked {
-                        drop_id,
                         file_len: file_len as u64,
-                        offset_in_window: offset,
-                        len_in_window: len,
+                        slices,
                     },
                 });
             }
@@ -350,19 +370,23 @@ impl WriteContext {
                 out.extend_from_slice(&len.to_le_bytes());
                 out.extend_from_slice(data);
             }
-            PendingContent::DropBacked {
-                drop_id,
-                file_len,
-                offset_in_window,
-                len_in_window,
-            } => {
+            PendingContent::DropBacked { file_len, slices } => {
                 out.push(0x00);
-                out.extend_from_slice(&1u32.to_le_bytes());
-                out.extend_from_slice(&0u64.to_le_bytes());
-                out.extend_from_slice(&file_len.to_le_bytes());
-                out.extend_from_slice(drop_id);
-                out.extend_from_slice(&offset_in_window.to_le_bytes());
-                out.extend_from_slice(&len_in_window.to_le_bytes());
+                let slice_count = u32::try_from(slices.len()).expect("slice count fits u32");
+                out.extend_from_slice(&slice_count.to_le_bytes());
+                for slice in slices {
+                    out.extend_from_slice(&slice.file_byte_start.to_le_bytes());
+                    out.extend_from_slice(&slice.file_byte_end.to_le_bytes());
+                    out.extend_from_slice(&slice.drop_id);
+                    let &(offset_in_window, len_in_window) = self
+                        .drop_index
+                        .get(&slice.drop_id)
+                        .expect("drop must exist for slice");
+                    let _ = offset_in_window;
+                    out.extend_from_slice(&0u32.to_le_bytes());
+                    out.extend_from_slice(&len_in_window.to_le_bytes());
+                }
+                let _ = file_len;
             }
             PendingContent::Directory(entries) => {
                 out.push(0x00);
@@ -434,6 +458,19 @@ fn encode_slab(drops: &[PendingDrop]) -> (Vec<u8>, SlabId) {
     slab_bytes.extend_from_slice(&slab_content);
 
     (slab_bytes, slab_id)
+}
+
+#[cfg(test)]
+fn pseudo_random_bytes(seed: u64, count: usize) -> Vec<u8> {
+    let mut state = seed;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        out.push(u8::try_from(state >> 56).expect("fits u8"));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -570,5 +607,76 @@ mod tests {
         let drop_record =
             limnifs_core::parse_drop_record(&mut cursor, &slab_header).expect("drop record parses");
         assert_eq!(drop_record.plaintext_len as usize, INLINE_THRESHOLD + 1);
+    }
+
+    #[test]
+    fn fastcdc_produces_multiple_chunks_for_large_files() {
+        // A 1 MiB pseudo-random file should produce multiple drops
+        // via FastCDC (default chunker uses 64 KiB min / 256 KiB avg).
+        let temp = std::env::temp_dir().join(format!(
+            "limnifs-write-test-{}-cdc-multi",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp).expect("create temp dir");
+        let data = pseudo_random_bytes(42, 1024 * 1024);
+        std::fs::write(temp.join("big.bin"), &data).expect("write big");
+        let artifact = write_directory(&temp).expect("write succeeds");
+        std::fs::remove_dir_all(&temp).ok();
+        assert!(
+            artifact.drop_count > 1,
+            "expected FastCDC to produce multiple drops for 1 MiB input, got {}",
+            artifact.drop_count
+        );
+    }
+
+    #[test]
+    fn fastcdc_deduplicates_shared_substrings() {
+        // Two files sharing a long middle section should produce
+        // fewer drops than the sum of their individual chunk counts,
+        // because the shared section's chunks deduplicate.
+        let temp = std::env::temp_dir().join(format!(
+            "limnifs-write-test-{}-cdc-dedup",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp).expect("create temp dir");
+        let shared = pseudo_random_bytes(7, 512 * 1024);
+        let mut a = Vec::with_capacity(shared.len() + 1024);
+        a.extend_from_slice(&pseudo_random_bytes(1, 1024));
+        a.extend_from_slice(&shared);
+        let mut b = Vec::with_capacity(shared.len() + 2048);
+        b.extend_from_slice(&pseudo_random_bytes(2, 2048));
+        b.extend_from_slice(&shared);
+        std::fs::write(temp.join("a.bin"), &a).expect("write a");
+        std::fs::write(temp.join("b.bin"), &b).expect("write b");
+
+        // Baseline: each file alone.
+        let temp_a = std::env::temp_dir().join(format!(
+            "limnifs-write-test-{}-cdc-dedup-a",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_a).expect("create temp_a");
+        std::fs::write(temp_a.join("a.bin"), &a).expect("write a");
+        let artifact_a = write_directory(&temp_a).expect("a writes");
+        std::fs::remove_dir_all(&temp_a).ok();
+
+        let temp_b = std::env::temp_dir().join(format!(
+            "limnifs-write-test-{}-cdc-dedup-b",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp_b).expect("create temp_b");
+        std::fs::write(temp_b.join("b.bin"), &b).expect("write b");
+        let artifact_b = write_directory(&temp_b).expect("b writes");
+        std::fs::remove_dir_all(&temp_b).ok();
+
+        let artifact_both = write_directory(&temp).expect("both write");
+        std::fs::remove_dir_all(&temp).ok();
+
+        let sum_alone = artifact_a.drop_count + artifact_b.drop_count;
+        assert!(
+            artifact_both.drop_count < sum_alone,
+            "expected dedup win: both together = {} drops, sum alone = {} drops",
+            artifact_both.drop_count,
+            sum_alone
+        );
     }
 }
