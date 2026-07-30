@@ -43,6 +43,7 @@ pub mod drop_record;
 pub mod ec_params;
 pub mod error;
 pub mod feature_flags;
+pub mod fetch;
 pub mod header;
 pub mod history;
 pub mod inode;
