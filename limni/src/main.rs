@@ -455,7 +455,7 @@ mod tests {
     fn verify_parses_header_plus_one_required_flag() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&make_current_header());
-        append_feature_flags(&mut bytes, &[(0x0001, 0x01)]);
+        append_feature_flags(&mut bytes, &[(0x0020, 0x01)]);
         append_metadata_reference_external(&mut bytes, "file:///m.bin");
         append_slab_index_single(&mut bytes, "file:///s.bin");
         append_history_single_build(&mut bytes);
