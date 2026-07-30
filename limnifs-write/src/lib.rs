@@ -22,6 +22,7 @@
 
 pub mod chunker;
 pub mod classifier;
+pub mod compaction;
 pub mod delta_builder;
 
 use std::collections::HashMap;
