@@ -14,6 +14,8 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+pub mod vfs;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
