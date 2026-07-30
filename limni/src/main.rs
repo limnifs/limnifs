@@ -116,6 +116,18 @@ enum Command {
         /// Slash-separated path inside the image.
         path: String,
     },
+    /// Extract an image's contents to a filesystem directory.
+    ///
+    /// Walks the directory tree from the root inode and recreates
+    /// every file and directory under `dest`. Inline files write
+    /// directly; slab-backed files load via the slab index locator.
+    /// Permissions are set from each inode's mode bits.
+    Extract {
+        /// Path to the `.lim` image to extract.
+        image: PathBuf,
+        /// Destination directory. Created if it does not exist.
+        dest: PathBuf,
+    },
 }
 
 fn run() -> Result<(), CliError> {
@@ -126,6 +138,7 @@ fn run() -> Result<(), CliError> {
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat { image, path } => cat(&image, &path),
         Command::Stat { image, path } => stat(&image, &path),
+        Command::Extract { image, dest } => extract(&image, &dest),
     }
 }
 
@@ -572,6 +585,211 @@ fn print_content_handle(inode: &limnifs_core::Inode) {
             println!("  content:       pipe (id={pipe_id})");
         }
     }
+}
+
+/// Extract an image's full directory tree to `dest`. Recreates every
+/// directory and file. Permissions are set from each inode's mode bits
+/// (low 12 bits). Symlinks and special files are skipped with a
+/// warning (v0.1 limitation).
+fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, root_inode_number, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+
+    std::fs::create_dir_all(dest).map_err(|source| CliError::ReadFailed {
+        path: dest.to_path_buf(),
+        source,
+    })?;
+
+    let root_inode = blob
+        .inode_by_number(root_inode_number)
+        .expect("load_image validates that the root inode exists, so this lookup cannot fail");
+
+    let mut file_count = 0usize;
+    let mut dir_count = 0usize;
+    extract_directory(
+        &blob,
+        root_inode,
+        dest,
+        image,
+        &slab_index,
+        &mut file_count,
+        &mut dir_count,
+    )?;
+    println!(
+        "{dest}: extracted {file_count} files, {dir_count} directories",
+        dest = dest.display()
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extract_directory(
+    blob: &MetadataBlob,
+    dir_inode: &limnifs_core::Inode,
+    dir_path: &Path,
+    image: &Path,
+    slab_index: &limnifs_core::SlabIndex,
+    file_count: &mut usize,
+    dir_count: &mut usize,
+) -> Result<(), CliError> {
+    let hash = match &dir_inode.content_handle {
+        ContentHandle::Directory(hash) => *hash,
+        other => {
+            return Err(CliError::FormatFailed {
+                path: dir_path.to_path_buf(),
+                source: CoreError::Corrupt {
+                    reason: format!(
+                        "extract: expected directory inode, got content_handle: {other:?}"
+                    ),
+                },
+            });
+        }
+    };
+    let node = blob
+        .dir_node_by_hash(&hash)
+        .ok_or_else(|| CliError::FormatFailed {
+            path: dir_path.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!(
+                    "extract: directory node for hash {} missing",
+                    format_hex(&hash)
+                ),
+            },
+        })?;
+
+    set_mode(dir_path, dir_inode.mode);
+
+    for entry in &node.entries {
+        let child_inode =
+            blob.inode_by_number(entry.inode_number)
+                .ok_or_else(|| CliError::FormatFailed {
+                    path: dir_path.to_path_buf(),
+                    source: CoreError::Corrupt {
+                        reason: format!(
+                            "extract: entry {:?} references missing inode {}",
+                            entry.name, entry.inode_number
+                        ),
+                    },
+                })?;
+        let child_path = dir_path.join(&entry.name);
+        match entry.entry_type {
+            limnifs_core::directory_node::entry_type::FILE => {
+                write_file_contents(blob, child_inode, &child_path, image, slab_index)?;
+                set_mode(&child_path, child_inode.mode);
+                *file_count += 1;
+            }
+            limnifs_core::directory_node::entry_type::DIRECTORY => {
+                std::fs::create_dir_all(&child_path).map_err(|source| CliError::ReadFailed {
+                    path: child_path.clone(),
+                    source,
+                })?;
+                *dir_count += 1;
+                extract_directory(
+                    blob,
+                    child_inode,
+                    &child_path,
+                    image,
+                    slab_index,
+                    file_count,
+                    dir_count,
+                )?;
+            }
+            other => {
+                eprintln!(
+                    "limni: skipping {}: entry type 0x{other:02X} not supported in v0.1",
+                    child_path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_file_contents(
+    _blob: &MetadataBlob,
+    inode: &limnifs_core::Inode,
+    target: &Path,
+    image: &Path,
+    slab_index: &limnifs_core::SlabIndex,
+) -> Result<(), CliError> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(target).map_err(|source| CliError::ReadFailed {
+        path: target.to_path_buf(),
+        source,
+    })?;
+    match &inode.content_handle {
+        ContentHandle::InlineData(data) => {
+            file.write_all(data)
+                .map_err(|source| CliError::ReadFailed {
+                    path: target.to_path_buf(),
+                    source,
+                })?;
+        }
+        ContentHandle::SliceMap(slices) => {
+            for slice in slices {
+                let slab_path = resolve_slab_path(image, slab_index)?;
+                let slab_bytes =
+                    std::fs::read(&slab_path).map_err(|source| CliError::ReadFailed {
+                        path: slab_path.clone(),
+                        source,
+                    })?;
+                let slab_view = limnifs_core::parse_slab(&slab_bytes).map_err(|source| {
+                    CliError::FormatFailed {
+                        path: slab_path.clone(),
+                        source,
+                    }
+                })?;
+                let plaintext = slab_view
+                    .plaintext_for(slice.drop_id.as_bytes())
+                    .ok_or_else(|| CliError::FormatFailed {
+                        path: slab_path.clone(),
+                        source: CoreError::Corrupt {
+                            reason: format!(
+                                "extract: drop id {} not found in slab",
+                                format_hex(slice.drop_id.as_bytes())
+                            ),
+                        },
+                    })?
+                    .map_err(|source| CliError::FormatFailed {
+                        path: slab_path.clone(),
+                        source,
+                    })?;
+                file.write_all(plaintext)
+                    .map_err(|source| CliError::ReadFailed {
+                        path: target.to_path_buf(),
+                        source,
+                    })?;
+            }
+        }
+        other => {
+            return Err(CliError::FormatFailed {
+                path: target.to_path_buf(),
+                source: CoreError::Corrupt {
+                    reason: format!("extract: cannot extract content_handle: {other:?}"),
+                },
+            });
+        }
+    }
+    Ok(())
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(mode & 0o7777);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+    let _ = path;
+    let _ = mode;
 }
 
 /// Derive the path to the slab file that holds a slice's drop. Uses
@@ -1299,6 +1517,54 @@ mod tests {
             }
             other => panic!("expected FormatFailed, got {other:?}"),
         }
+        let _ = std::fs::remove_file(&image);
+    }
+
+    #[test]
+    fn extract_round_trips_inline_files() {
+        let source = make_source_tree();
+        let image = make_temp_file(&[]);
+        std::fs::remove_file(&image).ok();
+        limn(&source, &image).expect("write image");
+
+        let dest = std::env::temp_dir().join(format!(
+            "limni-extract-test-{}-{}",
+            std::process::id(),
+            TEMP_FILE_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        std::fs::remove_dir_all(&dest).ok();
+
+        extract(&image, &dest).expect("extract succeeds");
+
+        let a = std::fs::read(dest.join("a.txt")).expect("a.txt extracted");
+        assert_eq!(a, b"aaa");
+        let c = std::fs::read(dest.join("sub").join("c.txt")).expect("c.txt extracted");
+        assert_eq!(c, b"ccc");
+
+        std::fs::remove_dir_all(&dest).ok();
+        std::fs::remove_dir_all(&source).ok();
+        let _ = std::fs::remove_file(&image);
+    }
+
+    #[test]
+    fn extract_creates_destination_if_missing() {
+        let source = make_source_tree();
+        let image = make_temp_file(&[]);
+        std::fs::remove_file(&image).ok();
+        limn(&source, &image).expect("write image");
+
+        let dest = std::env::temp_dir().join(format!(
+            "limni-extract-missing-{}-{}",
+            std::process::id(),
+            TEMP_FILE_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        assert!(!dest.exists());
+
+        extract(&image, &dest).expect("extract creates dest");
+        assert!(dest.is_dir());
+
+        std::fs::remove_dir_all(&dest).ok();
+        std::fs::remove_dir_all(&source).ok();
         let _ = std::fs::remove_file(&image);
     }
 }
