@@ -187,6 +187,7 @@ enum CliError {
     },
 }
 
+#[allow(clippy::too_many_lines)]
 fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
     let mut file = std::fs::File::open(image).map_err(|source| CliError::ReadFailed {
         path: image.clone(),
@@ -268,6 +269,47 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
     };
     let merkle_root = compute_merkle_root(&hashes);
 
+    let metadata_summary = if metadata_reference.is_inlined() {
+        metadata_reference.inline_metadata.as_deref().and_then(|blob_bytes| {
+            let mut blob_cursor = ManifestCursor::new(blob_bytes);
+            parse_metadata_blob(&mut blob_cursor)
+                .ok()
+                .map(|blob| {
+                    let mut inodes: Vec<(u64, u32, u8)> = blob
+                        .inodes
+                        .iter()
+                        .map(|i| {
+                            (
+                                i.number,
+                                i.mode,
+                                content_handle_tag(&i.content_handle),
+                            )
+                        })
+                        .collect();
+                    inodes.sort_by_key(|(n, _, _)| *n);
+                    let mut dir_nodes: Vec<(usize, String)> = blob
+                        .dir_nodes
+                        .iter()
+                        .map(|n| {
+                            let first = n.entries.first().map(|e| e.name.clone()).unwrap_or_default();
+                            (n.entries.len(), first)
+                        })
+                        .collect();
+                    dir_nodes.sort();
+                    format!(
+                        "\"metadata_inode_count\":{},\"metadata_dir_node_count\":{},\"metadata_root_inode\":{},\"metadata_inodes\":[{}],\"metadata_dir_nodes\":[{}],",
+                        blob.inodes.len(),
+                        blob.dir_nodes.len(),
+                        blob.root_inode_number().map_or_else(|| "null".to_string(), |n| n.to_string()),
+                        inodes.iter().map(|(n, m, k)| format!("{{\"number\":{n},\"mode\":{m},\"kind\":{k}}}")).collect::<Vec<_>>().join(","),
+                        dir_nodes.iter().map(|(e, f)| format!("{{\"entries\":{e},\"first\":\"{f}\"}}")).collect::<Vec<_>>().join(",")
+                    )
+                })
+        })
+    } else {
+        None
+    };
+
     print_report(
         image,
         header,
@@ -277,9 +319,21 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
         history.len(),
         extra_bytes_remaining,
         merkle_root,
+        metadata_summary.as_deref(),
         json,
     );
     Ok(())
+}
+
+fn content_handle_tag(handle: &ContentHandle) -> u8 {
+    match handle {
+        ContentHandle::InlineData(_) => 1,
+        ContentHandle::SliceMap(_) => 2,
+        ContentHandle::Directory(_) => 3,
+        ContentHandle::Symlink(_) => 4,
+        ContentHandle::Device(_) => 5,
+        ContentHandle::Pipe(_) => 6,
+    }
 }
 
 fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
@@ -964,6 +1018,7 @@ fn print_report(
     history_len: usize,
     extra_bytes_remaining: usize,
     merkle_root: ManifestRoot,
+    metadata_summary: Option<&str>,
     json: bool,
 ) {
     if json {
@@ -976,6 +1031,7 @@ fn print_report(
             history_len,
             extra_bytes_remaining,
             merkle_root,
+            metadata_summary,
         );
     } else {
         print_human_report(
@@ -1052,6 +1108,7 @@ fn print_json_report(
     history_len: usize,
     extra_bytes_remaining: usize,
     merkle_root: ManifestRoot,
+    metadata_summary: Option<&str>,
 ) {
     let escaped_path = escape_json_path(path);
     print!("{{\"path\":\"{escaped_path}\",\"magic\":\"LMFS\",");
@@ -1071,6 +1128,9 @@ fn print_json_report(
     print!("\"slab_index_entries\":{slab_index_len},");
     print!("\"history_entries\":{history_len},");
     print!("\"extra_bytes_after_history\":{extra_bytes_remaining},");
+    if let Some(summary) = metadata_summary {
+        print!("{summary}");
+    }
     println!("\"merkle_root\":\"{merkle_root}\"}}");
 }
 
