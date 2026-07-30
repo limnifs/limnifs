@@ -31,6 +31,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod cursor;
+pub mod dms_policy;
 pub mod drop_record;
 pub mod ec_params;
 pub mod error;
@@ -44,6 +45,11 @@ pub mod slab;
 pub mod slab_index;
 
 pub use cursor::ManifestCursor;
+pub use dms_policy::{
+    parse_dms_policy, parse_dms_policy_with_ceilings, DmsPolicy, ShareRecord,
+    DEFAULT_HINT_MAX_BYTES, DEFAULT_SHARE_DATA_MAX_BYTES, DMS_POLICY_SECTION_VERSION,
+    DMS_SCHEME_EXTENDED, DMS_SCHEME_SHAMIR, MAX_TOTAL_SHARES,
+};
 pub use drop_record::{
     parse_drop_record, parse_drop_record_with_ceiling, DropRecord, DROP_RECORD_LEN,
 };
