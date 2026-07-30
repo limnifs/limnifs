@@ -154,6 +154,11 @@ enum Command {
         /// Path to the compacted output `.lim` image.
         output: PathBuf,
     },
+    /// Deep integrity check: verify drop `BLAKE3` hashes against `DropId`s.
+    Check {
+        /// Path to the `.lim` image.
+        image: PathBuf,
+    },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -184,6 +189,7 @@ fn run() -> Result<(), CliError> {
         Command::History { image } => history_cmd(&image),
         Command::Dedup { image } => dedup_cmd(&image),
         Command::Compact { source, output } => compact(&source, &output),
+        Command::Check { image } => check_cmd(&image),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -1227,6 +1233,70 @@ fn compact(source: &Path, output: &Path) -> Result<(), CliError> {
         "  inodes: {}  files: {}  dirs: {}",
         artifact.inode_count, artifact.file_count, artifact.dir_count
     );
+    Ok(())
+}
+
+/// Deep integrity check: verify drop `BLAKE3` hashes against `DropId`s.
+fn check_cmd(image: &Path) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (_blob, _, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+
+    let slab_path = resolve_slab_path(image, &slab_index)?;
+    let slab_bytes = std::fs::read(&slab_path).map_err(|source| CliError::ReadFailed {
+        path: slab_path.clone(),
+        source,
+    })?;
+    let view = limnifs_core::parse_slab(&slab_bytes).map_err(|source| CliError::FormatFailed {
+        path: slab_path,
+        source,
+    })?;
+
+    let mut checked = 0usize;
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+
+    for record in view.drop_records() {
+        checked += 1;
+        match view.plaintext_for(record.drop_id.as_bytes()) {
+            Some(Ok(plaintext)) => {
+                let computed = hash_section(&plaintext);
+                if computed == *record.drop_id.as_bytes() {
+                    passed += 1;
+                } else {
+                    failed += 1;
+                    println!("  FAIL: drop {} — BLAKE3 mismatch", record.drop_id);
+                }
+            }
+            Some(Err(e)) => {
+                failed += 1;
+                println!("  FAIL: drop {} — {e}", record.drop_id);
+            }
+            None => {
+                // Drop not referenced by the manifest; skip silently.
+            }
+        }
+    }
+
+    println!("integrity check: {}", image.display());
+    println!("  drops checked:  {checked}");
+    println!("  passed:         {passed}");
+    if failed > 0 {
+        println!("  FAILED:         {failed}");
+        return Err(CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!("{failed} drops failed integrity check"),
+            },
+        });
+    }
+    println!("  status:         all drops verified");
     Ok(())
 }
 
