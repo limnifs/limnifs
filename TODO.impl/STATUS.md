@@ -3,6 +3,104 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — Merkle root: image identity primitive live (session 11)
+
+### Done (with evidence)
+
+- **Layer 3 spec for §5.10 Merkle root construction** —
+  [limnifs/spec#21](https://github.com/limnifs/spec/pull/21).
+  `bit-level/46-merkle-root.md` pins the canonical image identity
+  construction. Input: 10-byte `"limnifs/v1"` separator + 10 × 32-byte
+  section hashes = 330 bytes. Output: 32-byte `ManifestRoot`.
+  Documents the absent-section convention (`BLAKE3("")`), the
+  distinction between `H(metadata)` (hash of the metadata BLOB) and
+  `H(metadata_reference)` (hash of the section bytes that contain
+  the metadata_hash field), and why construction is flat (each
+  section individually verifiable) rather than a deep Merkle tree.
+- **`blake3` dependency + `merkle` module** —
+  [limnifs/limnifs#22](https://github.com/limnifs/limnifs/pull/22).
+  Run https://github.com/limnifs/limnifs/actions/runs/30508533796.
+  Adds `blake3 = 1.5` to the workspace (Apache-2.0 OR MIT, pure
+  Rust, audited). The `merkle` module exposes:
+  - `SectionHashes` — the 10 hash slots in fixed formula order.
+  - `hash_section(bytes)` / `hash_empty_section()` — BLAKE3 helpers.
+  - `section_hashes_minimal(...)` — convenience constructor for
+    v0.1 plaintext non-delta images.
+  - `compute_merkle_root(&SectionHashes) -> ManifestRoot` — the
+    flat BLAKE3 formula.
+  - `MERKLE_DOMAIN_SEPARATOR = b"limnifs/v1"` — the version-stamped
+    domain separator.
+  - 10 unit tests including the well-known BLAKE3("") constant, a
+    sensitivity sweep that mutates each of the 10 slots, and an
+    independent-concatenation cross-check.
+- **`limni verify` end-to-end Merkle root** —
+  [limnifs/limnifs#23](https://github.com/limnifs/limnifs/pull/23).
+  Run https://github.com/limnifs/limnifs/actions/runs/30508943881.
+  The CLI now parses every required section, captures the raw bytes
+  each parser consumed via `cursor.position()` deltas, hashes them,
+  and computes the image's `ManifestRoot`. Sample output for a tiny
+  v0.1 plaintext image:
+  ```
+  merkle root: b3:yrwuhvg2mccxki6jw4rxla2446re2s5mzn7p7u6zsd3zzea7ly7a
+  ```
+  This converts `limni verify` from a header-magic check into real
+  integrity verification — any tampering with any byte of any parsed
+  section produces a different root. Workspace test count: 129 → 141
+  (15 format, 114 core, 12 cli).
+
+### Architecture: image identity is computable, not stored
+
+A key spec decision reinforced by this work: the manifest does NOT
+store its own `ManifestRoot`. Readers compute it from the section
+bytes; the computed value IS the image's name (§1.2). This means:
+
+- Any byte-level tampering of any section invalidates the root.
+- The same inputs (modulo timestamp, the one nondeterministic
+  field per §1.4) always produce the same root.
+- Distribution channels (HTTP, S3, IPFS) reference images by their
+  computed root; no separate "declared root" field can lie.
+
+### CLI design: byte-range capture via cursor position
+
+The wire-up uses `cursor.position()` before and after each parser
+call to capture the byte range that parser consumed. This is the
+right level of abstraction — the cursor already tracks position;
+the CLI just records start/end markers. The pattern will scale to
+optional sections when their parsers land: same start/end capture,
+same hash, different slot in `SectionHashes`.
+
+### Honest warning for partial parser coverage
+
+Optional sections (§5.5 crypto, §5.6 EC, §5.7 DMS, §5.8 delta
+linkage) are not yet parsed. If extra bytes remain after history,
+`limni verify` still computes the root (assuming all four optional
+slots are absent per the `BLAKE3("")` convention) but prints a
+warning naming the count of unparsed bytes. This makes the current
+parser coverage explicit in the output rather than hiding it.
+
+### In progress / Next
+
+- **02-conformance bootstrap** — declarative YAML vector format
+  plus a tiny generator that emits the minimum-viable image (the
+  one `limni verify` already parses). Test vectors can now name
+  their expected `ManifestRoot`. With a vector generator, the
+  Phase 0 exit gate becomes a real CI job.
+- **Python reference reader** (`limnifs/limnifs-py`) — the
+  spec-sufficiency oracle. Written from the spec only; never reads
+  the Rust code. Differentials against the Rust reader reveal
+  spec ambiguities.
+- **Optional section parsers** (§5.5 crypto, §5.6 EC, §5.7 DMS,
+  §5.8 delta linkage) — need sub-structure specs (HPKEEnvelope,
+  SignatureBundle, TreeOp, ShareRecord). Larger spec effort.
+- **Layer 3 spec for inode + Merkle B-tree node** (§4) — needed
+  before the metadata layer can be walked.
+
+### Blockers
+
+- None. User delegation in effect for green PRs (rebase-merge).
+
+---
+
 ## 2026-07-30 — Metadata reference + slab index parsers (session 10)
 
 ### Done (with evidence)
