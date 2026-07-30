@@ -226,15 +226,34 @@ fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
         path: output.to_path_buf(),
         source,
     })?;
+
+    if let (Some(slab_bytes), Some(locator)) = (&artifact.slab_bytes, &artifact.slab_locator) {
+        let slab_name = locator.strip_prefix("file:").unwrap_or(locator);
+        let slab_path = output
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(slab_name);
+        std::fs::write(&slab_path, slab_bytes).map_err(|source| CliError::ReadFailed {
+            path: slab_path.clone(),
+            source,
+        })?;
+        println!(
+            "{}: wrote {} bytes (slab, {} drops)",
+            slab_path.display(),
+            slab_bytes.len(),
+            artifact.drop_count,
+        );
+    }
+
     println!(
-        "{}: wrote {} bytes, {manifest_root}",
-        output.display(),
-        artifact.bytes.len(),
+        "{output}: wrote {len} bytes, {manifest_root}",
+        output = output.display(),
+        len = artifact.bytes.len(),
         manifest_root = artifact.merkle_root,
     );
     println!(
-        "  inodes: {}  files: {}  dirs: {}",
-        artifact.inode_count, artifact.file_count, artifact.dir_count
+        "  inodes: {}  files: {}  dirs: {}  drops: {}",
+        artifact.inode_count, artifact.file_count, artifact.dir_count, artifact.drop_count
     );
     Ok(())
 }
