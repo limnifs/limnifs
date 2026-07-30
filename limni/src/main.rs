@@ -108,6 +108,12 @@ enum Command {
         /// Slash-separated file path inside the image.
         path: String,
     },
+    /// Print a comprehensive overview of an image: manifest summary,
+    /// metadata blob stats, slab stats, and per-class drop counts.
+    Inspect {
+        /// Path to the `.lim` image to inspect.
+        image: PathBuf,
+    },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -128,6 +134,7 @@ fn run() -> Result<(), CliError> {
         Command::Limn { source, output } => limn(&source, &output),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat { image, path } => cat(&image, &path),
+        Command::Inspect { image } => inspect(&image),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -474,6 +481,121 @@ fn mount(image: &Path, mountpoint: &Path) -> Result<(), CliError> {
         path: mountpoint.to_path_buf(),
         source,
     })
+}
+
+/// Print a comprehensive overview of an image: manifest header, feature
+/// flags, metadata blob stats, slab stats, and per-class drop counts.
+#[allow(clippy::too_many_lines)]
+fn inspect(image: &Path) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+
+    let mut cursor = ManifestCursor::new(&manifest_bytes);
+    let header = parse_manifest_header(&mut cursor).map_err(map_err)?;
+    let _ = parse_feature_flags_section(&mut cursor).map_err(map_err)?;
+    let meta_ref = parse_metadata_reference(&mut cursor).map_err(map_err)?;
+    let slab_index = parse_slab_index(&mut cursor).map_err(map_err)?;
+
+    println!("image: {}", image.display());
+    println!(
+        "  format versions: drop_store={} metadata={} manifest={}",
+        header.drop_store_version, header.metadata_version, header.manifest_version
+    );
+    println!(
+        "  metadata: {}",
+        if meta_ref.is_inlined() {
+            "inlined"
+        } else {
+            "external"
+        }
+    );
+
+    if meta_ref.is_inlined() {
+        if let Some(blob_bytes) = &meta_ref.inline_metadata {
+            let mut blob_cursor = ManifestCursor::new(blob_bytes);
+            match parse_metadata_blob(&mut blob_cursor) {
+                Ok(blob) => {
+                    let root = blob
+                        .root_inode_number()
+                        .map_or_else(|| "?".to_string(), |n| n.to_string());
+                    println!(
+                        "  metadata blob: {} inodes, {} dir nodes, root inode = {}",
+                        blob.inodes.len(),
+                        blob.dir_nodes.len(),
+                        root
+                    );
+
+                    let files = blob.inodes.iter().filter(|i| i.is_regular()).count();
+                    let dirs = blob.inodes.iter().filter(|i| i.is_directory()).count();
+                    println!("    files: {files}, directories: {dirs}");
+                }
+                Err(e) => {
+                    println!("  metadata blob: parse error: {e}");
+                }
+            }
+        }
+    }
+
+    println!("  slab index: {} entries", slab_index.len());
+
+    // Try to load and inspect slabs
+    for (i, entry) in slab_index.entries.iter().enumerate() {
+        let locator = entry.locators.first();
+        if let Some(loc) = locator {
+            let name = loc.uri.strip_prefix("file:").unwrap_or(&loc.uri);
+            let slab_path = image
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join(name);
+            match std::fs::read(&slab_path) {
+                Ok(slab_bytes) => match limnifs_core::parse_slab(&slab_bytes) {
+                    Ok(view) => {
+                        let total_plaintext: u64 = view
+                            .drop_records()
+                            .iter()
+                            .map(|r| u64::from(r.plaintext_len))
+                            .sum();
+                        let total_window: u64 = view
+                            .drop_records()
+                            .iter()
+                            .map(|r| u64::from(r.len_in_window))
+                            .sum();
+                        let ratio = if total_plaintext > 0 {
+                            #[allow(clippy::cast_precision_loss)]
+                            {
+                                total_window as f64 / total_plaintext as f64
+                            }
+                        } else {
+                            1.0
+                        };
+                        println!(
+                                "    slab[{}]: {} drops, {} bytes on disk, {} bytes plaintext, ratio {:.2}",
+                                i,
+                                view.drop_records().len(),
+                                slab_bytes.len(),
+                                total_plaintext,
+                                ratio
+                            );
+                    }
+                    Err(e) => {
+                        println!("    slab[{i}]: parse error: {e}");
+                    }
+                },
+                Err(_) => {
+                    println!("    slab[{i}]: file not found: {}", slab_path.display());
+                }
+            }
+        }
+    }
+
+    println!("  limni version: {VERSION}");
+    Ok(())
 }
 
 /// Derive the path to the slab file that holds a slice's drop. Uses
