@@ -32,6 +32,7 @@ pub mod vectors;
 
 pub use builder::{ManifestArtifact, ManifestBuilder, ManifestSpec};
 pub use differential::{
-    differential_root, run_limni_py, run_limni_rust, should_run, CliReport, DIFFERENTIAL_ENV_VAR,
+    differential_rejection, differential_root, run_limni_py, run_limni_rust, should_run, CliReport,
+    Mutation, DIFFERENTIAL_ENV_VAR,
 };
 pub use vectors::minimal_v0_1;
