@@ -20,6 +20,9 @@
 //! | [`header`] | [`ManifestHeader`] + [`parse_manifest_header`] |
 //! | [`feature_flags`] | [`FeatureFlag`], [`FeatureFlags`] + [`parse_feature_flags_section`] |
 //! | [`metadata_reference`] | [`MetadataReference`] + [`parse_metadata_reference`] |
+//! | [`metadata`] | [`MetadataBlob`] + [`parse_metadata_blob`] |
+//! | [`inode`] | [`Inode`], [`ContentHandle`] + [`parse_inode`] |
+//! | [`directory_node`] | [`DirectoryNode`], [`DirEntry`] + [`parse_directory_node`] |
 //! | [`slab_index`] | [`SlabIndex`], [`SlabIndexEntry`] + [`parse_slab_index`] |
 //! | [`history`] | [`HistoryEntry`], [`History`] + [`parse_history`] |
 //! | [`merkle`] | [`SectionHashes`], [`compute_merkle_root`] |
@@ -32,6 +35,7 @@
 
 pub mod cursor;
 pub mod delta_linkage;
+pub mod directory_node;
 pub mod dms_policy;
 pub mod drop_record;
 pub mod ec_params;
@@ -42,11 +46,13 @@ pub mod history;
 pub mod inode;
 pub mod locator;
 pub mod merkle;
+pub mod metadata;
 pub mod metadata_reference;
 pub mod slab;
 pub mod slab_index;
 
 pub use cursor::ManifestCursor;
+pub use directory_node::{parse_directory_node, DirEntry, DirectoryNode, DIRECTORY_NODE_VERSION};
 pub use dms_policy::{
     parse_dms_policy, parse_dms_policy_with_ceilings, DmsPolicy, ShareRecord,
     DEFAULT_HINT_MAX_BYTES, DEFAULT_SHARE_DATA_MAX_BYTES, DMS_POLICY_SECTION_VERSION,
@@ -68,6 +74,12 @@ pub use history::{
     parse_history, parse_history_with_ceiling, History, HistoryEntry, HistoryOp,
     DEFAULT_HISTORY_PARAMS_MAX_BYTES, HISTORY_SECTION_VERSION, OP_EXTENDED,
 };
+pub use inode::{
+    parse_inode, parse_inode_with_ceiling, ContentHandle, Inode, SliceRef, XAttr,
+    DEFAULT_INLINE_DATA_MAX_BYTES, INODE_FIXED_PREFIX_LEN, INODE_FLAG_ATIME,
+    INODE_FLAG_INLINE_DATA, INODE_FLAG_RESERVED_MASK, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK,
+    S_IFMT, S_IFREG, S_IFSOCK,
+};
 pub use locator::{
     parse_locator_entries, parse_locator_entries_with_ceiling, parse_locator_entry,
     parse_locator_entry_with_ceiling, LocatorEntry, DEFAULT_LOCATOR_MAX_URI_BYTES,
@@ -76,6 +88,9 @@ pub use locator::{
 pub use merkle::{
     compute_merkle_root, hash_empty_section, hash_section, section_hashes_minimal, SectionHashes,
     MERKLE_DOMAIN_SEPARATOR,
+};
+pub use metadata::{
+    dir_node_hash, parse_metadata_blob, parse_metadata_blob_with_ceiling, MetadataBlob,
 };
 pub use metadata_reference::{
     parse_metadata_reference, parse_metadata_reference_with_ceilings, MetadataReference,

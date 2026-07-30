@@ -3,6 +3,47 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — Metadata blob + directory node + limni ls (session 15)
+
+### Done
+
+- **Directory node parser (Rust)** — `bit-level/34-directory-node.md`
+  was already spec'd; `limnifs-core/src/directory_node.rs` now parses
+  the v1 leaf layout (version + entry_count + sorted DirEntries). 8
+  new unit tests cover sorted nodes, empty nodes, unsorted rejections,
+  name invariants, bad entry types, and unknown versions.
+- **Metadata blob parser (Rust)** — `limnifs-core/src/metadata.rs`
+  walks the `[u32 inode_count][inodes...][u32 dir_node_count]
+  [dir_nodes...]` layout produced by the writer. Adds `MetadataBlob`
+  with `inode_by_number`, `dir_node_by_hash`, and
+  `root_inode_number` (computed as the directory inode that no other
+  directory references — i.e. the unique root). 6 unit tests.
+- **`limni ls <image> [path]` subcommand** — walks the manifest
+  header + flags + metadata reference, extracts the inlined metadata
+  blob, walks the path component-by-component, and prints the
+  entries at the target directory. Supports empty directories,
+  missing paths (with `Corrupt` errors), missing files. 3 new CLI
+  integration tests.
+- **`WriteArtifact::root_inode_number`** — exposed the root inode
+  number on the writer's result so future tooling does not need to
+  re-derive it.
+
+### Workspace state
+
+- Test count: 205 → 234 (+29). New modules: `directory_node`,
+  `metadata`. New CLI tests for `ls`.
+- `cargo fmt`, `cargo clippy --all-targets — -D warnings`, and
+  `cargo test --workspace` all green on this branch.
+
+### Next
+
+- `limni stat` / `limni cat` for inspecting inodes and reading
+  inline/sliced file contents.
+- Plumb the same metadata-blob parser through `limnifs-py` so
+  differential conformance coverage can extend to Layer 2.
+- Layer 3 spec for `bit-level/35-metadata-blob.md` once the wire
+  layout is reviewed.
+
 ## 2026-07-30 — Delta linkage completes manifest section parsers (session 14)
 
 ### Done (with evidence)
