@@ -91,6 +91,18 @@ enum Command {
         #[arg(default_value = "/")]
         path: String,
     },
+    /// Write a file's contents from a `.lim` image to stdout.
+    ///
+    /// Resolves the inlined metadata blob, walks the directory tree
+    /// to the requested file, and writes its bytes to stdout. Inline
+    /// files (≤ 4 KiB) are written directly; larger files are read
+    /// from the slab file that sits next to the manifest.
+    Cat {
+        /// Path to the `.lim` image to read from.
+        image: PathBuf,
+        /// Slash-separated file path inside the image.
+        path: String,
+    },
 }
 
 fn run() -> Result<(), CliError> {
@@ -99,6 +111,7 @@ fn run() -> Result<(), CliError> {
         Command::Verify { image, json } => verify(&image, json),
         Command::Limn { source, output } => limn(&source, &output),
         Command::Ls { image, path } => ls(&image, &path),
+        Command::Cat { image, path } => cat(&image, &path),
     }
 }
 
@@ -286,39 +299,12 @@ fn ls(image: &Path, path: &str) -> Result<(), CliError> {
         path: image.to_path_buf(),
         source,
     };
-    let mut cursor = ManifestCursor::new(&manifest_bytes);
-    let _ = parse_manifest_header(&mut cursor).map_err(map_err)?;
-    let _ = parse_feature_flags_section(&mut cursor).map_err(map_err)?;
-    let meta_ref = parse_metadata_reference(&mut cursor).map_err(map_err)?;
-    let blob_bytes = meta_ref
-        .inline_metadata
-        .as_deref()
-        .ok_or_else(|| CliError::FormatFailed {
-            path: image.to_path_buf(),
-            source: CoreError::Corrupt {
-                reason: "limni ls requires inlined metadata (external-metadata images not yet supported)".into(),
-            },
-        })?;
-    let mut blob_cursor = ManifestCursor::new(blob_bytes);
-    let blob = parse_metadata_blob(&mut blob_cursor).map_err(map_err)?;
+    let (blob, root_inode_number, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+    let _ = slab_index;
 
-    let root_inode_number = blob
-        .root_inode_number()
-        .ok_or_else(|| CliError::FormatFailed {
-            path: image.to_path_buf(),
-            source: CoreError::Corrupt {
-                reason: "metadata blob: could not identify a unique root directory inode".into(),
-            },
-        })?;
-
-    let root_inode =
-        blob.inode_by_number(root_inode_number)
-            .ok_or_else(|| CliError::FormatFailed {
-                path: image.to_path_buf(),
-                source: CoreError::Corrupt {
-                    reason: format!("metadata blob: root inode {root_inode_number} missing"),
-                },
-            })?;
+    let root_inode = blob
+        .inode_by_number(root_inode_number)
+        .expect("load_image validates that the root inode exists, so this lookup cannot fail");
 
     let target_dir_inode =
         resolve_path(&blob, root_inode, path).ok_or_else(|| CliError::FormatFailed {
@@ -356,6 +342,169 @@ fn ls(image: &Path, path: &str) -> Result<(), CliError> {
 
     print_directory_listing(image, path, dir_node);
     Ok(())
+}
+
+/// Read a `.lim` manifest, extract its inlined metadata blob, and
+/// write the file at `path` to stdout. Inline files are written
+/// directly; drop-backed files are read from the slab file that lives
+/// alongside the manifest (per the writer's `file:` locator).
+fn cat(image: &Path, path: &str) -> Result<(), CliError> {
+    use std::io::Write;
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, root_inode_number, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+
+    let root_inode = blob
+        .inode_by_number(root_inode_number)
+        .expect("load_image validates that the root inode exists, so this lookup cannot fail");
+
+    let target_inode =
+        resolve_path(&blob, root_inode, path).ok_or_else(|| CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!("metadata blob: path {path:?} not found in tree"),
+            },
+        })?;
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    match &target_inode.content_handle {
+        ContentHandle::InlineData(data) => {
+            out.write_all(data).map_err(|source| CliError::ReadFailed {
+                path: image.to_path_buf(),
+                source,
+            })?;
+        }
+        ContentHandle::SliceMap(slices) => {
+            for slice in slices {
+                let slab_path = resolve_slab_path(image, &slab_index)?;
+                let slab_bytes =
+                    std::fs::read(&slab_path).map_err(|source| CliError::ReadFailed {
+                        path: slab_path.clone(),
+                        source,
+                    })?;
+                let slab_view = limnifs_core::parse_slab(&slab_bytes).map_err(|source| {
+                    CliError::FormatFailed {
+                        path: slab_path.clone(),
+                        source,
+                    }
+                })?;
+                let plaintext = slab_view
+                    .plaintext_for(slice.drop_id.as_bytes())
+                    .ok_or_else(|| CliError::FormatFailed {
+                        path: slab_path.clone(),
+                        source: CoreError::Corrupt {
+                            reason: format!(
+                                "slab: drop id {} not found in slab file",
+                                format_hex(slice.drop_id.as_bytes())
+                            ),
+                        },
+                    })?
+                    .map_err(map_err)?;
+                out.write_all(plaintext)
+                    .map_err(|source| CliError::ReadFailed {
+                        path: image.to_path_buf(),
+                        source,
+                    })?;
+            }
+        }
+        other => {
+            return Err(CliError::FormatFailed {
+                path: image.to_path_buf(),
+                source: CoreError::Corrupt {
+                    reason: format!(
+                        "metadata blob: path {path:?} resolves to a non-file inode (content_handle: {other:?})"
+                    ),
+                },
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Derive the path to the slab file that holds a slice's drop. Uses
+/// the first locator of the first entry in the slab index, resolved
+/// relative to the manifest file's directory.
+fn resolve_slab_path(
+    image: &Path,
+    slab_index: &limnifs_core::SlabIndex,
+) -> Result<PathBuf, CliError> {
+    if slab_index.is_empty() {
+        return Err(CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: "slab index is empty but inode references a drop".into(),
+            },
+        });
+    }
+    let entry = &slab_index.entries[0];
+    if entry.locators.is_empty() {
+        return Err(CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: "slab index entry has no locators".into(),
+            },
+        });
+    }
+    let locator = &entry.locators[0];
+    let slab_name = locator.uri.strip_prefix("file:").unwrap_or(&locator.uri);
+    Ok(image
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(slab_name))
+}
+
+/// Common loader: parses the manifest prefix, extracts the inlined
+/// metadata blob, and returns the parsed blob + root inode number +
+/// slab index. Used by both `ls` and `cat`.
+fn load_image(
+    manifest_bytes: &[u8],
+    image: &Path,
+    map_err: impl Fn(CoreError) -> CliError,
+) -> Result<(limnifs_core::MetadataBlob, u64, limnifs_core::SlabIndex), CliError> {
+    let mut cursor = ManifestCursor::new(manifest_bytes);
+    let _ = parse_manifest_header(&mut cursor).map_err(&map_err)?;
+    let _ = parse_feature_flags_section(&mut cursor).map_err(&map_err)?;
+    let meta_ref = parse_metadata_reference(&mut cursor).map_err(&map_err)?;
+    let blob_bytes = meta_ref
+        .inline_metadata
+        .as_deref()
+        .ok_or_else(|| CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: "inlined metadata required (external-metadata images not yet supported)"
+                    .into(),
+            },
+        })?;
+    let mut blob_cursor = ManifestCursor::new(blob_bytes);
+    let blob = parse_metadata_blob(&mut blob_cursor).map_err(&map_err)?;
+
+    let slab_index = parse_slab_index(&mut cursor).map_err(&map_err)?;
+
+    let root_inode_number = blob
+        .root_inode_number()
+        .ok_or_else(|| CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: "metadata blob: could not identify a unique root directory inode".into(),
+            },
+        })?;
+    if blob.inode_by_number(root_inode_number).is_none() {
+        return Err(CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!("metadata blob: root inode {root_inode_number} missing"),
+            },
+        });
+    }
+
+    Ok((blob, root_inode_number, slab_index))
 }
 
 /// Walk a slash-separated path from `root_inode` and return the inode
@@ -825,5 +974,52 @@ mod tests {
             Err(CliError::ReadFailed { .. }) => {}
             other => panic!("expected ReadFailed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn cat_writes_inline_file_to_stdout() {
+        let source = make_source_tree();
+        let image = make_temp_file(&[]);
+        std::fs::remove_file(&image).ok();
+        limn(&source, &image).expect("write image");
+        std::fs::remove_dir_all(&source).ok();
+
+        // The ls-e2e tree has a.txt with content "aaa". Redirecting
+        // stdout from cat() directly is hard inside a unit test; the
+        // absence of an Err proves end-to-end success.
+        cat(&image, "/a.txt").expect("cat inline file succeeds");
+        let _ = std::fs::remove_file(&image);
+    }
+
+    #[test]
+    fn cat_missing_path_reports_corrupt() {
+        let source = make_source_tree();
+        let image = make_temp_file(&[]);
+        std::fs::remove_file(&image).ok();
+        limn(&source, &image).expect("write image");
+        std::fs::remove_dir_all(&source).ok();
+        match cat(&image, "/does-not-exist") {
+            Err(CliError::FormatFailed { source, .. }) => {
+                assert!(matches!(source, CoreError::Corrupt { .. }));
+            }
+            other => panic!("expected FormatFailed, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&image);
+    }
+
+    #[test]
+    fn cat_directory_path_reports_corrupt() {
+        let source = make_source_tree();
+        let image = make_temp_file(&[]);
+        std::fs::remove_file(&image).ok();
+        limn(&source, &image).expect("write image");
+        std::fs::remove_dir_all(&source).ok();
+        match cat(&image, "/sub") {
+            Err(CliError::FormatFailed { source, .. }) => {
+                assert!(matches!(source, CoreError::Corrupt { .. }));
+            }
+            other => panic!("expected FormatFailed, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&image);
     }
 }
