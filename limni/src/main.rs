@@ -147,6 +147,13 @@ enum Command {
         /// Path to the `.lim` image.
         image: PathBuf,
     },
+    /// Compact an image: extract → re-write to eliminate slab garbage.
+    Compact {
+        /// Path to the source `.lim` image.
+        source: PathBuf,
+        /// Path to the compacted output `.lim` image.
+        output: PathBuf,
+    },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -176,6 +183,7 @@ fn run() -> Result<(), CliError> {
         Command::Gc { image } => gc_cmd(&image),
         Command::History { image } => history_cmd(&image),
         Command::Dedup { image } => dedup_cmd(&image),
+        Command::Compact { source, output } => compact(&source, &output),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -1166,6 +1174,58 @@ fn dedup_cmd(image: &Path) -> Result<(), CliError> {
     println!(
         "  dedup ratio:         {dedup_ratio:.2} ({:.0}% of refs deduplicated)",
         dedup_ratio * 100.0
+    );
+    Ok(())
+}
+
+/// Compact an image by extracting → re-writing, eliminating slab garbage.
+fn compact(source: &Path, output: &Path) -> Result<(), CliError> {
+    let source_size = std::fs::metadata(source).map(|m| m.len()).unwrap_or(0);
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "limnifs-compact-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0u128, |d| d.as_nanos()),
+    ));
+
+    extract(source, &temp_dir)?;
+
+    let artifact = limnifs_write::write_directory(&temp_dir)
+        .map_err(|e| CliError::WriteFailed { source: e })?;
+    std::fs::remove_dir_all(&temp_dir).ok();
+
+    std::fs::write(output, &artifact.bytes).map_err(|e| CliError::ReadFailed {
+        path: output.to_path_buf(),
+        source: e,
+    })?;
+
+    if let (Some(slab_bytes), Some(locator)) = (&artifact.slab_bytes, &artifact.slab_locator) {
+        let slab_name = locator.strip_prefix("file:").unwrap_or(locator);
+        let slab_path = output
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(slab_name);
+        std::fs::write(&slab_path, slab_bytes).map_err(|e| CliError::ReadFailed {
+            path: slab_path.clone(),
+            source: e,
+        })?;
+    }
+
+    let output_size = artifact.bytes.len() as u64;
+    let slab_size = artifact.slab_bytes.as_ref().map_or(0, |s| s.len() as u64);
+
+    println!("compacted: {} → {}", source.display(), output.display());
+    println!("  source manifest: {source_size} bytes");
+    println!("  output manifest: {output_size} bytes");
+    println!(
+        "  output slab:     {slab_size} bytes ({}) drops",
+        artifact.drop_count
+    );
+    println!(
+        "  inodes: {}  files: {}  dirs: {}",
+        artifact.inode_count, artifact.file_count, artifact.dir_count
     );
     Ok(())
 }
