@@ -103,6 +103,19 @@ enum Command {
         /// Slash-separated file path inside the image.
         path: String,
     },
+    /// Print an inode's metadata.
+    ///
+    /// Resolves the inlined metadata blob, walks the directory tree
+    /// to the requested path, and prints the inode's POSIX metadata
+    /// (number, mode, uid, gid, mtime, nlink) plus a description of
+    /// its content handle (inline-data length, slice-map drops,
+    /// directory hash, symlink target, etc.).
+    Stat {
+        /// Path to the `.lim` image to inspect.
+        image: PathBuf,
+        /// Slash-separated path inside the image.
+        path: String,
+    },
 }
 
 fn run() -> Result<(), CliError> {
@@ -112,6 +125,7 @@ fn run() -> Result<(), CliError> {
         Command::Limn { source, output } => limn(&source, &output),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat { image, path } => cat(&image, &path),
+        Command::Stat { image, path } => stat(&image, &path),
     }
 }
 
@@ -426,6 +440,123 @@ fn cat(image: &Path, path: &str) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+/// Print an inode's metadata: POSIX attributes plus a description of
+/// its content handle.
+fn stat(image: &Path, path: &str) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, root_inode_number, _slab_index) = load_image(&manifest_bytes, image, map_err)?;
+
+    let root_inode = blob
+        .inode_by_number(root_inode_number)
+        .expect("load_image validates that the root inode exists, so this lookup cannot fail");
+
+    let target_inode =
+        resolve_path(&blob, root_inode, path).ok_or_else(|| CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!("metadata blob: path {path:?} not found in tree"),
+            },
+        })?;
+
+    print_inode_stat(image, path, target_inode);
+    Ok(())
+}
+
+fn print_inode_stat(image: &Path, path: &str, inode: &limnifs_core::Inode) {
+    println!("{}: stat {path:?}", image.display());
+    println!("  inode number:  {}", inode.number);
+    println!("  mode:          0o{:06o}", inode.mode & 0o7777);
+    println!("  file type:     {}", format_file_type(inode.file_type()));
+    println!("  uid:           {}", inode.uid);
+    println!("  gid:           {}", inode.gid);
+    println!("  nlink:         {}", inode.nlink);
+    println!("  mtime_ns:      {}", inode.mtime_ns);
+    println!("  ctime_ns:      {}", inode.ctime_ns);
+    if let Some(atime_ns) = inode.atime_ns {
+        println!("  atime_ns:      {atime_ns}");
+    }
+    if !inode.xattrs.is_empty() {
+        println!("  xattrs:        {} entries", inode.xattrs.len());
+        for x in &inode.xattrs {
+            println!(
+                "    ns=0x{:02X}  {:?}  ({} bytes)",
+                x.namespace,
+                x.key,
+                x.value.len()
+            );
+        }
+    }
+    print_content_handle(inode);
+}
+
+fn format_file_type(file_type: u32) -> &'static str {
+    match file_type {
+        limnifs_core::S_IFREG => "regular file",
+        limnifs_core::S_IFDIR => "directory",
+        limnifs_core::S_IFLNK => "symlink",
+        limnifs_core::S_IFBLK => "block device",
+        limnifs_core::S_IFCHR => "char device",
+        limnifs_core::S_IFIFO => "fifo",
+        limnifs_core::S_IFSOCK => "socket",
+        _ => "unknown",
+    }
+}
+
+fn print_content_handle(inode: &limnifs_core::Inode) {
+    match &inode.content_handle {
+        ContentHandle::InlineData(data) => {
+            println!("  content:       inline ({} bytes)", data.len());
+        }
+        ContentHandle::SliceMap(slices) => {
+            let total: u64 = slices
+                .iter()
+                .map(|s| s.file_byte_end - s.file_byte_start)
+                .sum();
+            println!(
+                "  content:       slice map ({} slices, {} bytes)",
+                slices.len(),
+                total
+            );
+            for (i, slice) in slices.iter().enumerate() {
+                println!(
+                    "    [{i}] file=[{},{}) drop={} @{}+{}",
+                    slice.file_byte_start,
+                    slice.file_byte_end,
+                    slice.drop_id,
+                    slice.drop_byte_start,
+                    slice.drop_byte_len,
+                );
+            }
+        }
+        ContentHandle::Directory(hash) => {
+            println!(
+                "  content:       directory node (hash {})",
+                format_hex(hash)
+            );
+        }
+        ContentHandle::Symlink(target) => {
+            println!("  content:       symlink → {target:?}");
+        }
+        ContentHandle::Device(dev) => {
+            println!(
+                "  content:       device (major={}, minor={})",
+                dev >> 8,
+                dev & 0xFF
+            );
+        }
+        ContentHandle::Pipe(pipe_id) => {
+            println!("  content:       pipe (id={pipe_id})");
+        }
+    }
 }
 
 /// Derive the path to the slab file that holds a slice's drop. Uses
@@ -1015,6 +1146,35 @@ mod tests {
         limn(&source, &image).expect("write image");
         std::fs::remove_dir_all(&source).ok();
         match cat(&image, "/sub") {
+            Err(CliError::FormatFailed { source, .. }) => {
+                assert!(matches!(source, CoreError::Corrupt { .. }));
+            }
+            other => panic!("expected FormatFailed, got {other:?}"),
+        }
+        let _ = std::fs::remove_file(&image);
+    }
+
+    #[test]
+    fn stat_inline_file_succeeds() {
+        let source = make_source_tree();
+        let image = make_temp_file(&[]);
+        std::fs::remove_file(&image).ok();
+        limn(&source, &image).expect("write image");
+        std::fs::remove_dir_all(&source).ok();
+        stat(&image, "/a.txt").expect("stat inline file succeeds");
+        stat(&image, "/").expect("stat root succeeds");
+        stat(&image, "/sub").expect("stat subdir succeeds");
+        let _ = std::fs::remove_file(&image);
+    }
+
+    #[test]
+    fn stat_missing_path_reports_corrupt() {
+        let source = make_source_tree();
+        let image = make_temp_file(&[]);
+        std::fs::remove_file(&image).ok();
+        limn(&source, &image).expect("write image");
+        std::fs::remove_dir_all(&source).ok();
+        match stat(&image, "/no-such-file") {
             Err(CliError::FormatFailed { source, .. }) => {
                 assert!(matches!(source, CoreError::Corrupt { .. }));
             }
