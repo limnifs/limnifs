@@ -3,6 +3,69 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — Delta linkage completes manifest section parsers (session 14)
+
+### Done (with evidence)
+
+- **Layer 3 spec for §5.8 delta linkage** —
+  [limnifs/spec#25](https://github.com/limnifs/spec/pull/25).
+  `bit-level/45-delta-linkage.md` — base_root + tree ops
+  (Add/Remove/Replace with length-prefixed paths). Completes the
+  Layer 3 spec for every manifest section except §5.5 crypto
+  params (which needs HPKEEnvelope + SignatureBundle sub-specs).
+- **Delta linkage parser (Rust)** —
+  [limnifs/limnifs#36](https://github.com/limnifs/limnifs/pull/36).
+  Run https://github.com/limnifs/limnifs/actions/runs/30522513929.
+  `DeltaLinkage`, `TreeOp`, `TreeOpKind`, `parse_delta_linkage`.
+  10 new unit tests. Workspace test count: 195 → 205.
+- **Delta linkage parser (Python)** —
+  [limnifs/limnifs-py#4](https://github.com/limnifs/limnifs-py/pull/4).
+  Python reader now has parity for all manifest sections except
+  §5.5 crypto params.
+- **EC params + DMS policy in builder + differential promotion** —
+  [limnifs/limnifs#34](https://github.com/limnifs/limnifs/pull/34) +
+  [#35](https://github.com/limnifs/limnifs/pull/35). Builder now
+  encodes EC + DMS sections; all 4 conformance vectors are
+  differentially verified in CI. Python reader EC + DMS parity
+  landed via [limnifs-py#3](https://github.com/limnifs/limnifs-py/pull/3).
+
+### Manifest section coverage: 9 of 10 complete
+
+| Section | Layer 3 | Rust | Python |
+|---|---|---|---|
+| §5.1 header | yes | yes | yes |
+| §5.2 flags | yes | yes | yes |
+| §5.3 metadata ref | yes | yes | yes |
+| §5.4 slab index | yes | yes | yes |
+| §5.5 crypto params | — | — | — |
+| §5.6 EC params | yes | yes | yes |
+| §5.7 DMS policy | yes | yes | yes |
+| §5.8 delta linkage | yes | yes | yes |
+| §5.9 history | yes | yes | yes |
+| §5.10 Merkle root | yes | yes | yes |
+
+Only §5.5 crypto params remains (needs HPKEEnvelope +
+SignatureBundle sub-specs). Every other section has spec + parser
+in both readers.
+
+### In progress / Next
+
+- **§5.5 crypto params** — needs HPKEEnvelope + SignatureBundle +
+  NonceParams + AdParams sub-specs. Substantial spec effort.
+- **§4 metadata layer Layer 3** (inode §4.1, Merkle B-tree §4.2) —
+  gates the Phase 1 writer pipeline. The biggest remaining spec gap
+  for Phase 1 readiness.
+- **Phase 1 writer pipeline** (04-writer-pipeline) — FastCDC,
+  seine classifier, slab packing. Multi-session effort.
+- **14-website** — www.limnifs.org already live; needs spec-section
+  content updates for the new Layer 3 files.
+
+### Blockers
+
+- None. Phase 0 exited. All 4 vectors differentially verified.
+
+---
+
 ## 2026-07-30 — Optional section parsers (EC params, DMS policy) (session 13)
 
 ### Done (with evidence)
