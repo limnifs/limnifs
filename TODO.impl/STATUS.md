@@ -3,6 +3,88 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — Phase 0 exit gate LIVE and GREEN (session 12)
+
+### Done (with evidence)
+
+- **`limnifs-conformance` crate bootstrapped** —
+  [limnifs/limnifs#25](https://github.com/limnifs/limnifs/pull/25).
+  Run https://github.com/limnifs/limnifs/actions/runs/30510306949.
+  Adds a fourth workspace member holding declarative vectors, an
+  encoder (`ManifestBuilder`), and a round-trip harness. Two
+  initial vectors: minimal v0.1 and minimal v0.1 with feature
+  flags. 14 new tests; workspace total 141 → 155.
+- **Python reference reader merged** —
+  [limnifs/limnifs-py#2](https://github.com/limnifs/limnifs-py/pull/2).
+  Independent Python implementation of v0.1, written from spec only.
+  Mirrors the Rust reader's coverage using Python idioms throughout
+  (dataclasses with slots, methods on Cursor, IntEnum for opcodes).
+  17 tests; ruff clean; Python 3.11+ required. Run
+  https://github.com/limnifs/limnifs-py/actions/runs/30511133495.
+- **Cross-reader differential harness** —
+  [limnifs/limnifs#26](https://github.com/limnifs/limnifs/pull/26).
+  Run https://github.com/limnifs/limnifs/actions/runs/30511636005.
+  `limnifs-conformance::differential` encodes a vector via the
+  Rust builder, runs BOTH `limni verify` (Rust) and `limni-py verify`
+  (Python) as black-box subprocesses, parses their reported roots,
+  asserts equality. Skip-without-adapters policy via
+  `LIMNIFS_RUN_DIFFERENTIAL=1`. Verified locally: both readers agree
+  on every vector. Sample agreement:
+  `b3:5tmx3wa6ab245x47ia56f5dm7d52pkvmhpdm3rwvhqhebjxtunjq`.
+- **`phase-0-exit` CI job live and GREEN** —
+  [limnifs/limnifs#27](https://github.com/limnifs/limnifs/pull/27)
+  + typo fix
+  [limnifs/limnifs#28](https://github.com/limnifs/limnifs/pull/28).
+  The Phase 0 exit gate per CAMPAIGN.md is now a real CI signal:
+  https://github.com/limnifs/limnifs/actions/workflows/phase-0-exit.yml.
+  Job builds both readers, places them on `PATH`, sets
+  `LIMNIFS_RUN_DIFFERENTIAL=1`, runs the differential test. Green
+  in 34s on the typo-fix PR. Triggers on push to main + PRs +
+  workflow_dispatch.
+
+### Phase 0 is EXITED
+
+Per CAMPAIGN.md: "Phase 0 exit gate: both readers pass the full
+conformance suite in CI; `phase-0-exit` job green." That
+condition is now met. The gate will continue to grow as new
+vectors are added (the conformance task file describes Phase 0
+as "Phase 0+ (grows every phase)"), but the bootstrap is done.
+
+### Architecture: spec-sufficiency oracle at work
+
+Two independent readers, written from the same spec, agree on the
+ManifestRoot of every conformance vector. Any future spec
+ambiguity or parser bug will surface as a divergent root between
+the two readers — and the phase-0-exit job will catch it before
+merge.
+
+The harness is black-box by construction: it never links reader
+code on the verification path. The Rust builder encodes; both
+binaries decode; the harness compares roots.
+
+### In progress / Next
+
+- **Extend vector coverage**: corrupt-input vectors (truncated
+  sections, bad magic, duplicate slab_ids, oversized params), more
+  section combinations. Each new vector that both readers agree on
+  is a permanent regression test.
+- **Layer 3 specs for §4 metadata layer** (`bit-level/33-inode.md`,
+  `bit-level/34-merkle-btree-node.md`) — needed before the
+  drop-store reader can fully walk a manifest's content.
+- **Optional section parsers** (§5.5 crypto, §5.6 EC, §5.7 DMS,
+  §5.8 delta) — need sub-structure specs (HPKEEnvelope,
+  SignatureBundle, TreeOp, ShareRecord).
+- **Phase 1 planning**: writer pipeline (FastCDC, seine
+  classifier, slab packing), mount layer (FUSE), `limni` CLI
+  extensions. Each is its own multi-session effort.
+
+### Blockers
+
+- None. Phase 0 exited. User delegation in effect for green PRs
+  (rebase-merge).
+
+---
+
 ## 2026-07-30 — Merkle root: image identity primitive live (session 11)
 
 ### Done (with evidence)
