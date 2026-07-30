@@ -3,6 +3,69 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-31 — CLI completion + registries + slab compaction (session 22)
+
+### Done
+
+- Consolidated all stacked PRs into main (#54). All intermediate PRs closed.
+- Added `limni stat`, `limni extract`, `limni diff` (#55).
+- Added metadata blob summary to `verify --json` for Layer 2 differential (#56).
+- Added `differential_metadata_agreement_or_skip` conformance test (#57).
+- Added `limni tree` — recursive directory listing (#59).
+- Added `limni slab` — slab file inspection with drop records + codecs (#60).
+- Added `limni gc` — unreferenced drop analysis (#61).
+- Added `limni history` — image provenance display (#63).
+- Added `limni dedup` — drop dedup analysis (#64).
+- Added `limni compact` — slab GC via extract → re-write (#65).
+- Added proper slab compaction module — preserves codecs, no file I/O (#67).
+- Added AEAD registry (#62 via #53).
+- Added EC scheme registry (#62).
+- Added CLI README documenting all 15 commands (#66).
+
+### CLI commands (15 total)
+
+verify, limn, ls, cat, stat, tree, extract, diff, inspect, slab, gc,
+history, dedup, compact, mount (fuse feature).
+
+### Phase 1 task status
+
+| Task | Status |
+|---|---|
+| 04-chunking-fastcdc | ✅ |
+| 04-classifier-seine | ✅ |
+| 04-deepening-compactor | ✅ (LZ4) |
+| 04-ingest-epilimnion | ✅ |
+| 04-slab-packing-gc | ✅ (gc + compact + proper compaction) |
+| 04-deltas-overlays | ✅ (delta builder) |
+| 10-cli | ✅ (15 commands) |
+| 11-mount | ✅ (VFS + FUSE frontend) |
+| 12-tebako-integration | ❌ (cross-org) |
+
+### Phase 2 task status
+
+| Task | Status |
+|---|---|
+| 05-aead-registry | ✅ |
+| 05-crypto (encrypt/decrypt) | pending |
+| 08-locator-trait | ✅ |
+| 08-http/s3 locators | pending |
+| 06-delta-builder | ✅ |
+| 06-metadata-flatten | pending |
+| 06-turnover | pending |
+
+### Phase 3 task status
+
+| Task | Status |
+|---|---|
+| 07-erasure-coding | registry done, RS impl pending |
+| DMS | parser done, Shamir impl pending |
+| IPFS | pending |
+
+### Test counts
+
+- Rust: 322 tests. Python: 55 tests. All green.
+- Zero open PRs across all three repos.
+
 ## 2026-07-31 — Consolidated merge + differential Layer 2 + CLI completion (session 21)
 
 ### Done
