@@ -1,0 +1,79 @@
+name: Phase 0 exit gate
+
+# The Phase 0 exit gate per TODO.impl/CAMPAIGN.md: both readers
+# (Rust + Python) must agree on every conformance vector's ManifestRoot.
+# This workflow builds both readers, places them on PATH, and runs the
+# differential test from limnifs-conformance. The job is green iff
+# every vector produces the same root in both implementations.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Allow manual runs (workflow_dispatch) for debugging.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in_progress: true
+
+jobs:
+  differential:
+    name: Rust ↔ Python differential
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout limnifs (this repo)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout limnifs-py (reference reader)
+        uses: actions/checkout@v4
+        with:
+          repository: limnifs/limnifs-py
+          path: _limnifs-py
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          # The repo pins stable via rust-toolchain.toml; rustup respects it.
+          rustup show active-toolchain
+          rustup component add clippy rustfmt 2>/dev/null || true
+          cargo --version
+          rustc --version
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: _limnifs-py/pyproject.toml
+
+      - name: Build Rust workspace + limni binary
+        run: |
+          cargo build --release --bin limni
+          echo "$(pwd)/target/release" >> "$GITHUB_PATH"
+
+      - name: Install Python reference reader
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install _limnifs-py/
+
+      - name: Verify both binaries are findable
+        run: |
+          which limni
+          which limni-py
+          limni --version
+          limni-py --help || true
+
+      - name: Run differential conformance test
+        env:
+          LIMNIFS_RUN_DIFFERENTIAL: '1'
+        run: |
+          cargo test --package limnifs-conformance differential -- --nocapture --test-threads=1
