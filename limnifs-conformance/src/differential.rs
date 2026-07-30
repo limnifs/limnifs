@@ -304,7 +304,7 @@ fn decode_b3(text: &str) -> Result<[u8; 32], String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vectors::all_vectors;
+    use crate::vectors::differential_vectors;
 
     #[test]
     fn differential_agreement_or_skip() {
@@ -314,7 +314,7 @@ mod tests {
             );
             return;
         }
-        for vector in all_vectors() {
+        for vector in differential_vectors() {
             match differential_root(&vector) {
                 Ok((rust_root, py_root)) => {
                     assert_eq!(rust_root, py_root, "vector {}", vector.name);
@@ -356,7 +356,7 @@ mod tests {
             );
             return;
         }
-        for vector in all_vectors() {
+        for vector in differential_vectors() {
             differential_rejection(&vector, Mutation::BadMagic)
                 .unwrap_or_else(|e| panic!("vector {} bad-magic: {e}", vector.name));
         }
@@ -368,7 +368,7 @@ mod tests {
             eprintln!("skipping differential rejection test");
             return;
         }
-        for vector in all_vectors() {
+        for vector in differential_vectors() {
             let artifact = ManifestBuilder::new(vector.spec.clone()).build();
             let original_len = artifact.bytes.len();
             // Truncate to the manifest header (16 bytes) — every parser
@@ -390,7 +390,7 @@ mod tests {
             eprintln!("skipping differential rejection test");
             return;
         }
-        for vector in all_vectors() {
+        for vector in differential_vectors() {
             let artifact = ManifestBuilder::new(vector.spec.clone()).build();
             let original_len = artifact.bytes.len();
             // Flip the last byte (in the history section, always present).
