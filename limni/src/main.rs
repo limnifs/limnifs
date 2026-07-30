@@ -103,6 +103,14 @@ enum Command {
         /// Slash-separated file path inside the image.
         path: String,
     },
+    /// Compute the tree operations between a parent image and a child
+    /// image, and print them as one line per Add/Remove/Replace.
+    Diff {
+        /// Path to the parent (base) `.lim` image.
+        parent: PathBuf,
+        /// Path to the child (target) `.lim` image.
+        child: PathBuf,
+    },
 }
 
 fn run() -> Result<(), CliError> {
@@ -112,6 +120,7 @@ fn run() -> Result<(), CliError> {
         Command::Limn { source, output } => limn(&source, &output),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat { image, path } => cat(&image, &path),
+        Command::Diff { parent, child } => diff(&parent, &child),
     }
 }
 
@@ -128,6 +137,18 @@ fn run_with_exit_code() -> ExitCode {
         }
         Err(CliError::WriteFailed { source }) => {
             eprintln!("limni: write failed: {source}");
+            ExitCode::FAILURE
+        }
+        Err(CliError::DeltaFailed {
+            parent,
+            child,
+            message,
+        }) => {
+            eprintln!(
+                "limni: delta {} -> {}: {message}",
+                parent.display(),
+                child.display()
+            );
             ExitCode::FAILURE
         }
     }
@@ -150,6 +171,11 @@ enum CliError {
     },
     WriteFailed {
         source: limnifs_write::WriteError,
+    },
+    DeltaFailed {
+        parent: PathBuf,
+        child: PathBuf,
+        message: String,
     },
 }
 
@@ -426,6 +452,42 @@ fn cat(image: &Path, path: &str) -> Result<(), CliError> {
         }
     }
     Ok(())
+}
+
+/// Compute the delta between two `.lim` images and print one line per
+/// tree op (Add / Remove / Replace), sorted by path. The output is
+/// deterministic for the same pair of images.
+fn diff(parent: &Path, child: &Path) -> Result<(), CliError> {
+    let artifact = limnifs_write::delta_builder::compute_delta(parent, child).map_err(|e| {
+        CliError::DeltaFailed {
+            parent: parent.to_path_buf(),
+            child: child.to_path_buf(),
+            message: format!("{e}"),
+        }
+    })?;
+    println!("base_root: b3:{}", format_b3(&artifact.base_root));
+    println!("ops: {}", artifact.tree_ops.len());
+    for op in &artifact.tree_ops {
+        let kind = match op.kind {
+            limnifs_core::delta_linkage::TreeOpKind::Add => "A",
+            limnifs_core::delta_linkage::TreeOpKind::Remove => "R",
+            limnifs_core::delta_linkage::TreeOpKind::Replace => "M",
+        };
+        let inode = op
+            .inode_number
+            .map_or_else(|| "-".to_string(), |n| n.to_string());
+        println!("{kind} {} inode={inode}", op.path);
+    }
+    Ok(())
+}
+
+fn format_b3(bytes: &[u8; 32]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(53);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// Derive the path to the slab file that holds a slice's drop. Uses
