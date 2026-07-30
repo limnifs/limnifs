@@ -20,9 +20,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use limnifs_core::{
-    compute_merkle_root, hash_empty_section, hash_section, parse_feature_flags_section,
-    parse_history, parse_manifest_header, parse_metadata_reference, parse_slab_index, CoreError,
-    FeatureFlags, ManifestCursor, ManifestHeader, ManifestRoot, SectionHashes,
+    compute_merkle_root, hash_empty_section, hash_section, parse_dms_policy, parse_ec_params,
+    parse_feature_flags_section, parse_history, parse_manifest_header, parse_metadata_reference,
+    parse_slab_index, CoreError, FeatureFlags, ManifestCursor, ManifestHeader, ManifestRoot,
+    SectionHashes,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -140,17 +141,27 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
     let slab_index = parse_slab_index(&mut cursor).map_err(map_err)?;
     let slab_index_end = cursor.position();
 
+    // Parse optional sections based on feature flags.
+    let ec_params_start = cursor.position();
+    let has_ec = flags.is_required(0x0001) || flags.get(0x0001).is_some();
+    if has_ec {
+        let _ = parse_ec_params(&mut cursor).map_err(map_err)?;
+    }
+    let ec_params_end = cursor.position();
+
+    let dms_policy_start = cursor.position();
+    let has_dms = flags.is_required(0x0002) || flags.get(0x0002).is_some();
+    if has_dms {
+        let _ = parse_dms_policy(&mut cursor).map_err(map_err)?;
+    }
+    let dms_policy_end = cursor.position();
+
     let history_start = cursor.position();
     let history = parse_history(&mut cursor).map_err(map_err)?;
     let history_end = cursor.position();
 
     let extra_bytes_remaining = cursor.remaining_len();
 
-    // For v0.1 images without optional sections (crypto, EC, DMS,
-    // delta linkage), the cursor should be at end-of-buffer here.
-    // If extra bytes remain, optional sections are present that we
-    // can't yet parse; the Merkle root is computed assuming all four
-    // optional slots are absent, with a warning.
     let hashes = SectionHashes {
         metadata: metadata_reference.metadata_hash,
         format_header: hash_section(&buffer[header_start..header_end]),
@@ -158,8 +169,16 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
         metadata_reference: hash_section(&buffer[meta_ref_start..meta_ref_end]),
         slab_index: hash_section(&buffer[slab_index_start..slab_index_end]),
         crypto_params: hash_empty_section(),
-        ec_params: hash_empty_section(),
-        dms_policy: hash_empty_section(),
+        ec_params: if has_ec {
+            hash_section(&buffer[ec_params_start..ec_params_end])
+        } else {
+            hash_empty_section()
+        },
+        dms_policy: if has_dms {
+            hash_section(&buffer[dms_policy_start..dms_policy_end])
+        } else {
+            hash_empty_section()
+        },
         delta_linkage: hash_empty_section(),
         history: hash_section(&buffer[history_start..history_end]),
     };
