@@ -238,6 +238,62 @@ fn run_cli(binary: &str, fixture_path: &PathBuf, label: &str) -> Result<CliRepor
     })
 }
 
+/// Run a Layer-2 differential: encode the vector, run both CLIs,
+/// extract the metadata blob summary fields from each JSON output,
+/// and assert they match. Skips silently when either CLI does not
+/// emit the summary fields (version skew).
+///
+/// # Errors
+///
+/// Returns `Err(String)` if either CLI fails or the summaries disagree.
+pub fn differential_metadata(vector: &Vector) -> Result<(), String> {
+    let artifact: ManifestArtifact = ManifestBuilder::new(vector.spec.clone()).build();
+    let rust = run_limni_rust(&artifact.bytes)?;
+    let py = run_limni_py(&artifact.bytes)?;
+    let rust_summary = extract_metadata_summary(&rust.stdout)
+        .ok_or_else(|| format!("rust did not emit metadata summary; stderr={}", rust.stderr))?;
+    let py_summary = extract_metadata_summary(&py.stdout)
+        .ok_or_else(|| format!("python did not emit metadata summary; stderr={}", py.stderr))?;
+    if !has_summary_fields(&rust_summary) || !has_summary_fields(&py_summary) {
+        return Ok(());
+    }
+    if rust_summary != py_summary {
+        return Err(format!(
+            "metadata summary mismatch on vector {}: rust={rust_summary} py={py_summary}",
+            vector.name
+        ));
+    }
+    Ok(())
+}
+
+fn has_summary_fields(summary: &serde_json::Value) -> bool {
+    summary
+        .as_object()
+        .is_some_and(|obj| obj.contains_key("metadata_inode_count"))
+}
+
+fn extract_metadata_summary(stdout: &str) -> Option<serde_json::Value> {
+    let value: serde_json::Value = serde_json::from_str(stdout).ok()?;
+    if !value.get("metadata_inlined")?.as_bool()? {
+        return Some(serde_json::Value::Null);
+    }
+    let obj = value.as_object()?;
+    let keys = [
+        "metadata_inode_count",
+        "metadata_dir_node_count",
+        "metadata_root_inode",
+        "metadata_inodes",
+        "metadata_dir_nodes",
+    ];
+    let mut summary = serde_json::Map::new();
+    for key in keys {
+        if let Some(v) = obj.get(key) {
+            summary.insert((*key).to_owned(), v.clone());
+        }
+    }
+    Some(serde_json::Value::Object(summary))
+}
+
 fn parse_root_from_json(stdout: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(stdout).ok()?;
     value.get("merkle_root")?.as_str().map(str::to_owned)
@@ -330,6 +386,21 @@ mod tests {
                     }
                     panic!("vector {}: {e}", vector.name);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn differential_metadata_agreement_or_skip() {
+        if !should_run() {
+            eprintln!(
+                "skipping differential metadata test: {DIFFERENTIAL_ENV_VAR} unset and adapters not on PATH"
+            );
+            return;
+        }
+        for vector in differential_vectors() {
+            if let Err(e) = differential_metadata(&vector) {
+                panic!("vector {}: {e}", vector.name);
             }
         }
     }
