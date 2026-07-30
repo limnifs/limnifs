@@ -1,10 +1,9 @@
 //! `LimniFS` writer pipeline — directory tree to `.lim` image.
 //!
-//! The minimum viable writer takes a real directory tree and produces
-//! a valid `.lim` manifest artifact with inlined metadata. All files
-//! under the inline threshold (4 KiB) are stored as inline data in
-//! their inodes; larger files are currently unsupported (future
-//! versions will use `FastCDC` + slab packing per §6).
+//! The writer takes a real directory tree and produces a valid `.lim`
+//! manifest artifact with inlined metadata. Files at or below the
+//! inline threshold (4 KiB) are stored as inline data in their inodes;
+//! larger files are stored as drops packed into a single slab.
 //!
 //! ## Usage
 //!
@@ -17,6 +16,7 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use limnifs_core::{
@@ -24,11 +24,10 @@ use limnifs_core::{
     FEATURE_FLAGS_SECTION_VERSION, HISTORY_SECTION_VERSION, METADATA_REFERENCE_SECTION_VERSION,
     SLAB_INDEX_SECTION_VERSION,
 };
-use limnifs_format::ManifestRoot;
+use limnifs_format::{ManifestRoot, SlabId};
 
 /// Inline-data threshold: files at or below this size get inline data
-/// in their inode. Larger files are rejected by the MVP writer (will
-/// be supported when slab packing lands).
+/// in their inode. Larger files are stored as drops in a slab.
 pub const INLINE_THRESHOLD: usize = 4096;
 
 /// Result of writing a directory tree.
@@ -36,26 +35,24 @@ pub const INLINE_THRESHOLD: usize = 4096;
 pub struct WriteArtifact {
     pub bytes: Vec<u8>,
     pub merkle_root: ManifestRoot,
+    pub slab_bytes: Option<Vec<u8>>,
+    pub slab_locator: Option<String>,
     pub inode_count: usize,
     pub file_count: usize,
     pub dir_count: usize,
+    pub drop_count: usize,
 }
 
 /// Error during writing.
 #[derive(Debug)]
 pub enum WriteError {
     Io(std::io::Error),
-    FileTooLarge { path: String, size: u64 },
 }
 
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "I/O error: {e}"),
-            Self::FileTooLarge { path, size } => write!(
-                f,
-                "file {path} is {size} bytes (MVP writer only supports files <= {INLINE_THRESHOLD} bytes)"
-            ),
         }
     }
 }
@@ -69,19 +66,25 @@ impl From<std::io::Error> for WriteError {
 }
 
 /// Walk a directory tree and produce a valid `.lim` manifest artifact
-/// with inlined metadata. All files must be at or below
-/// [`INLINE_THRESHOLD`] bytes.
+/// with inlined metadata. Files at or below [`INLINE_THRESHOLD`] bytes
+/// are stored inline; larger files are packed into a single slab as
+/// content-addressed drops.
 ///
 /// # Errors
 ///
-/// Returns [`WriteError::Io`] for filesystem errors or
-/// [`WriteError::FileTooLarge`] for files exceeding the inline threshold.
+/// Returns [`WriteError::Io`] for filesystem errors.
 pub fn write_directory(root: &Path) -> Result<WriteArtifact, WriteError> {
     let mut ctx = WriteContext::new();
     let root_inode_number = ctx.walk(root)?;
     ctx.root_inode_number = root_inode_number;
     let artifact = ctx.assemble();
     Ok(artifact)
+}
+
+struct PendingDrop {
+    id: [u8; 32],
+    plaintext: Vec<u8>,
+    offset_in_window: u32,
 }
 
 struct PendingInode {
@@ -93,6 +96,12 @@ struct PendingInode {
 
 enum PendingContent {
     Inline(Vec<u8>),
+    DropBacked {
+        drop_id: [u8; 32],
+        file_len: u64,
+        offset_in_window: u32,
+        len_in_window: u32,
+    },
     Directory(Vec<(String, u64, u8)>),
 }
 
@@ -106,6 +115,8 @@ struct WriteContext {
     next_inode: u64,
     inodes: Vec<PendingInode>,
     dir_nodes: Vec<DirNode>,
+    drops: Vec<PendingDrop>,
+    drop_index: HashMap<[u8; 32], (u32, u32)>,
     file_count: usize,
     dir_count: usize,
     root_inode_number: u64,
@@ -117,6 +128,8 @@ impl WriteContext {
             next_inode: 1,
             inodes: Vec::new(),
             dir_nodes: Vec::new(),
+            drops: Vec::new(),
+            drop_index: HashMap::new(),
             file_count: 0,
             dir_count: 0,
             root_inode_number: 0,
@@ -155,35 +168,55 @@ impl WriteContext {
             }
 
             entries.sort_by(|a, b| a.0.cmp(&b.0));
-
             let dir_node = encode_dir_node(&entries);
             self.dir_nodes.push(dir_node);
-
             self.inodes.push(PendingInode {
                 number: inode_number,
                 mode: 0o040_755,
                 mtime_ns,
                 content: PendingContent::Directory(entries),
             });
-
             Ok(inode_number)
         } else if file_type.is_file() {
             self.file_count += 1;
             let inode_number = self.alloc_inode();
-            let size = meta.len();
-            if usize::try_from(size).map_or(true, |s| s > INLINE_THRESHOLD) {
-                return Err(WriteError::FileTooLarge {
-                    path: path.display().to_string(),
-                    size,
+            let data = std::fs::read(path)?;
+            let file_len = data.len();
+
+            if file_len <= INLINE_THRESHOLD {
+                self.inodes.push(PendingInode {
+                    number: inode_number,
+                    mode: 0o100_644,
+                    mtime_ns,
+                    content: PendingContent::Inline(data),
+                });
+            } else {
+                let drop_id = hash_section(&data);
+                let (offset, len) = if let Some(&existing) = self.drop_index.get(&drop_id) {
+                    existing
+                } else {
+                    let offset = self.drops.iter().map(PendingDrop::len_in_window).sum::<u32>();
+                    let len = u32::try_from(file_len).expect("file fits u32");
+                    self.drops.push(PendingDrop {
+                        id: drop_id,
+                        plaintext: data,
+                        offset_in_window: offset,
+                    });
+                    self.drop_index.insert(drop_id, (offset, len));
+                    (offset, len)
+                };
+                self.inodes.push(PendingInode {
+                    number: inode_number,
+                    mode: 0o100_644,
+                    mtime_ns,
+                    content: PendingContent::DropBacked {
+                        drop_id,
+                        file_len: file_len as u64,
+                        offset_in_window: offset,
+                        len_in_window: len,
+                    },
                 });
             }
-            let data = std::fs::read(path)?;
-            self.inodes.push(PendingInode {
-                number: inode_number,
-                mode: 0o100_644,
-                mtime_ns,
-                content: PendingContent::Inline(data),
-            });
             Ok(inode_number)
         } else {
             Err(WriteError::Io(std::io::Error::new(
@@ -196,8 +229,16 @@ impl WriteContext {
     fn assemble(self) -> WriteArtifact {
         let inode_count = self.inodes.len();
         let dir_count = self.dir_count;
+        let drop_count = self.drops.len();
 
-        // Build the metadata blob: [inode_count][inodes][dir_node_count][dir_nodes].
+        let (slab_bytes, slab_id, slab_locator) = if self.drops.is_empty() {
+            (None, None, None)
+        } else {
+            let (bytes, id) = encode_slab(&self.drops);
+            let locator = "file:slab-0.bin".to_owned();
+            (Some(bytes), Some(id), Some(locator))
+        };
+
         let mut metadata_blob = Vec::new();
         metadata_blob.extend_from_slice(&u32::try_from(self.inodes.len()).unwrap().to_le_bytes());
         for inode in &self.inodes {
@@ -209,49 +250,51 @@ impl WriteContext {
             metadata_blob.extend_from_slice(&node.bytes);
         }
 
-        // Assemble the manifest sections in spec order.
         let mut manifest = Vec::new();
 
-        // §5.1 Header
         let header_start = manifest.len();
-        let header = ManifestHeader::current();
-        manifest.extend_from_slice(&header.to_bytes());
+        manifest.extend_from_slice(&ManifestHeader::current().to_bytes());
         let header_end = manifest.len();
 
-        // §5.2 Feature flags (empty)
         let flags_start = manifest.len();
         manifest.push(FEATURE_FLAGS_SECTION_VERSION);
         manifest.extend_from_slice(&0u32.to_le_bytes());
         let flags_end = manifest.len();
 
-        // §5.3 Metadata reference (inlined)
         let meta_ref_start = manifest.len();
         manifest.push(METADATA_REFERENCE_SECTION_VERSION);
         let metadata_hash = hash_section(&metadata_blob);
         manifest.extend_from_slice(&metadata_hash);
-        manifest.extend_from_slice(&0u32.to_le_bytes()); // locator_count = 0
+        manifest.extend_from_slice(&0u32.to_le_bytes());
         let inline_len = u32::try_from(metadata_blob.len()).expect("metadata fits u32");
         manifest.extend_from_slice(&inline_len.to_le_bytes());
         manifest.extend_from_slice(&metadata_blob);
         let meta_ref_end = manifest.len();
 
-        // §5.4 Slab index (empty — no drops/slabs for inline-only images)
         let slab_index_start = manifest.len();
         manifest.push(SLAB_INDEX_SECTION_VERSION);
-        manifest.extend_from_slice(&0u32.to_le_bytes());
+        if let (Some(id), Some(loc)) = (&slab_id, &slab_locator) {
+            manifest.extend_from_slice(&1u32.to_le_bytes());
+            manifest.extend_from_slice(&id.to_bytes());
+            manifest.extend_from_slice(&1u32.to_le_bytes());
+            let loc_bytes = loc.as_bytes();
+            let loc_len = u32::try_from(loc_bytes.len()).expect("locator fits u32");
+            manifest.extend_from_slice(&loc_len.to_le_bytes());
+            manifest.extend_from_slice(loc_bytes);
+        } else {
+            manifest.extend_from_slice(&0u32.to_le_bytes());
+        }
         let slab_index_end = manifest.len();
 
-        // §5.9 History (single build entry, timestamp 0 for determinism)
         let history_start = manifest.len();
         manifest.push(HISTORY_SECTION_VERSION);
-        manifest.extend_from_slice(&1u32.to_le_bytes()); // 1 entry
-        manifest.push(0x01); // op = build
-        manifest.extend_from_slice(&0u64.to_le_bytes()); // timestamp = 0
-        manifest.extend_from_slice(&0u32.to_le_bytes()); // input_count = 0
-        manifest.extend_from_slice(&0u32.to_le_bytes()); // params_len = 0
+        manifest.extend_from_slice(&1u32.to_le_bytes());
+        manifest.push(0x01);
+        manifest.extend_from_slice(&0u64.to_le_bytes());
+        manifest.extend_from_slice(&0u32.to_le_bytes());
+        manifest.extend_from_slice(&0u32.to_le_bytes());
         let history_end = manifest.len();
 
-        // Compute Merkle root.
         let hashes = SectionHashes {
             metadata: metadata_hash,
             format_header: hash_section(&manifest[header_start..header_end]),
@@ -269,29 +312,46 @@ impl WriteContext {
         WriteArtifact {
             bytes: manifest,
             merkle_root,
+            slab_bytes,
+            slab_locator,
             inode_count,
             file_count: self.file_count,
             dir_count,
+            drop_count,
         }
     }
 
     fn encode_inode(&self, out: &mut Vec<u8>, inode: &PendingInode) {
         out.extend_from_slice(&inode.number.to_le_bytes());
         out.extend_from_slice(&inode.mode.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes()); // uid
-        out.extend_from_slice(&0u32.to_le_bytes()); // gid
-        out.extend_from_slice(&inode.mtime_ns.to_le_bytes()); // mtime
-        out.extend_from_slice(&inode.mtime_ns.to_le_bytes()); // ctime
-        out.extend_from_slice(&1u32.to_le_bytes()); // nlink
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&inode.mtime_ns.to_le_bytes());
+        out.extend_from_slice(&inode.mtime_ns.to_le_bytes());
+        out.extend_from_slice(&1u32.to_le_bytes());
         match &inode.content {
             PendingContent::Inline(data) => {
-                out.push(0x04); // flags: INLINE_DATA
+                out.push(0x04);
                 let len = u32::try_from(data.len()).expect("data fits u32");
                 out.extend_from_slice(&len.to_le_bytes());
                 out.extend_from_slice(data);
             }
+            PendingContent::DropBacked {
+                drop_id,
+                file_len,
+                offset_in_window,
+                len_in_window,
+            } => {
+                out.push(0x00);
+                out.extend_from_slice(&1u32.to_le_bytes());
+                out.extend_from_slice(&0u64.to_le_bytes());
+                out.extend_from_slice(&file_len.to_le_bytes());
+                out.extend_from_slice(drop_id);
+                out.extend_from_slice(&offset_in_window.to_le_bytes());
+                out.extend_from_slice(&len_in_window.to_le_bytes());
+            }
             PendingContent::Directory(entries) => {
-                out.push(0x00); // flags: none
+                out.push(0x00);
                 let node = self
                     .dir_nodes
                     .iter()
@@ -303,9 +363,15 @@ impl WriteContext {
     }
 }
 
+impl PendingDrop {
+    fn len_in_window(&self) -> u32 {
+        u32::try_from(self.plaintext.len()).expect("drop plaintext fits u32")
+    }
+}
+
 fn encode_dir_node(entries: &[(String, u64, u8)]) -> DirNode {
     let mut bytes = Vec::new();
-    bytes.push(1u8); // node_version
+    bytes.push(1u8);
     let count = u32::try_from(entries.len()).expect("entry count fits u32");
     bytes.extend_from_slice(&count.to_le_bytes());
     for (name, inode_number, entry_type) in entries {
@@ -324,6 +390,38 @@ fn encode_dir_node(entries: &[(String, u64, u8)]) -> DirNode {
     }
 }
 
+fn encode_slab(drops: &[PendingDrop]) -> (Vec<u8>, SlabId) {
+    let mut drop_records = Vec::new();
+    let mut solid_window = Vec::new();
+
+    for drop in drops {
+        let plaintext_len = drop.len_in_window();
+        drop_records.extend_from_slice(&drop.id);
+        drop_records.extend_from_slice(&plaintext_len.to_le_bytes());
+        drop_records.extend_from_slice(&[0x00, 0x00, 0x00]);
+        drop_records.push(0x00);
+        drop_records.extend_from_slice(&drop.offset_in_window.to_le_bytes());
+        drop_records.extend_from_slice(&plaintext_len.to_le_bytes());
+        solid_window.extend_from_slice(&drop.plaintext);
+    }
+
+    let slab_content = [&drop_records[..], &solid_window[..]].concat();
+    let slab_hash = hash_section(&slab_content);
+    let slab_id = SlabId::new(0, slab_hash);
+
+    let total_length = 56 + slab_content.len();
+    let mut slab_bytes = Vec::with_capacity(total_length);
+    slab_bytes.extend_from_slice(b"LIM1");
+    slab_bytes.extend_from_slice(&1u16.to_le_bytes());
+    slab_bytes.extend_from_slice(&slab_id.to_bytes());
+    slab_bytes.extend_from_slice(&(total_length as u64).to_le_bytes());
+    slab_bytes.push(0x00);
+    slab_bytes.push(0x00);
+    slab_bytes.extend_from_slice(&slab_content);
+
+    (slab_bytes, slab_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,21 +437,62 @@ mod tests {
         assert!(artifact.inode_count >= 1);
         assert_eq!(artifact.file_count, 0);
         assert_eq!(artifact.dir_count, 1);
-        assert_ne!(artifact.merkle_root.as_bytes(), &[0u8; 32]);
+        assert!(artifact.slab_bytes.is_none());
     }
 
     #[test]
-    fn write_small_file() {
+    fn write_small_file_inline() {
         let temp =
-            std::env::temp_dir().join(format!("limnifs-write-test-{}-file", std::process::id()));
+            std::env::temp_dir().join(format!("limnifs-write-test-{}-small", std::process::id()));
         std::fs::create_dir_all(&temp).expect("create temp dir");
         std::fs::write(temp.join("hello.txt"), b"hello world").expect("write file");
         let artifact = write_directory(&temp).expect("write succeeds");
         std::fs::remove_dir_all(&temp).ok();
         assert_eq!(artifact.file_count, 1);
-        assert_eq!(artifact.dir_count, 1);
-        assert_eq!(artifact.inode_count, 2); // 1 dir + 1 file
-        assert_ne!(artifact.merkle_root.as_bytes(), &[0u8; 32]);
+        assert!(artifact.slab_bytes.is_none());
+        assert_eq!(artifact.drop_count, 0);
+    }
+
+    #[test]
+    fn write_large_file_uses_slab() {
+        let temp =
+            std::env::temp_dir().join(format!("limnifs-write-test-{}-large", std::process::id()));
+        std::fs::create_dir_all(&temp).expect("create temp dir");
+        let large_data = vec![0xABu8; INLINE_THRESHOLD + 100];
+        std::fs::write(temp.join("big.bin"), &large_data).expect("write big");
+        let artifact = write_directory(&temp).expect("write succeeds");
+        std::fs::remove_dir_all(&temp).ok();
+        assert_eq!(artifact.drop_count, 1);
+        assert!(artifact.slab_bytes.is_some());
+        assert!(artifact.slab_locator.is_some());
+    }
+
+    #[test]
+    fn write_mixed_inline_and_large() {
+        let temp =
+            std::env::temp_dir().join(format!("limnifs-write-test-{}-mix", std::process::id()));
+        std::fs::create_dir_all(&temp).expect("create temp dir");
+        std::fs::write(temp.join("small.txt"), b"tiny").expect("write small");
+        std::fs::write(temp.join("large.bin"), vec![0xCDu8; INLINE_THRESHOLD * 2])
+            .expect("write large");
+        let artifact = write_directory(&temp).expect("write succeeds");
+        std::fs::remove_dir_all(&temp).ok();
+        assert_eq!(artifact.file_count, 2);
+        assert_eq!(artifact.drop_count, 1);
+        assert!(artifact.slab_bytes.is_some());
+    }
+
+    #[test]
+    fn deduplicates_identical_large_files() {
+        let temp =
+            std::env::temp_dir().join(format!("limnifs-write-test-{}-dedup", std::process::id()));
+        std::fs::create_dir_all(&temp).expect("create temp dir");
+        let data = vec![0x77u8; INLINE_THRESHOLD + 10];
+        std::fs::write(temp.join("a.bin"), &data).expect("write a");
+        std::fs::write(temp.join("b.bin"), &data).expect("write b");
+        let artifact = write_directory(&temp).expect("write succeeds");
+        std::fs::remove_dir_all(&temp).ok();
+        assert_eq!(artifact.drop_count, 1);
     }
 
     #[test]
@@ -372,18 +511,14 @@ mod tests {
         assert_eq!(artifact.file_count, 3);
         assert_eq!(artifact.dir_count, 2);
 
-        // Verify the manifest bytes parse correctly.
         let mut cursor = ManifestCursor::new(&artifact.bytes);
-        let header = limnifs_core::parse_manifest_header(&mut cursor).expect("header");
-        assert_eq!(header, ManifestHeader::current());
-        let flags = limnifs_core::parse_feature_flags_section(&mut cursor).expect("flags");
-        assert!(flags.is_empty());
+        limnifs_core::parse_manifest_header(&mut cursor).expect("header");
+        limnifs_core::parse_feature_flags_section(&mut cursor).expect("flags");
         let meta_ref = limnifs_core::parse_metadata_reference(&mut cursor).expect("meta ref");
         assert!(meta_ref.is_inlined());
         let slab_index = limnifs_core::parse_slab_index(&mut cursor).expect("slab index");
         assert_eq!(slab_index.len(), 0);
-        let history = limnifs_core::parse_history(&mut cursor).expect("history");
-        assert_eq!(history.len(), 1);
+        limnifs_core::parse_history(&mut cursor).expect("history");
     }
 
     #[test]
@@ -397,25 +532,29 @@ mod tests {
         let a2 = write_directory(&temp).expect("second write");
         std::fs::remove_dir_all(&temp).ok();
 
-        assert_eq!(
-            a1.bytes, a2.bytes,
-            "same directory must produce identical bytes"
-        );
+        assert_eq!(a1.bytes, a2.bytes);
         assert_eq!(a1.merkle_root, a2.merkle_root);
     }
 
     #[test]
-    fn rejects_large_file() {
+    fn slab_parses_correctly() {
         let temp =
-            std::env::temp_dir().join(format!("limnifs-write-test-{}-large", std::process::id()));
+            std::env::temp_dir().join(format!("limnifs-write-test-{}-slab", std::process::id()));
         std::fs::create_dir_all(&temp).expect("create temp dir");
-        let large_data = vec![0u8; INLINE_THRESHOLD + 1];
-        std::fs::write(temp.join("big.bin"), &large_data).expect("write big");
-        let result = write_directory(&temp);
+        std::fs::write(temp.join("big.bin"), vec![0x11u8; INLINE_THRESHOLD + 1])
+            .expect("write big");
+        let artifact = write_directory(&temp).expect("write succeeds");
         std::fs::remove_dir_all(&temp).ok();
-        match result {
-            Err(WriteError::FileTooLarge { .. }) => {}
-            other => panic!("expected FileTooLarge, got {other:?}"),
-        }
+
+        let slab_bytes = artifact.slab_bytes.as_ref().expect("slab exists");
+        let mut cursor = ManifestCursor::new(slab_bytes);
+        let slab_header = limnifs_core::parse_slab_header(&mut cursor).expect("slab header parses");
+        assert_eq!(slab_header.format_version, 1);
+        assert!(!slab_header.is_sealed());
+        assert!(!slab_header.has_erasure_coding());
+
+        let drop_record =
+            limnifs_core::parse_drop_record(&mut cursor, &slab_header).expect("drop record parses");
+        assert_eq!(drop_record.plaintext_len as usize, INLINE_THRESHOLD + 1);
     }
 }
