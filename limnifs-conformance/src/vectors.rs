@@ -102,6 +102,14 @@ pub fn all_vectors() -> Vec<Vector> {
     ]
 }
 
+/// Subset of vectors that BOTH the Rust AND Python readers can parse.
+/// The differential test iterates over this list; the Rust-only
+/// harness iterates over [`all_vectors`].
+#[must_use]
+pub fn differential_vectors() -> Vec<Vector> {
+    vec![minimal_v0_1(), minimal_v0_1_with_flags()]
+}
+
 /// v0.1 image with EC params section present (Reed-Solomon 4+2).
 #[must_use]
 pub fn ec_params_v0_1() -> Vector {
