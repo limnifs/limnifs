@@ -31,6 +31,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod cursor;
+pub mod delta_linkage;
 pub mod dms_policy;
 pub mod drop_record;
 pub mod ec_params;
