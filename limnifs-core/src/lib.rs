@@ -42,6 +42,7 @@ pub mod directory_node;
 pub mod dms_policy;
 pub mod drop_record;
 pub mod ec_params;
+pub mod ec_scheme;
 pub mod error;
 pub mod feature_flags;
 pub mod fetch;
