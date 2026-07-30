@@ -70,6 +70,80 @@ pub fn parse_locator_entry(cursor: &mut ManifestCursor<'_>) -> Result<LocatorEnt
     parse_locator_entry_with_ceiling(cursor, DEFAULT_LOCATOR_MAX_URI_BYTES)
 }
 
+/// Parse `count` consecutive locator entries. Used by sections that
+/// carry a u32 LE locator count followed by N locator entries
+/// (§5.3 metadata reference, §5.4 slab index, future sections).
+///
+/// Performs the pre-allocation `DoS` check: verifies the cursor's
+/// remaining bytes are at least `count × MIN_LOCATOR_URI_BYTES` BEFORE
+/// allocating the result `Vec`. Without this, a malicious `count`
+/// could trigger a multi-GB allocation.
+///
+/// # Errors
+///
+/// Inherits all errors from [`parse_locator_entry`], and additionally
+/// returns [`CoreError::Corrupt`] when `count` overflows usize when
+/// scaled by the minimum entry width, or [`CoreError::TooShort`] when
+/// the remaining buffer cannot hold the declared count.
+pub fn parse_locator_entries(
+    cursor: &mut ManifestCursor<'_>,
+    count: u32,
+) -> Result<Vec<LocatorEntry>, CoreError> {
+    parse_locator_entries_with_ceiling(cursor, count, DEFAULT_LOCATOR_MAX_URI_BYTES)
+}
+
+/// Same as [`parse_locator_entries`] but with a caller-supplied
+/// per-entry URI byte ceiling.
+///
+/// # Errors
+///
+/// Inherits all errors from [`parse_locator_entries`].
+///
+/// # Panics
+///
+/// Panics if `MIN_LOCATOR_URI_BYTES` somehow does not fit in `usize`.
+/// This is a constant (4) and the panic is unreachable on any
+/// supported platform; the assertion exists only to satisfy the
+/// `u32`→`usize` cast on 32-bit targets.
+pub fn parse_locator_entries_with_ceiling(
+    cursor: &mut ManifestCursor<'_>,
+    count: u32,
+    max_uri_bytes: u32,
+) -> Result<Vec<LocatorEntry>, CoreError> {
+    let count_us = usize::try_from(count).map_err(|_| CoreError::Corrupt {
+        reason: format!("locator entry count {count} exceeds usize"),
+    })?;
+    // Each locator entry needs at least: 4-byte length prefix + MIN_LOCATOR_URI_BYTES.
+    let min_uri = usize::try_from(MIN_LOCATOR_URI_BYTES).expect("MIN_LOCATOR_URI_BYTES fits usize");
+    let min_entry_width = LOCATOR_LENGTH_PREFIX_LEN + min_uri;
+    let min_total = count_us
+        .checked_mul(min_entry_width)
+        .ok_or_else(|| CoreError::Corrupt {
+            reason: format!("locator entry count {count_us} overflows usize"),
+        })?;
+    if cursor.remaining_len() < min_total {
+        return Err(CoreError::TooShort {
+            have: cursor.remaining_len(),
+            need: min_total,
+        });
+    }
+    let mut entries = Vec::with_capacity(count_us);
+    for index in 0..count_us {
+        let entry = parse_locator_entry_with_ceiling(cursor, max_uri_bytes).map_err(|err| {
+            // Annotate the error with the entry index so callers get a
+            // precise pointer when debugging.
+            match err {
+                CoreError::Corrupt { reason } => CoreError::Corrupt {
+                    reason: format!("locator entry {index}: {reason}"),
+                },
+                other => other,
+            }
+        })?;
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
 /// Same as [`parse_locator_entry`] but lets the caller supply a
 /// `max_uri_bytes` overriding the 4 KiB default.
 ///
@@ -327,5 +401,57 @@ mod tests {
         assert_eq!(first.scheme(), Some("file"));
         assert_eq!(second.scheme(), Some("https"));
         assert_eq!(cursor.position(), bytes.len());
+    }
+
+    #[test]
+    fn parse_locator_entries_returns_all_in_order() {
+        let mut bytes = Vec::new();
+        bytes.extend(make_locator_bytes("file:///a.bin"));
+        bytes.extend(make_locator_bytes("https://cdn/b.bin"));
+        bytes.extend(make_locator_bytes("s3://bucket/c.bin"));
+        let mut cursor = ManifestCursor::new(&bytes);
+        let entries = parse_locator_entries(&mut cursor, 3).expect("three parse");
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].scheme(), Some("file"));
+        assert_eq!(entries[1].scheme(), Some("https"));
+        assert_eq!(entries[2].scheme(), Some("s3"));
+        assert_eq!(cursor.position(), bytes.len());
+    }
+
+    #[test]
+    fn parse_locator_entries_handles_zero() {
+        let bytes = Vec::new();
+        let mut cursor = ManifestCursor::new(&bytes);
+        let entries = parse_locator_entries(&mut cursor, 0).expect("zero parses");
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn parse_locator_entries_rejects_count_that_overruns_buffer() {
+        // Declare 10 entries but provide only 1.
+        let bytes = make_locator_bytes("file:///a.bin");
+        let mut cursor = ManifestCursor::new(&bytes);
+        match parse_locator_entries(&mut cursor, 10) {
+            Err(CoreError::TooShort { have, need }) => {
+                assert!(need > have, "need {need} should exceed have {have}");
+            }
+            other => panic!("expected TooShort, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_locator_entries_annotates_inner_error_with_index() {
+        // Entry 1 is fine; entry 2 has no colon.
+        let mut bytes = Vec::new();
+        bytes.extend(make_locator_bytes("file:///a.bin"));
+        bytes.extend(make_locator_bytes("abcde")); // missing colon
+        let mut cursor = ManifestCursor::new(&bytes);
+        match parse_locator_entries(&mut cursor, 2) {
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(reason.contains("entry 1"), "got: {reason}");
+                assert!(reason.contains("separator"));
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
     }
 }
