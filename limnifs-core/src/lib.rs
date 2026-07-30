@@ -32,6 +32,7 @@
 
 pub mod cursor;
 pub mod drop_record;
+pub mod ec_params;
 pub mod error;
 pub mod feature_flags;
 pub mod header;
@@ -45,6 +46,10 @@ pub mod slab_index;
 pub use cursor::ManifestCursor;
 pub use drop_record::{
     parse_drop_record, parse_drop_record_with_ceiling, DropRecord, DROP_RECORD_LEN,
+};
+pub use ec_params::{
+    parse_ec_params, EcOverride, EcParams, DEFAULT_EC_POLYNOMIAL, EC_PARAMS_SECTION_VERSION,
+    MAX_SHARDS,
 };
 pub use error::CoreError;
 pub use feature_flags::{
