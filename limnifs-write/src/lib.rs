@@ -21,6 +21,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod chunker;
+pub mod classifier;
 
 use std::collections::HashMap;
 use std::path::Path;
