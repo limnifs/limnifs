@@ -19,10 +19,10 @@
 use std::collections::HashSet;
 
 use limnifs_core::{
-    compute_merkle_root, hash_empty_section, hash_section, parse_drop_record,
-    parse_feature_flags_section, parse_manifest_header, parse_metadata_blob,
-    parse_metadata_reference, parse_slab_header, parse_slab_index, ContentHandle, CoreError,
-    ManifestCursor, SectionHashes, HISTORY_SECTION_VERSION, SLAB_INDEX_SECTION_VERSION,
+    compute_merkle_root, hash_empty_section, hash_section, parse_feature_flags_section,
+    parse_manifest_header, parse_metadata_blob, parse_metadata_reference, parse_slab_index,
+    ContentHandle, CoreError, ManifestCursor, SectionHashes, HISTORY_SECTION_VERSION,
+    SLAB_INDEX_SECTION_VERSION,
 };
 use limnifs_format::{ManifestRoot, SlabId};
 
@@ -113,45 +113,28 @@ pub fn compact_image(
         referenced
     };
 
-    // 2. Parse and compact the slab.
-    let mut slab_cursor = ManifestCursor::new(slab_bytes);
-    let slab_header = parse_slab_header(&mut slab_cursor)?;
-    let mut original_count = 0usize;
+    // 2. Parse and compact the slab using parse_slab (correctly
+    //    handles the record-then-window layout).
+    let view = limnifs_core::parse_slab(slab_bytes)?;
+    let original_count = view.drop_records().len();
+    let win_start = view.solid_window_offset();
     let mut kept_drops: Vec<ExtractedDrop> = Vec::new();
 
-    loop {
-        let pos = slab_cursor.position();
-        let remaining = u64::try_from(
-            usize::try_from(slab_header.total_length)
-                .unwrap_or(0)
-                .saturating_sub(pos),
-        )
-        .unwrap_or(0);
-        if remaining == 0 {
-            break;
-        }
-        let record = parse_drop_record(&mut slab_cursor, &slab_header)?;
-        original_count += 1;
-
+    for record in view.drop_records() {
         if prefix_end.contains(record.drop_id.as_bytes()) {
-            // Read the compressed bytes from the solid window.
-            let win_start = slab_cursor.position();
-            let win_end = win_start + record.len_in_window as usize;
-            if win_end > slab_bytes.len() {
-                break;
+            let offset = usize::try_from(record.offset_in_window).unwrap_or(0);
+            let len = usize::try_from(record.len_in_window).unwrap_or(0);
+            let start = win_start + offset;
+            let end = start + len;
+            if end > slab_bytes.len() {
+                continue;
             }
             kept_drops.push(ExtractedDrop {
                 id: *record.drop_id.as_bytes(),
-                compressed: slab_bytes[win_start..win_end].to_vec(),
+                compressed: slab_bytes[start..end].to_vec(),
                 codec: record.representation.codec,
                 plaintext_len: record.plaintext_len,
             });
-        } else {
-            // Skip the drop's window bytes.
-            slab_cursor = ManifestCursor::at_start(
-                slab_bytes,
-                slab_cursor.position() + record.len_in_window as usize,
-            )?;
         }
     }
 
@@ -310,25 +293,93 @@ mod tests {
 
     #[test]
     fn compact_preserves_referenced_drops() {
-        // Build a small image, compact it, verify the compacted
-        // image still has the same number of drops.
         let temp =
             std::env::temp_dir().join(format!("limnifs-compaction-test-{}", std::process::id()));
         std::fs::create_dir_all(&temp).expect("create temp");
-        std::fs::write(temp.join("a.txt"), b"hello").expect("write a");
-        std::fs::write(temp.join("b.txt"), b"world").expect("write b");
+        // Use large enough data to trigger slab-backed storage.
+        let data = vec![0xABu8; crate::INLINE_THRESHOLD + 100];
+        std::fs::write(temp.join("big.bin"), &data).expect("write big");
 
         let artifact = crate::write_directory(&temp).expect("write");
         std::fs::remove_dir_all(&temp).ok();
 
         let slab_bytes = artifact.slab_bytes.clone().unwrap_or_default();
         if slab_bytes.is_empty() {
-            // All files are inline — nothing to compact.
             return;
         }
 
         let result = compact_image(&artifact.bytes, &slab_bytes).expect("compact");
         assert_eq!(result.original_drop_count, result.compacted_drop_count);
         assert_eq!(result.reclaimed_drops, 0);
+
+        // Verify the compacted slab parses correctly.
+        let new_slab = result.slab_bytes.as_ref().expect("slab exists");
+        let view = limnifs_core::parse_slab(new_slab).expect("compacted slab parses");
+        assert_eq!(view.drop_records().len(), result.compacted_drop_count);
+    }
+
+    #[test]
+    fn compact_preserves_drop_plaintext() {
+        let temp =
+            std::env::temp_dir().join(format!("limnifs-compaction-pt-{}", std::process::id()));
+        std::fs::create_dir_all(&temp).expect("create temp");
+        let data = vec![0xCDu8; crate::INLINE_THRESHOLD + 200];
+        std::fs::write(temp.join("data.bin"), &data).expect("write");
+
+        let artifact = crate::write_directory(&temp).expect("write");
+        std::fs::remove_dir_all(&temp).ok();
+
+        let slab_bytes = artifact.slab_bytes.clone().unwrap_or_default();
+        if slab_bytes.is_empty() {
+            return;
+        }
+
+        let result = compact_image(&artifact.bytes, &slab_bytes).expect("compact");
+        let new_slab = result.slab_bytes.as_ref().expect("slab");
+
+        // Parse old slab and get plaintext.
+        let old_view = limnifs_core::parse_slab(&slab_bytes).expect("old slab parses");
+        let new_view = limnifs_core::parse_slab(new_slab).expect("new slab parses");
+
+        for old_record in old_view.drop_records() {
+            let old_pt = old_view
+                .plaintext_for(old_record.drop_id.as_bytes())
+                .expect("old drop exists")
+                .expect("decompress ok");
+            let new_pt = new_view
+                .plaintext_for(old_record.drop_id.as_bytes())
+                .expect("new drop exists")
+                .expect("decompress ok");
+            assert_eq!(old_pt, new_pt, "plaintext must match after compaction");
+        }
+    }
+
+    #[test]
+    fn compact_manifest_parses_correctly() {
+        let temp =
+            std::env::temp_dir().join(format!("limnifs-compaction-mp-{}", std::process::id()));
+        std::fs::create_dir_all(&temp).expect("create temp");
+        let data = vec![0xEFu8; crate::INLINE_THRESHOLD + 50];
+        std::fs::write(temp.join("file.bin"), &data).expect("write");
+
+        let artifact = crate::write_directory(&temp).expect("write");
+        std::fs::remove_dir_all(&temp).ok();
+
+        let slab_bytes = artifact.slab_bytes.clone().unwrap_or_default();
+        if slab_bytes.is_empty() {
+            return;
+        }
+
+        let result = compact_image(&artifact.bytes, &slab_bytes).expect("compact");
+
+        // Verify the compacted manifest parses end-to-end.
+        let mut cursor = limnifs_core::ManifestCursor::new(&result.manifest_bytes);
+        limnifs_core::parse_manifest_header(&mut cursor).expect("header parses");
+        limnifs_core::parse_feature_flags_section(&mut cursor).expect("flags parse");
+        let meta_ref =
+            limnifs_core::parse_metadata_reference(&mut cursor).expect("metadata ref parses");
+        assert!(meta_ref.is_inlined());
+        limnifs_core::parse_slab_index(&mut cursor).expect("slab index parses");
+        limnifs_core::parse_history(&mut cursor).expect("history parses");
     }
 }
