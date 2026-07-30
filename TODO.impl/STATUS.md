@@ -3,6 +3,43 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-31 — Consolidated merge + differential Layer 2 + CLI completion (session 21)
+
+### Done
+
+- Consolidated all stacked PRs into main via rebase-merge (#54). Closed
+  9 intermediate PRs (#45–#53). All work is now on main.
+- Added `limni stat`, `limni extract`, `limni diff` commands (#55).
+- Added metadata blob summary to `verify --json` (#56). Both Rust and
+  Python CLIs emit matching `metadata_inode_count`,
+  `metadata_dir_node_count`, `metadata_root_inode`, and sorted
+  inode/dir summaries. Differential Layer 2 test passes (#57).
+- CLI now has 9 commands: verify, limn, ls, cat, stat, extract, diff,
+  inspect, mount (fuse feature).
+- All three repos (limnifs, limnifs-py, spec) have zero open PRs.
+
+### Test counts
+
+- Rust: 313 tests. Python: 55 tests. All green.
+- Differential tests: 11 conformance tests including
+  `differential_metadata_agreement_or_skip` — both readers agree on
+  every vector's metadata blob structure.
+
+### Phase 1 task status
+
+| Task | Status |
+|---|---|
+| 04-chunking-fastcdc | ✅ |
+| 04-classifier-seine | ✅ |
+| 04-deepening-compactor | ✅ (LZ4) |
+| 04-ingest-epilimnion | ✅ (inline deepening) |
+| 04-slab-packing-gc | partial (GC pending) |
+| 04-deltas-overlays | ✅ (delta builder) |
+| 10-cli | ✅ (9 commands) |
+| 11-mount | ✅ (VFS + FUSE frontend) |
+| 05-crypto | started (AEAD registry) |
+| 08-locators | started (locator trait) |
+
 ## 2026-07-30 — LZ4 deepening + VFS + FUSE mount + delta builder (session 20)
 
 ### Done
