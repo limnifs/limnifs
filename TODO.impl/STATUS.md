@@ -3,6 +3,39 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — Delta builder + Python slab reader (session 19)
+
+### Done
+
+- **Delta builder** —
+  [limnifs/limnifs#49](https://github.com/limnifs/limnifs/pull/49).
+  `limnifs-write/src/delta_builder.rs` computes tree operations
+  (Add/Remove/Replace) between a parent and child image. Walks both
+  metadata blobs, comparing entries by content identity. Directories
+  are always recursed into (a directory change is expressed as
+  operations on children). `DeltaArtifact::to_section_bytes()` emits
+  a spec-conformant §5.8 delta linkage section that round-trips
+  through `parse_delta_linkage`. 6 tests.
+- **Python slab reader** —
+  [limnifs/limnifs-py#7](https://github.com/limnifs/limnifs-pull/7).
+  Ports `slab_header.py`, `drop_record.py`, `slab_reader.py` from
+  the Rust core. `SlabView.plaintext_for(drop_id)` mirrors the Rust
+  API. 10 tests.
+
+### Workspace state
+
+- Rust tests: 276 → 282 (+6 delta builder).
+- Python tests: 17 → 27 (+10 slab reader).
+- All `fmt`/`clippy`/`test` green.
+
+### Next
+
+- Wire delta builder into `limni diff` CLI command.
+- Correct `base_root` in delta artifact (use actual ManifestRoot,
+  not a manifest-bytes hash proxy).
+- FUSE mount (`limni mount`).
+- Deepening stage (per-class lz4 compression).
+
 ## 2026-07-30 — Seine classifier + limni stat/extract + Layer 2 diff (session 18)
 
 ### Done
