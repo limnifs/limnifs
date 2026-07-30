@@ -162,8 +162,7 @@ fn write_temp_fixture(bytes: &[u8], label: &str) -> Result<PathBuf, String> {
     let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0u128, |d| d.as_nanos());
     let mut path = std::env::temp_dir();
     path.push(format!(
         "limnifs-diff-{label}-{pid}-{id}-{nanos}.lim",
