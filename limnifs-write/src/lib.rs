@@ -195,7 +195,11 @@ impl WriteContext {
                 let (offset, len) = if let Some(&existing) = self.drop_index.get(&drop_id) {
                     existing
                 } else {
-                    let offset = self.drops.iter().map(PendingDrop::len_in_window).sum::<u32>();
+                    let offset = self
+                        .drops
+                        .iter()
+                        .map(PendingDrop::len_in_window)
+                        .sum::<u32>();
                     let len = u32::try_from(file_len).expect("file fits u32");
                     self.drops.push(PendingDrop {
                         id: drop_id,
