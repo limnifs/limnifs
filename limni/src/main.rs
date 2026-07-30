@@ -16,6 +16,9 @@
 
 pub mod vfs;
 
+#[cfg(feature = "fuse")]
+pub mod fuse_vfs;
+
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
