@@ -103,7 +103,7 @@ fn parse_and_recompute_root(
     let header_end = cursor.position();
 
     let flags_start = cursor.position();
-    let _flags = parse_feature_flags_section(&mut cursor).map_err(|e| e.to_string())?;
+    let flags = parse_feature_flags_section(&mut cursor).map_err(|e| e.to_string())?;
     let flags_end = cursor.position();
 
     let meta_ref_start = cursor.position();
@@ -114,16 +114,38 @@ fn parse_and_recompute_root(
     let _slab_index = parse_slab_index(&mut cursor).map_err(|e| e.to_string())?;
     let slab_index_end = cursor.position();
 
+    // Optional sections: parse based on feature flags. The spec section
+    // order is fixed: crypto → EC → DMS → delta → history. Crypto and
+    // delta are not yet supported, so only EC (0x0001) and DMS (0x0002)
+    // are attempted here.
+    let ec_params_start = cursor.position();
+    let has_ec = flags.is_required(0x0001) || flags.get(0x0001).is_some();
+    if has_ec {
+        let _ = limnifs_core::parse_ec_params(&mut cursor).map_err(|e| e.to_string())?;
+    }
+    let ec_params_end = cursor.position();
+
+    let dms_policy_start = cursor.position();
+    let has_dms = flags.is_required(0x0002) || flags.get(0x0002).is_some();
+    if has_dms {
+        let _ = limnifs_core::parse_dms_policy(&mut cursor).map_err(|e| e.to_string())?;
+    }
+    let dms_policy_end = cursor.position();
+
     let history_start = cursor.position();
     let _history = parse_history(&mut cursor).map_err(|e| e.to_string())?;
     let history_end = cursor.position();
 
-    if cursor.remaining_len() != 0 {
-        return Err(format!(
-            "{} extra bytes after history (optional sections not yet supported by harness)",
-            cursor.remaining_len()
-        ));
-    }
+    let ec_hash = if has_ec {
+        hash_section(&artifact.bytes[ec_params_start..ec_params_end])
+    } else {
+        hash_empty_section()
+    };
+    let dms_hash = if has_dms {
+        hash_section(&artifact.bytes[dms_policy_start..dms_policy_end])
+    } else {
+        hash_empty_section()
+    };
 
     let hashes = SectionHashes {
         metadata: metadata_reference.metadata_hash,
@@ -132,8 +154,8 @@ fn parse_and_recompute_root(
         metadata_reference: hash_section(&artifact.bytes[meta_ref_start..meta_ref_end]),
         slab_index: hash_section(&artifact.bytes[slab_index_start..slab_index_end]),
         crypto_params: hash_empty_section(),
-        ec_params: hash_empty_section(),
-        dms_policy: hash_empty_section(),
+        ec_params: ec_hash,
+        dms_policy: dms_hash,
         delta_linkage: hash_empty_section(),
         history: hash_section(&artifact.bytes[history_start..history_end]),
     };
@@ -146,6 +168,13 @@ fn parse_summary(bytes: &[u8]) -> Result<(Vec<FeatureFlag>, bool, usize, usize),
     let flags = parse_feature_flags_section(&mut cursor).map_err(|e| e.to_string())?;
     let metadata_reference = parse_metadata_reference(&mut cursor).map_err(|e| e.to_string())?;
     let slab_index = parse_slab_index(&mut cursor).map_err(|e| e.to_string())?;
+    // Skip optional sections when feature flags declare them.
+    if flags.get(0x0001).is_some() {
+        let _ = limnifs_core::parse_ec_params(&mut cursor).map_err(|e| e.to_string())?;
+    }
+    if flags.get(0x0002).is_some() {
+        let _ = limnifs_core::parse_dms_policy(&mut cursor).map_err(|e| e.to_string())?;
+    }
     let history = parse_history(&mut cursor).map_err(|e| e.to_string())?;
     Ok((
         flags.entries,
@@ -190,11 +219,11 @@ mod tests {
         assert!(report
             .parsed_flags
             .iter()
-            .any(|f| f.flag_id == 0x0001 && f.required));
+            .any(|f| f.flag_id == 0x0012 && f.required));
         assert!(report
             .parsed_flags
             .iter()
-            .any(|f| f.flag_id == 0x0012 && !f.required));
+            .any(|f| f.flag_id == 0x0020 && !f.required));
     }
 
     #[test]

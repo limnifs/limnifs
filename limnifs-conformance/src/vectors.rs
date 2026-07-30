@@ -57,6 +57,8 @@ pub fn minimal_v0_1() -> Vector {
                 slab_id: SlabId::new(0, [0u8; 32]),
                 locators: vec!["file:///var/lib/limnifs/slab-0.bin".into()],
             }],
+            ec_params: None,
+            dms_policy: None,
             history: vec![HistoryEntrySpec {
                 op: HistoryOpSpec::Build,
                 timestamp_ns: 0,
@@ -67,22 +69,22 @@ pub fn minimal_v0_1() -> Vector {
     }
 }
 
-/// Like [`minimal_v0_1`] but declares EC (required) and `https:`
-/// (optional) in the feature flags. Slab index still has one entry;
-/// the test asserts that flag presence doesn't change the encoding
-/// rules for the required sections.
+/// Like [`minimal_v0_1`] but declares `https:` (required) and `zstd`
+/// (optional) in the feature flags. These are locator/codec flags
+/// that do NOT signal optional section presence, so no EC/DMS/crypto
+/// sections are emitted. Slab index still has one entry.
 #[must_use]
 pub fn minimal_v0_1_with_flags() -> Vector {
     let mut vector = minimal_v0_1();
     vector.name = "minimal-v0-1-with-flags";
-    vector.description = "Minimal image declaring EC (required) and https (optional)";
+    vector.description = "Minimal image declaring https (required) and zstd (optional)";
     vector.spec.feature_flags = vec![
         FeatureFlagSpec {
-            flag_id: 0x0001,
+            flag_id: 0x0012,
             required: true,
         },
         FeatureFlagSpec {
-            flag_id: 0x0012,
+            flag_id: 0x0020,
             required: false,
         },
     ];
@@ -92,7 +94,65 @@ pub fn minimal_v0_1_with_flags() -> Vector {
 /// Catalog of every vector the harness runs. Add new vectors here.
 #[must_use]
 pub fn all_vectors() -> Vec<Vector> {
-    vec![minimal_v0_1(), minimal_v0_1_with_flags()]
+    vec![
+        minimal_v0_1(),
+        minimal_v0_1_with_flags(),
+        ec_params_v0_1(),
+        dms_policy_v0_1(),
+    ]
+}
+
+/// v0.1 image with EC params section present (Reed-Solomon 4+2).
+#[must_use]
+pub fn ec_params_v0_1() -> Vector {
+    use crate::builder::EcParamsSpec;
+    let mut spec = minimal_v0_1().spec;
+    // Declare EC as a required feature flag.
+    spec.feature_flags = vec![FeatureFlagSpec {
+        flag_id: 0x0001,
+        required: true,
+    }];
+    spec.ec_params = Some(EcParamsSpec::new(4, 2));
+    Vector {
+        name: "ec-params-v0-1",
+        description: "v0.1 image with Reed-Solomon EC (4, 2)",
+        spec,
+    }
+}
+
+/// v0.1 image with DMS policy section present (2-of-3 Shamir).
+#[must_use]
+pub fn dms_policy_v0_1() -> Vector {
+    use crate::builder::{DmsPolicySpec, ShareRecordSpec};
+    let mut spec = minimal_v0_1().spec;
+    spec.feature_flags = vec![FeatureFlagSpec {
+        flag_id: 0x0002,
+        required: true,
+    }];
+    spec.dms_policy = Some(DmsPolicySpec {
+        k: 2,
+        n: 3,
+        shares: vec![
+            ShareRecordSpec {
+                custodian_id: "alice".into(),
+                share_data: vec![0xAA; 32],
+            },
+            ShareRecordSpec {
+                custodian_id: "bob".into(),
+                share_data: vec![0xBB; 32],
+            },
+            ShareRecordSpec {
+                custodian_id: "carol".into(),
+                share_data: vec![0xCC; 32],
+            },
+        ],
+        reconstruction_hint: Some("Contact legal for assembly.".into()),
+    });
+    Vector {
+        name: "dms-policy-v0-1",
+        description: "v0.1 image with Shamir 2-of-3 DMS policy",
+        spec,
+    }
 }
 
 #[cfg(test)]
