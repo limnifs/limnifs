@@ -3,6 +3,46 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — limni cat: slab reader + file extraction (session 16)
+
+### Done
+
+- **Slab reader (Rust)** — `limnifs-core/src/slab_reader.rs`. New
+  `SlabView` + `parse_slab` walk a slab's drop records to derive the
+  solid-window boundary (the v0.1 writer does not write an explicit
+  `drop_count`; the reader computes it from `total_length -
+  Σ plaintext_len`). `plaintext_for(&drop_id)` returns the slice
+  for a drop, rejecting non-store codecs / non-plaintext AEADs with
+  `UnsupportedFeature`. 6 unit tests covering empty slabs, single
+  drops, multi-drop slabs, missing drops, buffer-length mismatches,
+  and a writer-style round-trip.
+- **`limni cat <image> <path>` subcommand** — opens a manifest,
+  extracts the inlined metadata blob, walks the path to the target
+  inode, and writes its bytes to stdout. Inline files write
+  directly; slab-backed files load the slab via the manifest's
+  `slab_index` locator and stream the drop's plaintext. End-to-end
+  round-trip verified: `limni limn /tmp/ls-large /tmp/x.lim` then
+  `limni cat /tmp/x.lim /big.bin` produces bytes whose MD5 matches
+  the original file. 3 new CLI integration tests.
+- **Refactored `ls` / `cat`** to share a `load_image` helper that
+  parses the manifest prefix and returns `(MetadataBlob,
+  root_inode_number, SlabIndex)`. Removes duplication; the helper
+  is the single point that knows the v0.1 manifest layout.
+
+### Workspace state
+
+- Test count: 234 → 246 (+12). `cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets — -D warnings`,
+  `cargo test --workspace` all green on this branch.
+
+### Next
+
+- Port `directory_node` + `metadata` parsers to `limnifs-py` so the
+  differential conformance harness covers Layer 2.
+- `limni stat` for inode inspection (mode, sizes, xattrs, mtime).
+- Layer 3 spec for `bit-level/35-metadata-blob.md` once the wire
+  layout is reviewed.
+
 ## 2026-07-30 — Metadata blob + directory node + limni ls (session 15)
 
 ### Done

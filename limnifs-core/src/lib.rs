@@ -27,6 +27,7 @@
 //! | [`history`] | [`HistoryEntry`], [`History`] + [`parse_history`] |
 //! | [`merkle`] | [`SectionHashes`], [`compute_merkle_root`] |
 //! | [`slab`] | [`SlabHeader`] + [`parse_slab_header`] |
+//! | [`slab_reader`] | [`SlabView`] + [`parse_slab`] — locate and read drop plaintexts |
 //! | [`drop_record`] | [`DropRecord`] + [`parse_drop_record`] |
 //! | [`locator`] | [`LocatorEntry`] + [`parse_locator_entry`] |
 
@@ -50,6 +51,7 @@ pub mod metadata;
 pub mod metadata_reference;
 pub mod slab;
 pub mod slab_index;
+pub mod slab_reader;
 
 pub use cursor::ManifestCursor;
 pub use directory_node::{parse_directory_node, DirEntry, DirectoryNode, DIRECTORY_NODE_VERSION};
@@ -104,5 +106,6 @@ pub use slab_index::{
     parse_slab_index, parse_slab_index_with_ceiling, SlabIndex, SlabIndexEntry,
     SLAB_INDEX_SECTION_VERSION,
 };
+pub use slab_reader::{parse_slab, SlabView};
 
 pub use limnifs_format::{ManifestRoot, MANIFEST_HEADER_LEN};
