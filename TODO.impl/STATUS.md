@@ -3,6 +3,75 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — Metadata reference + slab index parsers (session 10)
+
+### Done (with evidence)
+
+- **Layer 3 spec for §5.3 metadata reference + §5.4 slab index** —
+  [limnifs/spec#19](https://github.com/limnifs/spec/pull/19).
+  Two new bit-level files (`38-metadata-reference.md`,
+  `39-slab-index.md`) sharing the count-prefixed-locator-list pattern.
+  Metadata reference pins the "unreachable metadata" invariant (at
+  least one of locator_count or inline_metadata_len must be non-zero).
+  Slab index pins duplicate-slab_id detection and the cross-section
+  "every slab referenced by some drop" check (deferred to the
+  slab-walker layer).
+- **§5.3 + §5.4 parsers + locator-entries helper** —
+  [limnifs/limnifs#19](https://github.com/limnifs/limnifs/pull/19).
+  Run https://github.com/limnifs/limnifs/actions/runs/30505993302.
+  Three new pieces:
+  - `locator::parse_locator_entries(cursor, count)` — DRY helper
+    for count-prefixed locator lists. Performs the pre-allocation
+    DoS check and annotates inner errors with the entry index.
+  - `metadata_reference::parse_metadata_reference` — handles
+    external (locators), inline (embedded blob), and mixed modes.
+    Default ceilings: 4 KiB per URI, 1 MiB inline blob.
+  - `slab_index::parse_slab_index` — per-slab SlabId + locator
+    lists with duplicate detection. DoS check on entry_count ×
+    ENTRY_FIXED_LEN.
+  - 21 new unit tests. Workspace test count: 95 → 116
+    (15 format, 91 core, 10 cli).
+
+### Architecture: helper pays off immediately
+
+The `parse_locator_entries` helper was extracted because both §5.3
+and §5.4 needed the same count-then-loop pattern with the same DoS
+check. The extraction paid off in the same PR that introduced it:
+both parsers used the helper on first attempt, no duplicated logic.
+Future sections that carry locator lists (e.g., §5.5 recipients
+when specified) will reuse it too.
+
+### Manifest walk milestone
+
+With these parsers, the manifest can be walked end-to-end through
+`header → feature flags → metadata reference → slab index`. This
+is the minimum chain needed to identify what slabs and drops an
+image references — sufficient to start the conformance bootstrap
+with a tiny valid image (header + empty flags + minimal metadata
+reference + single-slab index).
+
+### In progress / Next
+
+- **Layer 3 spec for §5.9 history** — list of (op, timestamp,
+  inputs, params) tuples. Simplest remaining section.
+- **§5.9 history parser**.
+- **§5.10 Merkle root construction** — needs BLAKE3 dependency.
+  Once landed, `limni verify` can prove image identity, not just
+  parse the header magic.
+- **§5.5 crypto params, §5.6 EC params, §5.7 DMS policy, §5.8
+  delta linkage** — require sub-structure specs (HPKEEnvelope,
+  SignatureBundle, TreeOp).
+- **02-conformance bootstrap** — declarative YAML vector format
+  plus a tiny generator. The minimum-viable image (header +
+  empty flags + minimal metadata reference + single-slab index)
+  is now parseable; the bootstrap can land.
+
+### Blockers
+
+- None. User delegation in effect for green PRs (rebase-merge).
+
+---
+
 ## 2026-07-30 — ManifestCursor refactor + drop-store parsers (session 9)
 
 ### Done (with evidence)
