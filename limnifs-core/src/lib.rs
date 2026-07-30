@@ -22,6 +22,7 @@
 //! | [`metadata_reference`] | [`MetadataReference`] + [`parse_metadata_reference`] |
 //! | [`slab_index`] | [`SlabIndex`], [`SlabIndexEntry`] + [`parse_slab_index`] |
 //! | [`history`] | [`HistoryEntry`], [`History`] + [`parse_history`] |
+//! | [`merkle`] | [`SectionHashes`], [`compute_merkle_root`] |
 //! | [`slab`] | [`SlabHeader`] + [`parse_slab_header`] |
 //! | [`drop_record`] | [`DropRecord`] + [`parse_drop_record`] |
 //! | [`locator`] | [`LocatorEntry`] + [`parse_locator_entry`] |
@@ -36,6 +37,7 @@ pub mod feature_flags;
 pub mod header;
 pub mod history;
 pub mod locator;
+pub mod merkle;
 pub mod metadata_reference;
 pub mod slab;
 pub mod slab_index;
@@ -57,6 +59,10 @@ pub use locator::{
     parse_locator_entries, parse_locator_entries_with_ceiling, parse_locator_entry,
     parse_locator_entry_with_ceiling, LocatorEntry, DEFAULT_LOCATOR_MAX_URI_BYTES,
     LOCATOR_LENGTH_PREFIX_LEN, MIN_LOCATOR_URI_BYTES,
+};
+pub use merkle::{
+    compute_merkle_root, hash_empty_section, hash_section, section_hashes_minimal, SectionHashes,
+    MERKLE_DOMAIN_SEPARATOR,
 };
 pub use metadata_reference::{
     parse_metadata_reference, parse_metadata_reference_with_ceilings, MetadataReference,

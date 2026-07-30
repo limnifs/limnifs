@@ -9,6 +9,7 @@ description = "LimniFS core reader — manifest parse, drop store, overlay resol
 
 [dependencies]
 limnifs-format = { path = "../limnifs-format", version = "0.1.0" }
+blake3.workspace = true
 
 [lints]
 workspace = true
