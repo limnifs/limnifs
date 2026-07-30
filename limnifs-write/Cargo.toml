@@ -10,6 +10,7 @@ description = "LimniFS writer pipeline — directory tree to .lim image"
 [dependencies]
 limnifs-format = { path = "../limnifs-format", version = "0.1.0" }
 limnifs-core = { path = "../limnifs-core", version = "0.1.0" }
+lz4_flex.workspace = true
 
 [lints]
 workspace = true

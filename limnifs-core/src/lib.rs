@@ -34,6 +34,7 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+pub mod codec;
 pub mod cursor;
 pub mod delta_linkage;
 pub mod directory_node;

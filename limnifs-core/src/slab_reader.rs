@@ -49,7 +49,7 @@ pub struct SlabView<'a> {
     solid_window_start: usize,
 }
 
-impl<'a> SlabView<'a> {
+impl SlabView<'_> {
     /// The slab header.
     #[must_use]
     pub const fn header(&self) -> SlabHeader {
@@ -80,26 +80,23 @@ impl<'a> SlabView<'a> {
     /// Return the plaintext bytes for `drop_id`, or `None` if no drop
     /// in this slab carries that id.
     ///
-    /// Only the **store** codec (codec id `0x00`) and **plaintext**
-    /// AEAD (aead id `0x00`) are supported in v0.1; other
-    /// representations return [`CoreError::UnsupportedFeature`].
+    /// Supports both store (0x00) and LZ4 (0x01) codecs. LZ4 drops
+    /// are decompressed on read. Non-plaintext AEADs and non-zero
+    /// `solid_window_index` are still rejected (v0.1 limitations).
+    ///
+    /// Returns owned bytes (not a borrowed slice) because LZ4
+    /// decompression produces new data that does not live in the slab
+    /// buffer.
     ///
     /// # Errors
     ///
-    /// - [`CoreError::UnsupportedFeature`] if the drop uses a non-store
+    /// - [`CoreError::UnsupportedFeature`] if the drop uses an unknown
     ///   codec, a non-plaintext AEAD, or a non-zero `solid_window_index`.
-    /// - [`CoreError::Corrupt`] if the slice would extend past the slab.
+    /// - [`CoreError::Corrupt`] if the slice would extend past the slab
+    ///   or decompression fails.
     #[must_use]
-    pub fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<&'a [u8], CoreError>> {
+    pub fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>> {
         let record = self.find_record(drop_id)?;
-        if record.representation.codec != 0x00 {
-            return Some(Err(CoreError::UnsupportedFeature {
-                feature: format!(
-                    "drop codec 0x{:02X} (only store/0x00 supported in v0.1)",
-                    record.representation.codec
-                ),
-            }));
-        }
         if record.representation.aead != 0x00 {
             return Some(Err(CoreError::UnsupportedFeature {
                 feature: format!(
@@ -123,12 +120,17 @@ impl<'a> SlabView<'a> {
         if end > self.bytes.len() {
             return Some(Err(CoreError::Corrupt {
                 reason: format!(
-                    "drop plaintext range [{start}..{end}] extends past slab length {}",
+                    "drop range [{start}..{end}] extends past slab length {}",
                     self.bytes.len()
                 ),
             }));
         }
-        Some(Ok(&self.bytes[start..end]))
+        let raw = &self.bytes[start..end];
+        Some(crate::codec::decompress(
+            record.representation.codec,
+            raw,
+            record.plaintext_len,
+        ))
     }
 }
 
@@ -161,7 +163,7 @@ pub fn parse_slab(bytes: &[u8]) -> Result<SlabView<'_>, CoreError> {
     }
 
     let mut drop_records: Vec<DropRecord> = Vec::new();
-    let mut plaintext_len_sum: u64 = 0;
+    let mut window_len_sum: u64 = 0;
     loop {
         let cursor_pos = u64::try_from(cursor.position()).map_err(|_| CoreError::Corrupt {
             reason: format!("slab cursor position {} exceeds u64", cursor.position()),
@@ -176,18 +178,18 @@ pub fn parse_slab(bytes: &[u8]) -> Result<SlabView<'_>, CoreError> {
                         header.total_length
                     ),
                 })?;
-        if remaining_after_cursor == plaintext_len_sum {
+        if remaining_after_cursor == window_len_sum {
             break;
         }
-        if remaining_after_cursor < plaintext_len_sum {
+        if remaining_after_cursor < window_len_sum {
             return Err(CoreError::Corrupt {
                 reason: format!(
-                    "slab drop records overran solid window: cursor_pos={cursor_pos}, plaintext_sum={plaintext_len_sum}, total_length={}",
+                    "slab drop records overran solid window: cursor_pos={cursor_pos}, window_sum={window_len_sum}, total_length={}",
                     header.total_length
                 ),
             });
         }
-        let trailing = remaining_after_cursor - plaintext_len_sum;
+        let trailing = remaining_after_cursor - window_len_sum;
         if trailing < u64::try_from(DROP_RECORD_LEN).unwrap_or(u64::MAX) {
             return Err(CoreError::Corrupt {
                 reason: format!(
@@ -196,11 +198,11 @@ pub fn parse_slab(bytes: &[u8]) -> Result<SlabView<'_>, CoreError> {
             });
         }
         let record = parse_drop_record(&mut cursor, &header)?;
-        plaintext_len_sum = plaintext_len_sum
-            .checked_add(u64::from(record.plaintext_len))
+        window_len_sum = window_len_sum
+            .checked_add(u64::from(record.len_in_window))
             .ok_or_else(|| CoreError::Corrupt {
                 reason: format!(
-                    "slab drop plaintext_len sum overflow at record {}",
+                    "slab drop len_in_window sum overflow at record {}",
                     drop_records.len()
                 ),
             })?;
