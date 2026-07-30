@@ -18,4 +18,5 @@ unsafe_code = "forbid"
 pedantic = "warn"
 
 [workspace.dependencies]
+blake3 = { version = "1.5", default-features = false, features = ["std"] }
 clap = { version = "4.5", features = ["derive", "string"] }
