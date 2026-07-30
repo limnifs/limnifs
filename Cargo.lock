@@ -188,6 +188,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "limnifs-conformance"
+version = "0.1.0"
+dependencies = [
+ "limnifs-core",
+ "limnifs-format",
+]
+
+[[package]]
 name = "limnifs-core"
 version = "0.1.0"
 dependencies = [
