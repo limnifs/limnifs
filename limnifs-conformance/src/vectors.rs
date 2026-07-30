@@ -99,6 +99,8 @@ pub fn all_vectors() -> Vec<Vector> {
         minimal_v0_1_with_flags(),
         ec_params_v0_1(),
         dms_policy_v0_1(),
+        inlined_metadata_v0_1(),
+        multi_slab_v0_1(),
     ]
 }
 
@@ -164,6 +166,54 @@ pub fn dms_policy_v0_1() -> Vector {
     Vector {
         name: "dms-policy-v0-1",
         description: "v0.1 image with Shamir 2-of-3 DMS policy",
+        spec,
+    }
+}
+
+/// v0.1 image with inlined metadata blob instead of external locators.
+#[must_use]
+pub fn inlined_metadata_v0_1() -> Vector {
+    let mut spec = minimal_v0_1().spec;
+    spec.metadata_reference = MetadataReferenceSpec::Inlined {
+        metadata: vec![0xCC; 128],
+    };
+    Vector {
+        name: "inlined-metadata-v0-1",
+        description: "v0.1 image with 128-byte inlined metadata blob",
+        spec,
+    }
+}
+
+/// v0.1 image with three slabs in the index, each mirrored to file and https.
+#[must_use]
+pub fn multi_slab_v0_1() -> Vector {
+    let mut spec = minimal_v0_1().spec;
+    spec.slab_index = vec![
+        SlabIndexEntrySpec {
+            slab_id: SlabId::new(0, [0x01; 32]),
+            locators: vec![
+                "file:///var/lib/limnifs/slab-0.bin".into(),
+                "https://cdn/slab-0.bin".into(),
+            ],
+        },
+        SlabIndexEntrySpec {
+            slab_id: SlabId::new(1, [0x02; 32]),
+            locators: vec![
+                "file:///var/lib/limnifs/slab-1.bin".into(),
+                "https://cdn/slab-1.bin".into(),
+            ],
+        },
+        SlabIndexEntrySpec {
+            slab_id: SlabId::new(2, [0x03; 32]),
+            locators: vec![
+                "file:///var/lib/limnifs/slab-2.bin".into(),
+                "https://cdn/slab-2.bin".into(),
+            ],
+        },
+    ];
+    Vector {
+        name: "multi-slab-v0-1",
+        description: "v0.1 image with 3 mirrored slabs",
         spec,
     }
 }
