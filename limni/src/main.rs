@@ -248,6 +248,20 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
     };
     let merkle_root = compute_merkle_root(&hashes);
 
+    let metadata_summary = if metadata_reference.is_inlined() {
+        if let Some(blob_bytes) = &metadata_reference.inline_metadata {
+            let mut blob_cursor = ManifestCursor::new(blob_bytes);
+            match parse_metadata_blob(&mut blob_cursor) {
+                Ok(blob) => Some(MetadataSummary::from_blob(&blob)),
+                Err(_) => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     print_report(
         image,
         header,
@@ -257,6 +271,7 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
         history.len(),
         extra_bytes_remaining,
         merkle_root,
+        metadata_summary.as_ref(),
         json,
     );
     Ok(())
@@ -696,6 +711,68 @@ fn format_hex(bytes: &[u8]) -> String {
     }
     s
 }
+
+/// Stable summary of a parsed metadata blob, used for differential
+/// conformance: Rust and Python must produce the same summary for
+/// the same blob.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MetadataSummary {
+    inode_count: usize,
+    dir_node_count: usize,
+    root_inode_number: Option<u64>,
+    /// Inode numbers sorted ascending, with each inode's mode and
+    /// content-handle kind tag. Sorted so byte-for-byte comparison
+    /// is meaningful regardless of the writer's traversal order.
+    inodes: Vec<(u64, u32, u8)>,
+    /// Directory node entry counts sorted ascending, with the
+    /// first entry's name (or empty string for an empty node).
+    dir_nodes: Vec<(usize, String)>,
+}
+
+impl MetadataSummary {
+    fn from_blob(blob: &MetadataBlob) -> Self {
+        let mut inodes: Vec<(u64, u32, u8)> = blob
+            .inodes
+            .iter()
+            .map(|i| (i.number, i.mode, content_handle_kind_tag(&i.content_handle)))
+            .collect();
+        inodes.sort_by_key(|(n, _, _)| *n);
+
+        let mut dir_nodes: Vec<(usize, String)> = blob
+            .dir_nodes
+            .iter()
+            .map(|n| {
+                let first = n
+                    .entries
+                    .first()
+                    .map(|e| e.name.clone())
+                    .unwrap_or_default();
+                (n.entries.len(), first)
+            })
+            .collect();
+        dir_nodes.sort();
+
+        Self {
+            inode_count: blob.inodes.len(),
+            dir_node_count: blob.dir_nodes.len(),
+            root_inode_number: blob.root_inode_number(),
+            inodes,
+            dir_nodes,
+        }
+    }
+}
+
+fn content_handle_kind_tag(handle: &ContentHandle) -> u8 {
+    match handle {
+        ContentHandle::InlineData(_) => 1,
+        ContentHandle::SliceMap(_) => 2,
+        ContentHandle::Directory(_) => 3,
+        ContentHandle::Symlink(_) => 4,
+        ContentHandle::Device(_) => 5,
+        ContentHandle::Pipe(_) => 6,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn print_report(
     path: &Path,
@@ -706,6 +783,7 @@ fn print_report(
     history_len: usize,
     extra_bytes_remaining: usize,
     merkle_root: ManifestRoot,
+    metadata_summary: Option<&MetadataSummary>,
     json: bool,
 ) {
     if json {
@@ -718,6 +796,7 @@ fn print_report(
             history_len,
             extra_bytes_remaining,
             merkle_root,
+            metadata_summary,
         );
     } else {
         print_human_report(
@@ -729,6 +808,7 @@ fn print_report(
             history_len,
             extra_bytes_remaining,
             merkle_root,
+            metadata_summary,
         );
     }
 }
@@ -743,6 +823,7 @@ fn print_human_report(
     history_len: usize,
     extra_bytes_remaining: usize,
     merkle_root: ManifestRoot,
+    metadata_summary: Option<&MetadataSummary>,
 ) {
     println!("{}: valid LimniFS manifest", path.display());
     println!("  magic:               LMFS");
@@ -772,6 +853,16 @@ fn print_human_report(
     );
     println!("  slab index:          {slab_index_len} entries");
     println!("  history:             {history_len} entries");
+    if let Some(summary) = metadata_summary {
+        println!(
+            "  metadata blob:       {} inodes, {} dir nodes, root inode = {}",
+            summary.inode_count,
+            summary.dir_node_count,
+            summary
+                .root_inode_number
+                .map_or_else(|| "?".to_string(), |n| n.to_string())
+        );
+    }
     if extra_bytes_remaining > 0 {
         println!(
             "  warning:             {extra_bytes_remaining} extra bytes after history (optional sections present, not parsed)"
@@ -794,6 +885,7 @@ fn print_json_report(
     history_len: usize,
     extra_bytes_remaining: usize,
     merkle_root: ManifestRoot,
+    metadata_summary: Option<&MetadataSummary>,
 ) {
     let escaped_path = escape_json_path(path);
     print!("{{\"path\":\"{escaped_path}\",\"magic\":\"LMFS\",");
@@ -813,6 +905,33 @@ fn print_json_report(
     print!("\"slab_index_entries\":{slab_index_len},");
     print!("\"history_entries\":{history_len},");
     print!("\"extra_bytes_after_history\":{extra_bytes_remaining},");
+    if let Some(summary) = metadata_summary {
+        print!("\"metadata_inode_count\":{},", summary.inode_count);
+        print!("\"metadata_dir_node_count\":{},", summary.dir_node_count);
+        print!(
+            "\"metadata_root_inode\":{},",
+            summary
+                .root_inode_number
+                .map_or_else(|| "null".to_string(), |n| n.to_string())
+        );
+        print!("\"metadata_inodes\":[");
+        for (i, (number, mode, kind)) in summary.inodes.iter().enumerate() {
+            if i > 0 {
+                print!(",");
+            }
+            print!("{{\"number\":{number},\"mode\":{mode},\"kind\":{kind}}}");
+        }
+        print!("],");
+        print!("\"metadata_dir_nodes\":[");
+        for (i, (entries, first)) in summary.dir_nodes.iter().enumerate() {
+            if i > 0 {
+                print!(",");
+            }
+            let escaped_first = escape_json_path(std::path::Path::new(first));
+            print!("{{\"entries\":{entries},\"first\":\"{escaped_first}\"}}");
+        }
+        print!("],");
+    }
     println!("\"merkle_root\":\"{merkle_root}\"}}");
 }
 
