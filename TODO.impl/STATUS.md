@@ -3,6 +3,47 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — FastCDC chunker + writer integration (session 17)
+
+### Done
+
+- **`FastCDC` chunker (`limnifs-write/src/chunker.rs`)** — content-
+  defined chunker implementing the Xia et al. 2016 algorithm with
+  two-level mask normalization and a deterministic splitmix64-seeded
+  gear table. Default sizes: 64 KiB min / 256 KiB avg / 1 MiB max.
+  Two APIs: `chunk_slice(&[u8])` for in-memory, `chunk_reader(R: Read)`
+  for streaming (constant memory). 11 unit tests covering short
+  input, exact coverage, min/max bounds, boundary-shift stability
+  (1-byte insert shifts ≤ 3 boundaries), reader/slice equivalence,
+  determinism across instances, invalid-size rejection, identical-
+  substring dedup, mask calculation, and empty input.
+- **Writer pipeline integration** — `WriteContext` now uses the
+  chunker for any file larger than `INLINE_THRESHOLD`. Each file
+  becomes a multi-slice `SliceMap` (one slice per chunk) instead
+  of a single-drop drop-backed file. The slab packs deduplicated
+  drops; `limni cat` reads them back via the slab reader.
+- **2 integration tests** verify (a) large pseudo-random files
+  produce multiple drops and (b) two files sharing a long substring
+  produce fewer drops together than the sum of their individual
+  counts (dedup win).
+
+### Workspace state
+
+- Test count: 246 → 257 (+11). `cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets — -D warnings`,
+  `cargo test --workspace` all green.
+- End-to-end round-trip verified for inline, single-drop, and
+  multi-chunk files (MD5 match on all).
+
+### Next
+
+- Parameter study: chunk-size distribution and dedup ratio vs.
+  fixed-size chunking, on a real corpus (tebako).
+- Seine classifier: entropy + magic-byte heuristics to label drops
+  by class (text/code/binary/compressed/media/sparse) via a
+  registry, readying the deepening stage.
+- Slab packing optimization: per-class solid windows.
+
 ## 2026-07-30 — limni cat: slab reader + file extraction (session 16)
 
 ### Done
