@@ -39,6 +39,7 @@ pub mod error;
 pub mod feature_flags;
 pub mod header;
 pub mod history;
+pub mod inode;
 pub mod locator;
 pub mod merkle;
 pub mod metadata_reference;
