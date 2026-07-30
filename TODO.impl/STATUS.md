@@ -3,6 +3,65 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-30 — Seine classifier + limni stat/extract + Layer 2 diff (session 18)
+
+### Done
+
+- **Seine drop classifier** — `limnifs-write/src/classifier.rs`. Labels
+  drops with one of six content classes via entropy + magic-byte
+  heuristics: Text, Code (ELF/Mach-O/PE), Compressed (gzip/zstd/xz/bz2/7z),
+  Media (JPEG/PNG/GIF/WebP/MP3/FLAC/MP4/Ogg), Sparse (zero-dominated),
+  Binary (fallback). 19 unit tests.
+- **`limni stat <image> <path>`** — prints inode POSIX metadata +
+  content handle description. All 6 content handle variants supported.
+  2 CLI tests.
+- **`limni extract <image> <dest>`** — round-trip image → filesystem
+  directory. Walks tree, recreates files/dirs, sets permissions.
+  2 CLI tests.
+- **Differential Layer 2 conformance** — both CLIs emit metadata blob
+  summary (inode count, dir node count, root inode, sorted inode/dir
+  summaries). New `differential_metadata_agreement_or_skip` test.
+  Made robust to version skew (skips when either CLI lacks the fields).
+- **Layer 3 spec for metadata blob** —
+  [limnifs/spec#28](https://github.com/limnifs/spec/pull/28).
+  `bit-level/47-metadata-blob.md` pins the wire layout and root-inode
+  identification rule.
+- **Python slab reader** —
+  [limnifs/limnifs-py#7](https://github.com/limnifs/limnifs-py/pull/7).
+  Ports slab_header, drop_record, slab_reader from Rust. 10 tests.
+
+### PRs opened this session
+
+| Repo | PR | Title |
+|---|---|---|
+| limnifs/limnifs | [#46](https://github.com/limnifs/limnifs/pull/46) | limni stat + differential Layer 2 |
+| limnifs/limnifs | [#47](https://github.com/limnifs/limnifs/pull/47) | FastCDC + seine classifier |
+| limnifs/limnifs | [#48](https://github.com/limnifs/limnifs/pull/48) | limni extract |
+| limnifs/limnifs-py | [#6](https://github.com/limnifs/limnifs-py/pull/6) | CLI metadata summary |
+| limnifs/limnifs-py | [#7](https://github.com/limnifs/limnifs-py/pull/7) | Slab reader port |
+| limnifs/spec | [#28](https://github.com/limnifs/spec/pull/28) | Metadata blob Layer 3 spec |
+
+### Workspace state
+
+- Rust test count: 246 → 276 (+30 across fastcdc/classifier/stat/extract).
+- Python test count: 17 → 27 (+10 slab reader).
+- `cargo fmt`, `cargo clippy --workspace --all-targets — -D warnings`,
+  `cargo test --workspace`, `ruff check`, `pytest` all green.
+- End-to-end verified: `limn` → `verify` → `ls` → `cat` → `stat` →
+  `extract` round-trip with MD5 match for inline, single-drop, and
+  multi-chunk (FastCDC) files.
+
+### Next
+
+- **Deepening stage** — per-class codec selection (lz4 for text/code,
+  store for compressed/media). Needs lz4 dependency + slab format
+  extension for compressed solid windows.
+- **Slab packing optimization** — per-class solid windows (decision
+  §20.1).
+- **FUSE mount** (`limni mount`) — biggest user-facing Phase 1 feature.
+- **Differential Layer 1** — extend harness to compare slab structure
+  between readers.
+
 ## 2026-07-30 — FastCDC chunker + writer integration (session 17)
 
 ### Done
