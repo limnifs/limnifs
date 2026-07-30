@@ -77,4 +77,4 @@ pub use slab_index::{
     SLAB_INDEX_SECTION_VERSION,
 };
 
-pub use limnifs_format::MANIFEST_HEADER_LEN;
+pub use limnifs_format::{ManifestRoot, MANIFEST_HEADER_LEN};
