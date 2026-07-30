@@ -407,7 +407,7 @@ fn cat(image: &Path, path: &str) -> Result<(), CliError> {
                         },
                     })?
                     .map_err(map_err)?;
-                out.write_all(plaintext)
+                out.write_all(&plaintext)
                     .map_err(|source| CliError::ReadFailed {
                         path: image.to_path_buf(),
                         source,
