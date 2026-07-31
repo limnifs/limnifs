@@ -2220,4 +2220,61 @@ mod tests {
         std::fs::remove_file(&img).ok();
         std::fs::remove_file(&img2).ok();
     }
+
+    #[test]
+    fn seal_open_round_trips() {
+        let id = std::process::id();
+        let input = std::env::temp_dir().join(format!("limnifs-seal-{id}.txt"));
+        let sealed = std::env::temp_dir().join(format!("limnifs-seal-{id}.sealed"));
+        let opened = std::env::temp_dir().join(format!("limnifs-seal-{id}.open"));
+
+        std::fs::write(&input, b"secret message for seal/open test").expect("write input");
+
+        let key = "42".repeat(32); // 64-char hex key (32 bytes)
+        seal_cmd(&input, &sealed, &key).expect("seal succeeds");
+        assert_ne!(
+            std::fs::read(&input).unwrap(),
+            std::fs::read(&sealed).unwrap(),
+            "sealed data must differ from plaintext"
+        );
+
+        open_cmd(&sealed, &opened, &key).expect("open succeeds");
+        let orig = std::fs::read(&input).unwrap();
+        let result = std::fs::read(&opened).unwrap();
+        assert_eq!(orig, result, "round-trip must match");
+
+        std::fs::remove_file(&input).ok();
+        std::fs::remove_file(&sealed).ok();
+        std::fs::remove_file(&opened).ok();
+    }
+
+    #[test]
+    fn seal_open_wrong_key_fails() {
+        let id = std::process::id();
+        let input = std::env::temp_dir().join(format!("limnifs-wrongkey-{id}.txt"));
+        let sealed = std::env::temp_dir().join(format!("limnifs-wrongkey-{id}.sealed"));
+        let opened = std::env::temp_dir().join(format!("limnifs-wrongkey-{id}.open"));
+
+        std::fs::write(&input, b"secret data").expect("write");
+
+        let correct_key = "42".repeat(32);
+        let wrong_key = "99".repeat(32);
+
+        seal_cmd(&input, &sealed, &correct_key).expect("seal");
+        match open_cmd(&sealed, &opened, &wrong_key) {
+            Err(CliError::FormatFailed { .. }) => {}
+            other => panic!("expected FormatFailed, got {other:?}"),
+        }
+
+        std::fs::remove_file(&input).ok();
+        std::fs::remove_file(&sealed).ok();
+        std::fs::remove_file(&opened).ok();
+    }
+
+    #[test]
+    fn parse_hex_key_validates_length() {
+        assert!(parse_hex_key("short").is_err());
+        assert!(parse_hex_key(&"42".repeat(32)).is_ok());
+        assert!(parse_hex_key(&"gg".repeat(32)).is_err());
+    }
 }
