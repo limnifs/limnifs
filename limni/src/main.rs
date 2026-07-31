@@ -1116,13 +1116,7 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
     } else {
         Some(resolve_slab_path(image, &slab_index)?)
     };
-    extract_dir_collect(
-        &blob,
-        root_inode,
-        dest,
-        &mut file_tasks,
-        &mut dir_count,
-    )?;
+    extract_dir_collect(&blob, root_inode, dest, &mut file_tasks, &mut dir_count)?;
 
     // Phase 2: load the slab once (if any) and write files IN PARALLEL.
     // Each file write is independent; rayon distributes them across cores.
@@ -1142,9 +1136,7 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
     let file_count = file_tasks.len();
     let write_errors: Vec<Option<CliError>> = file_tasks
         .par_iter()
-        .map(|(path, inode)| {
-            extract_file(path, inode, slab_view.as_ref()).err()
-        })
+        .map(|(path, inode)| extract_file(path, inode, slab_view.as_ref()).err())
         .collect();
     if let Some(Some(err)) = write_errors.into_iter().next() {
         return Err(err);
@@ -1226,14 +1218,14 @@ fn extract_dir_collect<'a>(
         })?;
     for entry in &node.entries {
         let entry_path = dir_path.join(&entry.name);
-        let child_inode = blob.inode_by_number(entry.inode_number).ok_or_else(|| {
-            CliError::FormatFailed {
-                path: dir_path.to_path_buf(),
-                source: CoreError::Corrupt {
-                    reason: format!("inode {} missing", entry.inode_number),
-                },
-            }
-        })?;
+        let child_inode =
+            blob.inode_by_number(entry.inode_number)
+                .ok_or_else(|| CliError::FormatFailed {
+                    path: dir_path.to_path_buf(),
+                    source: CoreError::Corrupt {
+                        reason: format!("inode {} missing", entry.inode_number),
+                    },
+                })?;
         match &child_inode.content_handle {
             ContentHandle::Directory(_) => {
                 *dir_count += 1;

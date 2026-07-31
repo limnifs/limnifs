@@ -18,6 +18,7 @@ rand_core = { workspace = true, optional = true }
 rayon.workspace = true
 sha2 = { workspace = true, optional = true }
 x25519-dalek = { workspace = true, optional = true }
+xz2.workspace = true
 zstd.workspace = true
 
 [features]
