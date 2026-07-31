@@ -677,10 +677,12 @@ dependencies = [
 [[package]]
 name = "omnizip-codecs"
 version = "0.1.0"
+source = "git+https://github.com/omnizip/omnizip-rs.git?branch=main#bc7c60c87cf7e270b3878491ba1cd03ff4f5acab"
 
 [[package]]
 name = "omnizip-snappy"
 version = "0.1.0"
+source = "git+https://github.com/omnizip/omnizip-rs.git?branch=main#bc7c60c87cf7e270b3878491ba1cd03ff4f5acab"
 dependencies = [
  "omnizip-codecs",
  "snap",
