@@ -48,6 +48,7 @@ pub mod ec_scheme;
 pub mod error;
 pub mod feature_flags;
 pub mod fetch;
+pub mod gf256;
 pub mod header;
 pub mod history;
 #[cfg(feature = "http")]
@@ -57,6 +58,7 @@ pub mod locator;
 pub mod merkle;
 pub mod metadata;
 pub mod metadata_reference;
+pub mod reed_solomon;
 #[cfg(feature = "http")]
 pub mod s3_locator;
 pub mod shamir;

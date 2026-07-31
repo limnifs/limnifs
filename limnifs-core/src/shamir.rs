@@ -30,8 +30,12 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+use crate::gf256;
+
 /// GF(2^8) reduction polynomial: x^8 + x^4 + x^3 + x + 1 = 0x11B.
-const AES_POLYNOMIAL: u16 = 0x011B;
+///
+/// Re-exported from [`crate::gf256`] for documentation continuity.
+pub use crate::gf256::REDUCTION_POLYNOMIAL as AES_POLYNOMIAL;
 
 /// Split `secret` into `n` shares, any `k` of which reconstruct it.
 ///
@@ -192,14 +196,14 @@ fn eval_poly(coeffs: &[u8], x: u8) -> u8 {
     // Horner's method.
     let mut acc: u8 = 0;
     for &c in coeffs.iter().rev() {
-        acc = gf_add(gf_mul(acc, x), c);
+        acc = gf256::add(gf256::mul(acc, x), c);
     }
     acc
 }
 
 fn lagrange_at_zero(points: &[(u8, u8)]) -> u8 {
     // secret = sum_i  y_i * prod_{j!=i}  (0 - x_j) / (x_i - x_j)
-    // All operations in GF(2^8); subtraction is XOR.
+    // All operations in GF(2^8); subtraction is XOR (= addition).
     let mut acc: u8 = 0;
     for (i, &(xi, yi)) in points.iter().enumerate() {
         let mut num: u8 = 1;
@@ -208,54 +212,11 @@ fn lagrange_at_zero(points: &[(u8, u8)]) -> u8 {
             if i == j {
                 continue;
             }
-            num = gf_mul(num, xj);
-            den = gf_mul(den, xi ^ xj);
+            num = gf256::mul(num, xj);
+            den = gf256::mul(den, xi ^ xj);
         }
-        let term = gf_mul(yi, gf_mul(num, gf_inv(den)));
+        let term = gf256::mul(yi, gf256::mul(num, gf256::inv(den)));
         acc ^= term;
-    }
-    acc
-}
-
-fn gf_add(a: u8, b: u8) -> u8 {
-    a ^ b
-}
-
-fn gf_mul(a: u8, b: u8) -> u8 {
-    let mut a = u16::from(a);
-    let mut b = b;
-    let mut acc: u16 = 0;
-    while b != 0 {
-        if b & 1 != 0 {
-            acc ^= a;
-        }
-        b >>= 1;
-        let high_bit_set = a & 0x80 != 0;
-        a <<= 1;
-        if high_bit_set {
-            a ^= AES_POLYNOMIAL;
-        }
-    }
-    u8::try_from(acc & 0xFF).expect("low byte of acc")
-}
-
-fn gf_inv(a: u8) -> u8 {
-    if a == 0 {
-        return 0;
-    }
-    // a^254 = a^-1 in GF(2^8) since the multiplicative group has order 255.
-    gf_pow(a, 254)
-}
-
-fn gf_pow(a: u8, mut exp: u32) -> u8 {
-    let mut base = a;
-    let mut acc: u8 = 1;
-    while exp > 0 {
-        if exp & 1 == 1 {
-            acc = gf_mul(acc, base);
-        }
-        base = gf_mul(base, base);
-        exp >>= 1;
     }
     acc
 }
@@ -273,37 +234,6 @@ mod tests {
                 *b = state;
             }
             Ok(())
-        }
-    }
-
-    #[test]
-    fn gf_arithmetic_round_trips() {
-        // a * a^-1 == 1 for all non-zero a
-        for a in 1..=u8::MAX {
-            let inv = gf_inv(a);
-            assert_eq!(gf_mul(a, inv), 1, "a={a}");
-        }
-    }
-
-    #[test]
-    fn gf_mul_zero() {
-        assert_eq!(gf_mul(0, 42), 0);
-        assert_eq!(gf_mul(42, 0), 0);
-    }
-
-    #[test]
-    fn gf_mul_one() {
-        for a in 0..=u8::MAX {
-            assert_eq!(gf_mul(a, 1), a);
-        }
-    }
-
-    #[test]
-    fn gf_mul_commutative() {
-        for a in [0, 1, 2, 3, 5, 7, 53, 200, 255] {
-            for b in [0, 1, 2, 3, 5, 7, 53, 200, 255] {
-                assert_eq!(gf_mul(a, b), gf_mul(b, a), "a={a} b={b}");
-            }
         }
     }
 
@@ -483,7 +413,7 @@ mod tests {
     #[test]
     fn lagrange_correctness_for_linear_polynomial() {
         // poly(x) = 5 + 7*x in GF(2^8). At x=0, value=5.
-        let points = vec![(1, 5 ^ gf_mul(7, 1)), (2, 5 ^ gf_mul(7, 2))];
+        let points = vec![(1, 5 ^ gf256::mul(7, 1)), (2, 5 ^ gf256::mul(7, 2))];
         assert_eq!(lagrange_at_zero(&points), 5);
     }
 }
