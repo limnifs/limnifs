@@ -1,5 +1,6 @@
 [workspace]
 members = ["limnifs-format", "limnifs-core", "limnifs-conformance", "limnifs-write", "limni"]
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]

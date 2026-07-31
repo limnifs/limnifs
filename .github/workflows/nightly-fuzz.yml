@@ -1,0 +1,89 @@
+name: Nightly fuzz
+
+# Per TODO.impl/02-conformance/02-fuzz-corpus.md: nightly fuzz window
+# across all manifest/slab parsers. The default cargo-fuzz target is
+# 30 minutes per fuzz_target; this workflow runs all 9 targets in
+# parallel.
+#
+# Crashes auto-file as artifacts attached to the workflow run; every
+# crash becomes a permanent regression vector before the fix merges.
+
+on:
+  schedule:
+    # 08:00 UTC daily
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Fuzz duration per target (seconds)"
+        required: false
+        default: "600"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-fuzz
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - manifest_header
+          - feature_flags
+          - metadata_reference
+          - slab_index
+          - history
+          - metadata_blob
+          - slab_header
+          - drop_record
+          - locator_entry
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: fuzz-${{ matrix.target }}
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version ^0.12
+      - name: Fuzz ${{ matrix.target }}
+        working-directory: fuzz
+        run: |
+          timeout --signal=SIGINT ${{ inputs.duration || '600' }}s \
+            cargo +nightly fuzz run ${{ matrix.target }} -- -max_len=65536 -len_control=0 || true
+      - name: Upload crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/crash-*
+          if-no-files-found: ignore
+      - name: Upload corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus-${{ matrix.target }}
+          path: fuzz/corpus/${{ matrix.target }}/
+          if-no-files-found: ignore
+
+  report:
+    name: Report status
+    needs: fuzz
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "Nightly fuzz run: ${{ github.run_id }}"
+          echo "Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo
+          echo "Each target ran for ${{ inputs.duration || '600' }}s. Crashes, if any,"
+          echo "are attached as artifacts to the corresponding fuzz-<target> job."

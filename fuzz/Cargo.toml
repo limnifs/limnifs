@@ -1,0 +1,54 @@
+[package]
+name = "limnifs-fuzz"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/limnifs/limnifs"
+description = "LimniFS fuzz targets — cargo-fuzz"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+limnifs-core = { path = "../limnifs-core", version = "0.1.0" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "manifest_header"
+path = "fuzz_targets/manifest_header.rs"
+
+[[bin]]
+name = "feature_flags"
+path = "fuzz_targets/feature_flags.rs"
+
+[[bin]]
+name = "metadata_reference"
+path = "fuzz_targets/metadata_reference.rs"
+
+[[bin]]
+name = "slab_index"
+path = "fuzz_targets/slab_index.rs"
+
+[[bin]]
+name = "history"
+path = "fuzz_targets/history.rs"
+
+[[bin]]
+name = "metadata_blob"
+path = "fuzz_targets/metadata_blob.rs"
+
+[[bin]]
+name = "slab_header"
+path = "fuzz_targets/slab_header.rs"
+
+[[bin]]
+name = "drop_record"
+path = "fuzz_targets/drop_record.rs"
+
+[[bin]]
+name = "locator_entry"
+path = "fuzz_targets/locator_entry.rs"
+
+[workspace]
