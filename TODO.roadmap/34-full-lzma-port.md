@@ -1,10 +1,11 @@
-# 34 — Full pure-Rust LZMA/LZMA2/XZ encoder (repo: [limnifs/lzma](https://github.com/limnifs/lzma))
+# 34 — Full pure-Rust LZMA/LZMA2/XZ encoder (repo: [omnizip/omnizip-rs](https://github.com/omnizip/omnizip-rs))
 
 - **Priority:** P1 (blocks ratio parity with reference `xz`)
 - **Depends on:** 35 (registry refactor)
-- **Estimated effort:** **months** (calendar-quarter scale)
-- **Repos touched:** [`limnifs/lzma`](https://github.com/limnifs/lzma) (new), then `limnifs/limnifs`
-- **Porting strategy:** decoder forked from lzma-rs 0.3 (MIT/Apache); encoder ported line-by-line from `tukaani-project/xz` liblzma (0BSD / public domain); test fixtures adopted verbatim from `tukaani-project/xz/tests/`. Full plan in [`limnifs/lzma/PLAN.md`](https://github.com/limnifs/lzma/blob/main/PLAN.md).
+- **Estimated effort:** **weeks–months** (algorithmic logic already done in Ruby)
+- **Repos touched:** [`omnizip/omnizip-rs`](https://github.com/omnizip/omnizip-rs) `omnizip-lzma` crate, then `limnifs/limnifs`
+- **Porting strategy:** line-by-line Rust port of omnizip's Ruby LZMA reference (`omnizip/lib/omnizip/algorithms/lzma/` 7,558 LOC + `lzma2/` 906 LOC, all MIT). The Ruby already includes the match finder, optimal parser, range coder, and XZ container — the algorithmically hard parts. C reference (`tukaani-project/xz` liblzma, 0BSD) consulted for perf tuning only after the Ruby port verifies correct. Test fixtures adopted from `omnizip/spec/fixtures/`. Full plan: [`omnizip-rs/PLAN.md`](https://github.com/omnizip/omnizip-rs/blob/main/PLAN.md).
+- **Supersedes:** the archived `limnifs/lzma` skeleton (2026-07-31).
 
 ## Problem
 
