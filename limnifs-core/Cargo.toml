@@ -14,21 +14,18 @@ chacha20poly1305.workspace = true
 ed25519-dalek = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
 lz4_flex.workspace = true
+lzma-rs.workspace = true
 rand_core = { workspace = true, optional = true }
 rayon.workspace = true
+ruzstd.workspace = true
 sha2 = { workspace = true, optional = true }
 x25519-dalek = { workspace = true, optional = true }
-xz2 = { workspace = true, optional = true }
-zstd = { workspace = true, optional = true }
 
 [features]
-default = ["zstd", "xz"]
-zstd = ["dep:zstd"]
-xz = ["dep:xz2"]
+default = []
 http = []
 key-wrap = ["dep:hkdf", "dep:rand_core", "dep:sha2", "dep:x25519-dalek"]
 signing = ["dep:ed25519-dalek", "dep:rand_core"]
-air-gapped = []  # alias: no external C deps (use --no-default-features --features air-gapped)
 
 [lints]
 workspace = true

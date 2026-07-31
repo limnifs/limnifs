@@ -234,7 +234,6 @@ enum Command {
     /// If `mkcomposefs` is not on PATH, the extracted rootfs is left
     /// in place and a warning is printed; the user can install
     /// composefs-utils and re-run.
-    ComposefsExport { image: PathBuf, out_dir: PathBuf },
     /// Sign a `.lim` image's `ManifestRoot` using sigstore keyless mode.
     ///
     /// Shells out to `cosign sign-blob` (<https://github.com/sigstore/cosign>).
@@ -246,12 +245,6 @@ enum Command {
     /// Requires `cosign` on PATH and an interactive OIDC flow. For an
     /// offline, self-sovereign alternative, use the Ed25519 keypair
     /// API in `limnifs-core::signing`.
-    SigstoreSign {
-        image: PathBuf,
-        /// Optional: identity token file (skips interactive OIDC).
-        #[arg(long)]
-        identity_token: Option<PathBuf>,
-    },
     /// Verify a `.lim` image's sigstore signature bundle.
     ///
     /// Shells out to `cosign verify-blob`. Checks the Fulcio cert
@@ -260,14 +253,6 @@ enum Command {
     ///
     /// Requires `cosign` on PATH. For offline verification of
     /// Ed25519 keypair signatures, use `limnifs-core::signing::verify`.
-    SigstoreVerify {
-        image: PathBuf,
-        /// Path to the `.sigstore.json` bundle from `sigstore-sign`.
-        bundle: PathBuf,
-        /// Expected signer OIDC identity (e.g. `tse@ribose.com`).
-        #[arg(long)]
-        identity: Option<String>,
-    },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -316,16 +301,6 @@ fn run() -> Result<(), CliError> {
             shares,
         } => shamir_split(&input, &output_prefix, threshold, shares),
         Command::ShamirCombine { shares, output } => shamir_combine(&shares, &output),
-        Command::ComposefsExport { image, out_dir } => composefs_export(&image, &out_dir),
-        Command::SigstoreSign {
-            image,
-            identity_token,
-        } => sigstore_sign(&image, identity_token.as_deref()),
-        Command::SigstoreVerify {
-            image,
-            bundle,
-            identity,
-        } => sigstore_verify(&image, &bundle, identity.as_deref()),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -1909,241 +1884,6 @@ fn getrandom_rng(out: &mut [u8]) -> Result<(), limnifs_core::shamir::ShamirError
 /// place and a warning is printed. The user can install composefs-utils
 /// and re-run, or copy the rootfs to a Linux machine and run
 /// `mkcomposefs` there.
-fn composefs_export(image: &Path, out_dir: &Path) -> Result<(), CliError> {
-    std::fs::create_dir_all(out_dir).map_err(|source| CliError::ReadFailed {
-        path: out_dir.to_path_buf(),
-        source,
-    })?;
-
-    let rootfs = out_dir.join("rootfs");
-    if rootfs.exists() {
-        std::fs::remove_dir_all(&rootfs).map_err(|source| CliError::ReadFailed {
-            path: rootfs.clone(),
-            source,
-        })?;
-    }
-    std::fs::create_dir_all(&rootfs).map_err(|source| CliError::ReadFailed {
-        path: rootfs.clone(),
-        source,
-    })?;
-
-    extract(image, &rootfs)?;
-
-    let descriptor = out_dir.join("image.cfs");
-    let objects_dir = out_dir.join("objects");
-
-    match which::which("mkcomposefs") {
-        Ok(mkcomposefs_path) => {
-            std::fs::create_dir_all(&objects_dir).map_err(|source| CliError::ReadFailed {
-                path: objects_dir.clone(),
-                source,
-            })?;
-            let status = std::process::Command::new(mkcomposefs_path)
-                .arg("--print-digest")
-                .arg(&rootfs)
-                .arg(&descriptor)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .status()
-                .map_err(|source| CliError::ReadFailed {
-                    path: descriptor.clone(),
-                    source,
-                })?;
-            if !status.success() {
-                return Err(CliError::FormatFailed {
-                    path: descriptor.clone(),
-                    source: CoreError::Corrupt {
-                        reason: format!(
-                            "mkcomposefs exited with status {status}; install composefs-utils"
-                        ),
-                    },
-                });
-            }
-            println!(
-                "composefs descriptor: {} (root: {}, objects: {})",
-                descriptor.display(),
-                rootfs.display(),
-                objects_dir.display(),
-            );
-            println!(
-                "mount on Linux >= 6.4 via:\n  mount.composefs -o basedir={} {} /mnt",
-                objects_dir.display(),
-                descriptor.display(),
-            );
-        }
-        Err(_) => {
-            eprintln!(
-                "warning: mkcomposefs not on PATH; extracted rootfs only.\n\
-                 Install composefs-utils (https://github.com/containers/composefs) and re-run,\n\
-                 or run on this extracted tree:\n  mkcomposefs {} {}",
-                rootfs.display(),
-                descriptor.display(),
-            );
-        }
-    }
-    Ok(())
-}
-
-/// Helper for shelling out to a tool that may not be installed.
-fn run_or_warn(tool: &str, args: &[&str]) -> Result<std::process::Output, CliError> {
-    let path = which::which(tool).map_err(|_| CliError::FormatFailed {
-        path: PathBuf::from(tool),
-        source: CoreError::Corrupt {
-            reason: format!("{tool} not on PATH; install from upstream (see command docs)"),
-        },
-    })?;
-    std::process::Command::new(path)
-        .args(args)
-        .output()
-        .map_err(|source| CliError::ReadFailed {
-            path: PathBuf::from(tool),
-            source,
-        })
-}
-
-/// Sign a `.lim` image's `ManifestRoot` using sigstore keyless mode.
-///
-/// Shells out to `cosign sign-blob --bundle=<image>.sigstore.json`.
-/// The bundle carries the Fulcio cert, signature, and Rekor inclusion
-/// proof. For an offline, self-sovereign alternative, the
-/// `limnifs-core::signing` module ships Ed25519 keypair mode.
-fn sigstore_sign(image: &Path, identity_token: Option<&Path>) -> Result<(), CliError> {
-    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
-        path: image.to_path_buf(),
-        source,
-    })?;
-    let root_bytes = compute_manifest_root_bytes(&manifest_bytes)?;
-    let root_blob_path = image.with_extension("lim.root");
-    std::fs::write(&root_blob_path, root_bytes.as_slice()).map_err(|source| {
-        CliError::ReadFailed {
-            path: root_blob_path.clone(),
-            source,
-        }
-    })?;
-
-    let bundle = image.with_extension("sigstore.json");
-    let bundle_arg = format!("--bundle={}", bundle.display());
-
-    let mut args: Vec<String> = vec![
-        "sign-blob".into(),
-        "--yes".into(),
-        bundle_arg,
-        root_blob_path.to_string_lossy().into_owned(),
-    ];
-    if let Some(token_path) = identity_token {
-        args.push("--identity-token".into());
-        args.push(token_path.to_string_lossy().into_owned());
-    }
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-
-    let output = run_or_warn("cosign", &arg_refs)?;
-    if !output.status.success() {
-        std::fs::remove_file(&root_blob_path).ok();
-        return Err(CliError::FormatFailed {
-            path: bundle.clone(),
-            source: CoreError::Corrupt {
-                reason: format!(
-                    "cosign sign-blob failed: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ),
-            },
-        });
-    }
-    println!("sigstore bundle written: {}", bundle.display());
-    std::fs::remove_file(&root_blob_path).ok();
-    Ok(())
-}
-
-/// Verify a `.lim` image's sigstore signature bundle.
-fn sigstore_verify(image: &Path, bundle: &Path, identity: Option<&str>) -> Result<(), CliError> {
-    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
-        path: image.to_path_buf(),
-        source,
-    })?;
-    let root_bytes = compute_manifest_root_bytes(&manifest_bytes)?;
-    let root_blob_path = image.with_extension("lim.root");
-    std::fs::write(&root_blob_path, root_bytes.as_slice()).map_err(|source| {
-        CliError::ReadFailed {
-            path: root_blob_path.clone(),
-            source,
-        }
-    })?;
-
-    let bundle_arg = format!("--bundle={}", bundle.display());
-    let mut args: Vec<String> = vec![
-        "verify-blob".into(),
-        bundle_arg,
-        root_blob_path.to_string_lossy().into_owned(),
-    ];
-    if let Some(id) = identity {
-        args.push("--certificate-identity".into());
-        args.push(id.into());
-        args.push("--certificate-oidc-issuer".into());
-        args.push("https://token.actions.githubusercontent.com".into());
-    }
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-
-    let output = run_or_warn("cosign", &arg_refs)?;
-    std::fs::remove_file(&root_blob_path).ok();
-    if !output.status.success() {
-        return Err(CliError::FormatFailed {
-            path: bundle.to_path_buf(),
-            source: CoreError::Corrupt {
-                reason: format!(
-                    "cosign verify-blob failed: {}",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ),
-            },
-        });
-    }
-    println!("verified: signature on {}", image.display());
-    Ok(())
-}
-
-/// Compute the Merkle root of a manifest as the raw 32 bytes.
-fn compute_manifest_root_bytes(manifest_bytes: &[u8]) -> Result<[u8; 32], CliError> {
-    let mut cursor = ManifestCursor::new(manifest_bytes);
-    let header_start = 0;
-    parse_manifest_header(&mut cursor).map_err(map_format_err)?;
-    let header_end = cursor.position();
-    let flags_start = header_end;
-    parse_feature_flags_section(&mut cursor).map_err(map_format_err)?;
-    let flags_end = cursor.position();
-    let meta_ref_start = flags_end;
-    let metadata_reference = parse_metadata_reference(&mut cursor).map_err(map_format_err)?;
-    let meta_ref_end = cursor.position();
-    let slab_index_start = meta_ref_end;
-    parse_slab_index(&mut cursor).map_err(map_format_err)?;
-    let slab_index_end = cursor.position();
-    let history_start = slab_index_end;
-    parse_history(&mut cursor).map_err(map_format_err)?;
-    let history_end = cursor.position();
-
-    let hashes = SectionHashes {
-        metadata: metadata_reference.metadata_hash,
-        format_header: hash_section(&manifest_bytes[header_start..header_end]),
-        feature_flags: hash_section(&manifest_bytes[flags_start..flags_end]),
-        metadata_reference: hash_section(&manifest_bytes[meta_ref_start..meta_ref_end]),
-        slab_index: hash_section(&manifest_bytes[slab_index_start..slab_index_end]),
-        crypto_params: hash_empty_section(),
-        ec_params: hash_empty_section(),
-        dms_policy: hash_empty_section(),
-        delta_linkage: hash_empty_section(),
-        history: hash_section(&manifest_bytes[history_start..history_end]),
-    };
-    let _ = history_start;
-    let _ = history_end;
-    let root = compute_merkle_root(&hashes);
-    Ok(*root.as_bytes())
-}
-
-fn map_format_err(source: CoreError) -> CliError {
-    CliError::FormatFailed {
-        path: PathBuf::from("<manifest>"),
-        source,
-    }
-}
-
 /// Derive the path to the slab file that holds a slice's drop. Uses
 /// the first locator of the first entry in the slab index, resolved
 /// relative to the manifest file's directory.
@@ -2984,92 +2724,6 @@ mod tests {
             recovered, b"secret",
             "k-1 shares must not reveal the secret"
         );
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn composefs_export_extracts_rootfs() {
-        // Without mkcomposefs on PATH (the common CI case), the
-        // command still extracts the tree and prints a warning.
-        let id = std::process::id();
-        let dir = std::env::temp_dir().join(format!("limni-composefs-{id}"));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-
-        let src = dir.join("src");
-        std::fs::create_dir_all(&src).expect("mkdir src");
-        std::fs::write(src.join("a.txt"), b"composefs test").expect("write a");
-        std::fs::create_dir_all(src.join("sub")).expect("mkdir sub");
-        std::fs::write(src.join("sub").join("b.txt"), b"nested").expect("write b");
-
-        let img = dir.join("img.lim");
-        limn(&src, &img).expect("limn");
-
-        let out = dir.join("out");
-        composefs_export(&img, &out).expect("export");
-
-        // Extracted rootfs must round-trip the original tree.
-        let extracted_a = std::fs::read(out.join("rootfs").join("a.txt")).expect("read a");
-        assert_eq!(extracted_a, b"composefs test");
-        let extracted_b =
-            std::fs::read(out.join("rootfs").join("sub").join("b.txt")).expect("read b");
-        assert_eq!(extracted_b, b"nested");
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn sigstore_sign_without_cosign_errors_cleanly() {
-        // On CI (and most dev machines) cosign is not installed.
-        // sigstore-sign must surface a clear error rather than panic.
-        if which::which("cosign").is_ok() {
-            return; // Skip when cosign IS installed (manual integration test).
-        }
-        let id = std::process::id();
-        let dir = std::env::temp_dir().join(format!("limni-sigstore-{id}"));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let src = dir.join("src");
-        std::fs::create_dir_all(&src).expect("mkdir src");
-        std::fs::write(src.join("a.txt"), b"sigstore test").expect("write");
-        let img = dir.join("img.lim");
-        limn(&src, &img).expect("limn");
-
-        let err = sigstore_sign(&img, None).unwrap_err();
-        match err {
-            CliError::FormatFailed { source, .. } => {
-                let msg = format!("{source}");
-                assert!(msg.contains("cosign not on PATH"), "got: {msg}");
-            }
-            other => panic!("expected FormatFailed, got {other:?}"),
-        }
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn sigstore_verify_without_cosign_errors_cleanly() {
-        if which::which("cosign").is_ok() {
-            return;
-        }
-        let id = std::process::id();
-        let dir = std::env::temp_dir().join(format!("limni-sigstore-verify-{id}"));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let src = dir.join("src");
-        std::fs::create_dir_all(&src).expect("mkdir src");
-        std::fs::write(src.join("a.txt"), b"verify test").expect("write");
-        let img = dir.join("img.lim");
-        limn(&src, &img).expect("limn");
-        let bundle = dir.join("img.sigstore.json");
-        std::fs::write(&bundle, b"{}").expect("stub bundle");
-
-        let err = sigstore_verify(&img, &bundle, None).unwrap_err();
-        match err {
-            CliError::FormatFailed { source, .. } => {
-                let msg = format!("{source}");
-                assert!(msg.contains("cosign not on PATH"), "got: {msg}");
-            }
-            other => panic!("expected FormatFailed, got {other:?}"),
-        }
-
         std::fs::remove_dir_all(&dir).ok();
     }
 }
