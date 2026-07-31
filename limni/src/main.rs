@@ -206,6 +206,21 @@ enum Command {
         shares: Vec<PathBuf>,
         output: PathBuf,
     },
+    /// Export a `.lim` image as a composefs mountable directory tree.
+    ///
+    /// Linux fast path: extracts the tree to `<out-dir>/rootfs/`, then
+    /// shells out to `mkcomposefs` (from composefs-utils) to produce
+    /// `<out-dir>/image.cfs` — an EROFS image backed by a fs-verity
+    /// content-addressed blob store. Mount on Linux ≥ 6.4 via:
+    ///
+    /// ```text
+    /// mount.composefs -o basedir=<out-dir>/objects <out-dir>/image.cfs /mnt
+    /// ```
+    ///
+    /// If `mkcomposefs` is not on PATH, the extracted rootfs is left
+    /// in place and a warning is printed; the user can install
+    /// composefs-utils and re-run.
+    ComposefsExport { image: PathBuf, out_dir: PathBuf },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -253,6 +268,7 @@ fn run() -> Result<(), CliError> {
             shares,
         } => shamir_split(&input, &output_prefix, threshold, shares),
         Command::ShamirCombine { shares, output } => shamir_combine(&shares, &output),
+        Command::ComposefsExport { image, out_dir } => composefs_export(&image, &out_dir),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -1674,6 +1690,92 @@ fn getrandom_rng(out: &mut [u8]) -> Result<(), limnifs_core::shamir::ShamirError
     })
 }
 
+/// Export a `.lim` image as a composefs mountable directory tree.
+///
+/// This is the Linux fast path: extracts the tree to `<out-dir>/rootfs/`,
+/// then shells out to `mkcomposefs` (from composefs-utils) to produce
+/// `<out-dir>/image.cfs` — an EROFS image backed by a fs-verity
+/// content-addressed blob store.
+///
+/// If `mkcomposefs` is not on PATH, the extracted rootfs is left in
+/// place and a warning is printed. The user can install composefs-utils
+/// and re-run, or copy the rootfs to a Linux machine and run
+/// `mkcomposefs` there.
+fn composefs_export(image: &Path, out_dir: &Path) -> Result<(), CliError> {
+    std::fs::create_dir_all(out_dir).map_err(|source| CliError::ReadFailed {
+        path: out_dir.to_path_buf(),
+        source,
+    })?;
+
+    let rootfs = out_dir.join("rootfs");
+    if rootfs.exists() {
+        std::fs::remove_dir_all(&rootfs).map_err(|source| CliError::ReadFailed {
+            path: rootfs.clone(),
+            source,
+        })?;
+    }
+    std::fs::create_dir_all(&rootfs).map_err(|source| CliError::ReadFailed {
+        path: rootfs.clone(),
+        source,
+    })?;
+
+    extract(image, &rootfs)?;
+
+    let descriptor = out_dir.join("image.cfs");
+    let objects_dir = out_dir.join("objects");
+
+    match which::which("mkcomposefs") {
+        Ok(mkcomposefs_path) => {
+            std::fs::create_dir_all(&objects_dir).map_err(|source| CliError::ReadFailed {
+                path: objects_dir.clone(),
+                source,
+            })?;
+            let status = std::process::Command::new(mkcomposefs_path)
+                .arg("--print-digest")
+                .arg(&rootfs)
+                .arg(&descriptor)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .status()
+                .map_err(|source| CliError::ReadFailed {
+                    path: descriptor.clone(),
+                    source,
+                })?;
+            if !status.success() {
+                return Err(CliError::FormatFailed {
+                    path: descriptor.clone(),
+                    source: CoreError::Corrupt {
+                        reason: format!(
+                            "mkcomposefs exited with status {status}; install composefs-utils"
+                        ),
+                    },
+                });
+            }
+            println!(
+                "composefs descriptor: {} (root: {}, objects: {})",
+                descriptor.display(),
+                rootfs.display(),
+                objects_dir.display(),
+            );
+            println!(
+                "mount on Linux >= 6.4 via:\n  mount.composefs -o basedir={} {} /mnt",
+                objects_dir.display(),
+                descriptor.display(),
+            );
+        }
+        Err(_) => {
+            eprintln!(
+                "warning: mkcomposefs not on PATH; extracted rootfs only.\n\
+                 Install composefs-utils (https://github.com/containers/composefs) and re-run,\n\
+                 or run on this extracted tree:\n  mkcomposefs {} {}",
+                rootfs.display(),
+                descriptor.display(),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Derive the path to the slab file that holds a slice's drop. Uses
 /// the first locator of the first entry in the slab index, resolved
 /// relative to the manifest file's directory.
@@ -2483,6 +2585,36 @@ mod tests {
             recovered, b"secret",
             "k-1 shares must not reveal the secret"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn composefs_export_extracts_rootfs() {
+        // Without mkcomposefs on PATH (the common CI case), the
+        // command still extracts the tree and prints a warning.
+        let id = std::process::id();
+        let dir = std::env::temp_dir().join(format!("limni-composefs-{id}"));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        let src = dir.join("src");
+        std::fs::create_dir_all(&src).expect("mkdir src");
+        std::fs::write(src.join("a.txt"), b"composefs test").expect("write a");
+        std::fs::create_dir_all(src.join("sub")).expect("mkdir sub");
+        std::fs::write(src.join("sub").join("b.txt"), b"nested").expect("write b");
+
+        let img = dir.join("img.lim");
+        limn(&src, &img).expect("limn");
+
+        let out = dir.join("out");
+        composefs_export(&img, &out).expect("export");
+
+        // Extracted rootfs must round-trip the original tree.
+        let extracted_a = std::fs::read(out.join("rootfs").join("a.txt")).expect("read a");
+        assert_eq!(extracted_a, b"composefs test");
+        let extracted_b =
+            std::fs::read(out.join("rootfs").join("sub").join("b.txt")).expect("read b");
+        assert_eq!(extracted_b, b"nested");
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }
