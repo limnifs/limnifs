@@ -161,6 +161,9 @@ fn write_one_op(op: &EpochOp, out: &mut Vec<u8>) {
             out.extend_from_slice(&len.to_le_bytes());
             out.extend_from_slice(&mtime.to_le_bytes());
         }
+        // Chmod and Mkdir share the same serialised form (path + mode).
+        // The opcodes differ, which is what distinguishes them on the wire.
+        #[allow(clippy::match_same_arms)]
         EpochOp::Chmod { path, mode } => {
             write_path(path, out);
             out.extend_from_slice(&mode.to_le_bytes());
