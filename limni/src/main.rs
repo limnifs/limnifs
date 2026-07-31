@@ -163,6 +163,20 @@ enum Command {
     Benchmark,
     /// Generate a random AEAD key (XChaCha20-Poly1305, 32 bytes).
     Keygen,
+    /// Encrypt a file using XChaCha20-Poly1305.
+    Seal {
+        input: PathBuf,
+        output: PathBuf,
+        /// 64-character hex key (32 bytes).
+        key: String,
+    },
+    /// Decrypt a file sealed with `limni seal`.
+    Open {
+        input: PathBuf,
+        output: PathBuf,
+        /// 64-character hex key (32 bytes).
+        key: String,
+    },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -196,6 +210,8 @@ fn run() -> Result<(), CliError> {
         Command::Check { image } => check_cmd(&image),
         Command::Benchmark => benchmark(),
         Command::Keygen => keygen(),
+        Command::Seal { input, output, key } => seal_cmd(&input, &output, &key),
+        Command::Open { input, output, key } => open_cmd(&input, &output, &key),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -1414,6 +1430,109 @@ fn keygen() -> Result<(), CliError> {
         s
     });
     Ok(())
+}
+
+/// Encrypt a file using XChaCha20-Poly1305.
+fn seal_cmd(input: &Path, output: &Path, key_hex: &str) -> Result<(), CliError> {
+    let key = parse_hex_key(key_hex)?;
+    let plaintext = std::fs::read(input).map_err(|source| CliError::ReadFailed {
+        path: input.to_path_buf(),
+        source,
+    })?;
+    let mut nonce = vec![0u8; 24];
+    getrandom::getrandom(&mut nonce).map_err(|e| CliError::FormatFailed {
+        path: input.to_path_buf(),
+        source: CoreError::Corrupt {
+            reason: format!("seal: CSPRNG failed: {e}"),
+        },
+    })?;
+    let sealed = limnifs_core::crypto::seal(
+        limnifs_core::aead::AEAD_XCHACHA20_POLY1305,
+        &key,
+        &nonce,
+        &plaintext,
+        b"",
+    )
+    .map_err(|source| CliError::FormatFailed {
+        path: input.to_path_buf(),
+        source,
+    })?;
+    let mut out = Vec::with_capacity(1 + 24 + sealed.len());
+    out.push(limnifs_core::aead::AEAD_XCHACHA20_POLY1305);
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&sealed);
+    std::fs::write(output, &out).map_err(|source| CliError::ReadFailed {
+        path: output.to_path_buf(),
+        source,
+    })?;
+    println!(
+        "{}: sealed {} bytes → {} bytes",
+        input.display(),
+        plaintext.len(),
+        out.len()
+    );
+    Ok(())
+}
+
+/// Decrypt a file sealed with `limni seal`.
+fn open_cmd(input: &Path, output: &Path, key_hex: &str) -> Result<(), CliError> {
+    let key = parse_hex_key(key_hex)?;
+    let data = std::fs::read(input).map_err(|source| CliError::ReadFailed {
+        path: input.to_path_buf(),
+        source,
+    })?;
+    if data.len() < 25 {
+        return Err(CliError::FormatFailed {
+            path: input.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: "sealed file too short".into(),
+            },
+        });
+    }
+    let aead_id = data[0];
+    let nonce = &data[1..25];
+    let ciphertext = &data[25..];
+    let plaintext =
+        limnifs_core::crypto::open(aead_id, &key, nonce, ciphertext, b"").map_err(|source| {
+            CliError::FormatFailed {
+                path: input.to_path_buf(),
+                source,
+            }
+        })?;
+    std::fs::write(output, &plaintext).map_err(|source| CliError::ReadFailed {
+        path: output.to_path_buf(),
+        source,
+    })?;
+    println!(
+        "{}: opened {} bytes → {} bytes",
+        input.display(),
+        data.len(),
+        plaintext.len()
+    );
+    Ok(())
+}
+
+fn parse_hex_key(hex: &str) -> Result<Vec<u8>, CliError> {
+    let hex = hex.trim();
+    if hex.len() != 64 {
+        return Err(CliError::FormatFailed {
+            path: PathBuf::from("--key"),
+            source: CoreError::Corrupt {
+                reason: format!("key must be 64 hex chars (32 bytes), got {}", hex.len()),
+            },
+        });
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&hex[i..i + 2], 16).map_err(|_| CliError::FormatFailed {
+                path: PathBuf::from("--key"),
+                source: CoreError::Corrupt {
+                    reason: "key contains invalid hex".into(),
+                },
+            })
+        })
+        .collect()
 }
 
 /// Derive the path to the slab file that holds a slice's drop. Uses
