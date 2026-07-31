@@ -41,6 +41,7 @@ pub mod cursor;
 pub mod delta_linkage;
 pub mod directory_node;
 pub mod dms_policy;
+pub mod dms_scheme;
 pub mod drop_record;
 pub mod ec_params;
 pub mod ec_scheme;
