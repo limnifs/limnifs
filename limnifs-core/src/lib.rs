@@ -46,6 +46,7 @@ pub mod drop_record;
 pub mod ec_params;
 pub mod ec_repair;
 pub mod ec_scheme;
+pub mod epoch;
 pub mod error;
 pub mod feature_flags;
 pub mod fetch;
