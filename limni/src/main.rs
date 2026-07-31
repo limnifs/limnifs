@@ -201,6 +201,8 @@ enum Command {
     ///
     /// Pass at least `k` share paths; output is written to the given path.
     ShamirCombine {
+        /// One or more share paths (use at least `k` for reconstruction).
+        #[arg(num_args = 1.., required = true)]
         shares: Vec<PathBuf>,
         output: PathBuf,
     },
@@ -1326,6 +1328,13 @@ fn check_cmd(image: &Path) -> Result<(), CliError> {
         source,
     };
     let (_blob, _, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+
+    if slab_index.is_empty() {
+        println!("integrity check: {}", image.display());
+        println!("  drops checked:  0 (no slabs referenced)");
+        println!("  status:         all drops verified");
+        return Ok(());
+    }
 
     let slab_path = resolve_slab_path(image, &slab_index)?;
     let slab_bytes = std::fs::read(&slab_path).map_err(|source| CliError::ReadFailed {
