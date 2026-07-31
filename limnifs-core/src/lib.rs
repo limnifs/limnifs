@@ -50,6 +50,8 @@ pub mod feature_flags;
 pub mod fetch;
 pub mod header;
 pub mod history;
+#[cfg(feature = "http")]
+pub mod http_locator;
 pub mod inode;
 pub mod locator;
 pub mod merkle;
@@ -113,5 +115,8 @@ pub use slab_index::{
     SLAB_INDEX_SECTION_VERSION,
 };
 pub use slab_reader::{parse_slab, SlabView};
+
+#[cfg(feature = "http")]
+pub use http_locator::HttpLocator;
 
 pub use limnifs_format::{ManifestRoot, MANIFEST_HEADER_LEN};
