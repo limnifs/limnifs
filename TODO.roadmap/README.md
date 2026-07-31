@@ -6,14 +6,14 @@ task spec with goals, acceptance criteria, and dependency links.
 ## Air-gapped baseline
 
 The default build (`cargo build`) MUST work on air-gapped machines with
-no network, no C libraries, no external services. Feature flags opt in
-to capabilities that require external resources:
+no network, no C libraries, no external services. As of PR #108 the
+compression layer is **100% pure Rust** (lz4_flex + ruzstd + lzma-rs);
+there is no longer a `zstd` or `xz` feature flag for C bindings.
+Feature flags remain for capabilities that require external resources:
 
 | Flag | Adds | Air-gapped safe? |
 |---|---|---|
-| (none, default) | BLAKE3, LZ4, Ed25519, local timestamps | ✅ |
-| `zstd` | Zstandard compression (libzstd) | ⚠️ C dep |
-| `xz` | XZ/LZMA2 compression (liblzma) | ⚠️ C dep |
+| (none, default) | BLAKE3, LZ4, ZSTD, LZMA decode, Ed25519, local timestamps | ✅ Pure Rust |
 | `http` | HTTP/S3/IPFS locators | ⚠️ Network |
 | `fuse` | FUSE mount | ⚠️ System FUSE |
 | `key-wrap` | HPKE X25519 key wrap | ✅ Pure Rust |
@@ -27,12 +27,12 @@ to capabilities that require external resources:
 
 | # | File | Phase | Priority | Depends on |
 |---|---|---|---|---|
-| 01 | 01-feature-gate-codecs.md | Foundation | P0 (blocks air-gapped) | — |
+| 01 | 01-feature-gate-codecs.md | Foundation | **superseded by PR #108** (pure-Rust codecs, no gating needed) | — |
 | 02 | 02-epoch-format.md | Writable | P0 | — |
 | 03 | 03-epoch-replay.md | Writable | P0 | 02 |
 | 04 | 04-epoch-commit.md | Writable | P0 | 02, 03 |
 | 05 | 05-overlay-mount.md | Writable | P1 | 02, fuse |
-| 06 | 06-codec-map-flag.md | Codec | P1 | 01 |
+| 06 | 06-codec-map-flag.md | Codec | P1 | 35 |
 | 07 | 07-enhanced-classifier.md | Codec | P1 | — |
 | 08 | 08-epoch-signatures.md | Provenance | P1 | 02, signing |
 | 09 | 09-epoch-timestamps.md | Provenance | P1 | 02 |
@@ -57,3 +57,9 @@ to capabilities that require external resources:
 | 28 | 28-gdpr-forget.md | Compliance | P3 | 02, 10, 11 |
 | 29 | 29-self-healing.md | Reliability | P3 | 02 |
 | 30 | 30-tiered-storage.md | Performance | P3 | 02 |
+| 31 | 31-brotli-codec.md | Codec | P1 (quick win) | 35 |
+| 32 | 32-deflate-codec.md | Codec | P1 (quick win) | 35 |
+| 33 | 33-full-zstd-port.md | Codec | P1 (months) | 35 |
+| 34 | 34-full-lzma-port.md | Codec | P1 (months) | 35 |
+| 35 | 35-codec-registry-refactor.md | Codec | **P0 (blocks 31–34, 06)** | PR #108 |
+| 36 | 36-dwarfs-algo-parity.md | Codec | P1 umbrella | 31, 32, 33, 34, 06, 07 |
