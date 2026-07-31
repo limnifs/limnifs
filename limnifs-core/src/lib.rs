@@ -59,6 +59,7 @@ pub mod metadata;
 pub mod metadata_reference;
 #[cfg(feature = "http")]
 pub mod s3_locator;
+pub mod shamir;
 pub mod slab;
 pub mod slab_index;
 pub mod slab_reader;
