@@ -86,7 +86,7 @@ to main; zero open PRs.
 | 05-dms (Shamir) | done |
 | 05-dms (time-lock) | gated on hardware-drift calibration |
 | IPFS locator + CAR | done |
-| 11-composefs-path | pending |
+| 11-composefs-path | pending (Linux-only; FUSE is portable default) |
 | 14-website | pending (separate repo limnifs/limnifs.org) |
 
 ### Phase 1 status
@@ -94,14 +94,33 @@ to main; zero open PRs.
 | Task | Status |
 |---|---|
 | 04-writer-pipeline | done |
-| 10-cli | done (20 commands) |
+| 10-cli | done (22 commands) |
 | 11-mount (FUSE) | done |
 | 12-tebako-integration | blocked (cross-org, needs tebako upstream) |
 
 ### Test counts
 
-- Rust: 469 tests. Python: 55 tests. All green.
+- Rust: 471 tests. Python: 55 tests. All green.
 - Zero open PRs across all repos.
+
+### What is genuinely left
+
+These items are deferred because they need resources outside the
+codebase:
+
+- **Sigstore keyless (Fulcio + Rekor)** — needs OAuth client +
+  certificate transparency log infrastructure. v1 ships keypair mode.
+- **Composefs** — Linux-kernel-specific (EROFS). FUSE remains the
+  portable default.
+- **Tebako integration** — cross-org dependency on the tebako project.
+- **Website (limnifs.org)** — separate repo, full standalone build.
+- **DwarFS Frozen2 adapter (09)** — separate repo (limnifs-frozen2).
+- **Reproducible releases + SBOM** — CI infrastructure work
+  (CycloneDX generation, license scan, sigstore keyless, crates.io
+  publish pipeline).
+- **DMS time-lock puzzle** — gated on hardware-drift calibration
+  decision per design §16.3.
+
 
 ## 2026-07-31 — Crypto + full CLI suite (session 23)
 
