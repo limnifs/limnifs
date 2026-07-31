@@ -16,6 +16,7 @@
 //! | 0x03 | xz    | **no** | yes (`lzma-rs`) | Decode-only for legacy drops |
 //! | 0x04 | brotli | yes (`brotli` q11) | yes (`brotli`) | Best ratio; pure Rust |
 //! | 0x05 | deflate | yes (`miniz_oxide`) | yes (`miniz_oxide`) | RFC 1951; universal interop; pure Rust |
+//! | 0x06 | snappy | yes (`omnizip-snappy`) | yes (`omnizip-snappy`) | Google's high-speed codec; pure Rust |
 //!
 //! **Why XZ is decode-only.** `lzma-rs` 0.3.0 ships an LZMA2 "encoder" that
 //! wraps input as uncompressed chunks (`encode/lzma2.rs`) and a raw-LZMA
@@ -32,6 +33,7 @@
 mod brotli;
 mod deflate;
 mod lz4;
+mod snappy;
 mod store;
 mod xz;
 mod zstd;
@@ -56,6 +58,9 @@ pub const CODEC_BROTLI: u8 = 0x04;
 /// Codec id 0x05: DEFLATE stream format (`miniz_oxide`, pure Rust).
 /// Raw RFC 1951 inside a zlib wrapper (RFC 1950).
 pub const CODEC_DEFLATE: u8 = 0x05;
+/// Codec id 0x06: Snappy format (`omnizip-snappy` → `snap`, pure Rust).
+/// No compression levels; ~500 MB/s encode and decode.
+pub const CODEC_SNAPPY: u8 = 0x06;
 
 /// The behaviour every compression codec implements. New codecs register
 /// a `Codec` impl with [`CodecRegistry::register`]; the dispatch code
@@ -174,6 +179,7 @@ impl Default for CodecRegistry {
         registry.register(Box::new(xz::XzCodec));
         registry.register(Box::new(brotli::BrotliCodec));
         registry.register(Box::new(deflate::DeflateCodec));
+        registry.register(Box::new(snappy::SnappyCodec));
         registry
     }
 }
@@ -489,6 +495,46 @@ mod tests {
     }
 
     #[test]
+    fn snappy_round_trips() {
+        let data = b"The quick brown fox jumps over the lazy dog. ".repeat(100);
+        let compressed = compress(CODEC_SNAPPY, &data).expect("snappy compress");
+        let decompressed = decompress(
+            CODEC_SNAPPY,
+            &compressed,
+            u32::try_from(data.len()).expect("fits u32"),
+        )
+        .expect("snappy decompress");
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn snappy_compresses_repetitive_data() {
+        let data = vec![0x41u8; 10_000];
+        let compressed = compress(CODEC_SNAPPY, &data).expect("snappy compress");
+        assert!(
+            compressed.len() < data.len(),
+            "snappy should compress repetitive data: {} vs {}",
+            compressed.len(),
+            data.len()
+        );
+    }
+
+    #[test]
+    fn snappy_decompress_rejects_length_mismatch() {
+        let data = b"hello world";
+        let compressed = compress(CODEC_SNAPPY, data).expect("snappy compress");
+        match decompress(CODEC_SNAPPY, &compressed, 99) {
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(
+                    reason.contains("length mismatch") || reason.contains("does not match"),
+                    "got: {reason}"
+                );
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn registry_registers_custom_codec_without_changing_dispatch() {
         struct NoopCodec;
         const NOOP_ID: u8 = 0xFE;
@@ -539,7 +585,7 @@ mod tests {
     }
 
     #[test]
-    fn default_registry_has_all_six_codecs() {
+    fn default_registry_has_all_seven_codecs() {
         let registry = default_registry();
         assert!(registry.find(CODEC_STORE).is_some());
         assert!(registry.find(CODEC_LZ4).is_some());
@@ -547,6 +593,7 @@ mod tests {
         assert!(registry.find(CODEC_XZ).is_some());
         assert!(registry.find(CODEC_BROTLI).is_some());
         assert!(registry.find(CODEC_DEFLATE).is_some());
+        assert!(registry.find(CODEC_SNAPPY).is_some());
         assert!(registry.find(0xFF).is_none());
     }
 }
