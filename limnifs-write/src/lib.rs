@@ -157,27 +157,20 @@ fn process_file(
         let drop_id = hash_section(chunk);
 
         let class = classifier.classify(chunk);
-        let (codec, compressed) = match class {
-            classifier::Class::Binary => {
-                // LZMA2 beats ZSTD by 10-20% on structured/binary data.
-                let c =
-                    limnifs_core::codec::compress_xz(chunk, limnifs_core::codec::XZ_DEFAULT_PRESET)
-                        .unwrap_or_else(|_| chunk.to_vec());
-                (limnifs_core::codec::CODEC_XZ, c)
-            }
+        let codec_id = match class {
+            classifier::Class::Binary => limnifs_core::codec::best_binary_codec(),
             classifier::Class::Text | classifier::Class::Code => {
-                // ZSTD handles repetitive text/code near-optimally.
-                let c = limnifs_core::codec::compress_zstd(
-                    chunk,
-                    limnifs_core::codec::ZSTD_DEFAULT_LEVEL,
-                )
-                .unwrap_or_else(|_| chunk.to_vec());
-                (limnifs_core::codec::CODEC_ZSTD, c)
+                limnifs_core::codec::best_compressible_codec()
             }
-            _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
+            _ => limnifs_core::codec::CODEC_STORE,
+        };
+        let compressed = if codec_id == limnifs_core::codec::CODEC_STORE {
+            chunk.to_vec()
+        } else {
+            limnifs_core::codec::compress(codec_id, chunk).unwrap_or_else(|_| chunk.to_vec())
         };
 
-        drops.push((drop_id, chunk.to_vec(), compressed, codec));
+        drops.push((drop_id, chunk.to_vec(), compressed, codec_id));
         slices.push(PendingSlice {
             drop_id,
             file_byte_start: file_offset,
