@@ -3,6 +3,105 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-31 — omnizip-rs pivot + DEFLATE + epoch format + roadmap (session 29)
+
+### Done
+
+User directive: "For any compression algorithm (research if there are
+NEWER algos!) add them to omnizip-rs. Write all remaining work TODOs and
+complete all of them. Once done fully perform the integration back to
+limnifs."
+
+**omnizip-rs roadmap (27 TODO files) —**
+[omnizip/omnizip-rs#1](https://github.com/omnizip/omnizip-rs/pull/1).
+MECE decomposition: foundation (codec trait, differential harness,
+conformance corpus), core codecs (LZMA 8,464 LOC, ZSTD 3,150 LOC,
+DEFLATE, bzip2, PPMd), filters (BCJ + delta), newer algorithms
+(Snappy, libdeflate, LZ4 HC, ZSTD dictionaries), research tier (ZPAQ,
+GLZA, algorithm watch), infrastructure (bench, fuzz, SIMD, MT, no_std,
+crates.io), and LimniFS integration. Each file has the Ruby → Rust
+module map, phased plan, and acceptance criteria.
+
+**omnizip-codecs foundation crate —**
+[omnizip/omnizip-rs#2](https://github.com/omnizip/omnizip-rs/pull/2).
+The `Codec` trait + `CodecRegistry` that every codec crate plugs into.
+`CodecId` (u16 newtype), `CompressionLevel` (u8 newtype), `OmnizipError`
+(unified). OCP: adding a codec = new file + `register()` call; dispatch
+untouched. 5 tests. Clippy clean.
+
+**DEFLATE codec 0x05 —**
+[limnifs/limnifs#115](https://github.com/limnifs/limnifs/pull/115).
+Pure-Rust DEFLATE via `miniz_oxide`. Raw RFC 1951 inside a zlib wrapper
+(RFC 1950). Universal interop (gzip, zlib, PNG, HTTP). Codec table now
+holds 6 codecs (store, lz4, zstd, xz-decode-only, brotli, deflate). 485
+tests pass.
+
+**Epoch format (writable images foundation) —**
+[limnifs/limnifs#116](https://github.com/limnifs/limnifs/pull/116).
+Content-addressed epoch chain: `EpochId = BLAKE3(epoch_bytes)`. Header
+(parent_epoch_id, base_image_root, sequence, hashes, timestamp) +
+operations section (Add/Remove/Modify/Chmod/Rename/Mkdir/Rmdir) +
+drops section. Tamper-evident (own_epoch_id verified on parse).
+Deterministic serialisation. 7 tests. 489 workspace tests pass. Unblocks
+roadmap items 03 (replay) and 04 (commit).
+
+**LZMA Phase A foundation —**
+[omnizip/omnizip-rs#3](https://github.com/omnizip/omnizip-rs/pull/3).
+Ported the constants module (112 LOC) line-by-line from omnizip Ruby.
+Range coder params, state machine, dictionary limits, match lengths,
+distance encoding. `LzmaLevel` validates against these constants. First
+real algorithmic code in omnizip-lzma. 7 tests.
+
+### Algorithm research conclusions
+
+| Algorithm | Verdict | Reason |
+|---|---|---|
+| Snappy | add (P2) | Parquet/ORC interop; pure-Rust `snap` crate exists |
+| libdeflate | add (P2) | 2–3x faster DEFLATE; port from C |
+| LZ4 HC | add (P2) | `lz4_flex` already supports it |
+| ZSTD dictionaries | add (P2) | Critical for small-file ratio |
+| ZPAQ | defer (P3) | GPL-3 license concern; LZMA-9 sufficient |
+| GLZA | defer (P3) | GPL-3; determinism risk; niche |
+| Learned/ML | rejected | Non-deterministic; violates content-addressing |
+| C wrappers | rejected | Violates pure-Rust + air-gapped rules |
+| Intel IAA / ARM SVE | watch only | Hardware; not portable software targets |
+
+### Codec table (limnifs post-session)
+
+| Id | Name | Encode | Decode | Pure Rust |
+|---|---|---|---|---|
+| 0x00 | store | ✅ | ✅ | ✅ |
+| 0x01 | lz4 | ✅ | ✅ | ✅ lz4_flex |
+| 0x02 | zstd | ✅ L1 | ✅ | ✅ ruzstd |
+| 0x03 | xz | ❌ | ✅ | ✅ lzma-rs (decode-only) |
+| 0x04 | brotli | ✅ q11 | ✅ | ✅ brotli |
+| 0x05 | deflate | ✅ L6 | ✅ | ✅ miniz_oxide |
+
+### Test counts
+
+- limnifs: 489 tests. All green.
+- omnizip-rs: 12 tests (5 codecs + 7 lzma). All green.
+- Zero open PRs.
+
+### In progress / Blockers
+
+- Nothing mid-flight. No blockers.
+
+### Next
+
+- **omnizip-lzma Phase A decoder port** (TODO.omnizip-rs/10): range coder,
+  match finder, literal/length/distance coders, then the LZMA-alone +
+  XZ-utils decoders. ~2–3 weeks of focused porting from omnizip Ruby.
+- **omnizip-zstd Phase A decoder port** (TODO.omnizip-rs/13): frame parse,
+  FSE decode, Huffman decode, sequence execution. ~1–2 weeks.
+- **LimniFS ↔ omnizip-rs integration** (TODO.omnizip-rs/40): deferred
+  until omnizip-lzma Phase A ships. Then replace `lzma-rs` with
+  `omnizip-lzma` and `ruzstd` with `omnizip-zstd` in `limnifs-core`.
+- **Epoch replay** (limnifs roadmap 03) and **epoch commit** (04): build
+  on the epoch format to reconstruct state and produce new epochs.
+
+---
+
 ## 2026-07-31 — Pure-Rust codecs + registry refactor + Brotli (session 28)
 
 ### Done
