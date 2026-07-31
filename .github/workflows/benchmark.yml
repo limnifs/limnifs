@@ -1,0 +1,90 @@
+name: Benchmark
+
+# Per benchmarks/README.md: runs the benchmark suite on every release
+# tag and attaches JSON + Markdown reports to the GitHub Release.
+# Also runnable on push to main for the "tiny" dataset (smoke test).
+#
+# Cross-format benchmarks (tar+zstd, squashfs, dwarfs) run only if
+# the relevant tool is installed; the LimniFS column always appears.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      datasets:
+        description: "Comma-separated dataset names (tiny, python, linux)"
+        required: false
+        default: "tiny"
+        type: string
+      iterations:
+        description: "Iterations per operation"
+        required: false
+        default: "3"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: benchmark-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: Benchmark (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: benchmark-${{ matrix.os }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install comparison tools (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            squashfs-tools zstd
+          # DwarFS is optional; install if available.
+          sudo apt-get install -y --no-install-recommends dwarfs || \
+            echo "dwarfs not packaged on this runner; will skip"
+
+      - name: Install comparison tools (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install zstd
+          brew install squashfs || echo "squashfs not in homebrew"
+          brew install dwarfs || echo "dwarfs not in homebrew"
+
+      - name: Run benchmark
+        run: |
+          python3 benchmarks/run_benchmarks.py \
+            --datasets "${{ inputs.datasets || 'tiny' }}" \
+            --iterations "${{ inputs.iterations || '3' }}"
+
+      - name: Upload report artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.os }}
+          path: benchmarks/results/bench_*.json
+          if-no-files-found: error
+
+      - name: Attach to release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            benchmarks/results/bench_*.json
+            benchmarks/results/bench_*.md
