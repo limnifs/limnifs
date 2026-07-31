@@ -46,6 +46,8 @@ cargo build --release --features fuse
 | `limni gc <image.lim>` | Find unreferenced drops (slab garbage analysis) |
 | `limni dedup <image.lim>` | Analyse drop dedup across files |
 | `limni slab <slab.bin>` | Inspect a slab file (drop records, codecs, ratios) |
+| `limni check <image.lim>` | Deep integrity check (BLAKE3 hash verification) |
+| `limni benchmark` | Quick write/read/extract benchmark on synthetic tree |
 
 ### Mount
 
