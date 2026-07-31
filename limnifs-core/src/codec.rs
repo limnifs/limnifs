@@ -10,11 +10,11 @@
 //! | Id  | Name | Encode | Decode | Notes |
 //! |-----|------|--------|--------|-------|
 //! | 0x00 | store | yes (identity) | yes | No compression |
-//! | 0x01 | lz4   | yes ([`lz4_flex`]) | yes | Fast baseline; pure Rust |
-//! | 0x02 | zstd  | yes ([`ruzstd`] `Fastest`) | yes ([`ruzstd`]) | Pure Rust; ZSTD level 1 |
-//! | 0x03 | xz    | **no** | yes ([`lzma-rs`]) | Decode-only for legacy drops |
+//! | 0x01 | lz4   | yes (`lz4_flex`) | yes | Fast baseline; pure Rust |
+//! | 0x02 | zstd  | yes (`ruzstd` `Fastest`) | yes (`ruzstd`) | Pure Rust; ZSTD level 1 |
+//! | 0x03 | xz    | **no** | yes (`lzma-rs`) | Decode-only for legacy drops |
 //!
-//! **Why XZ is decode-only.** [`lzma-rs`] 0.3.0 ships an LZMA2 "encoder" that
+//! **Why XZ is decode-only.** `lzma-rs` 0.3.0 ships an LZMA2 "encoder" that
 //! wraps input as uncompressed chunks (`encode/lzma2.rs`) and a raw-LZMA
 //! encoder that emits literals only (`encode/dumbencoder.rs`). Neither
 //! performs real compression. There is no mature pure-Rust LZMA encoder as
@@ -32,13 +32,13 @@ use crate::error::CoreError;
 
 /// Codec id 0x00: store (no compression).
 pub const CODEC_STORE: u8 = 0x00;
-/// Codec id 0x01: LZ4 block format ([`lz4_flex`], pure Rust).
+/// Codec id 0x01: LZ4 block format (`lz4_flex`, pure Rust).
 pub const CODEC_LZ4: u8 = 0x01;
-/// Codec id 0x02: Zstandard frame format ([`ruzstd`], pure Rust).
+/// Codec id 0x02: Zstandard frame format (`ruzstd`, pure Rust).
 /// Encode uses `CompressionLevel::Fastest` (ZSTD level 1); decode supports
 /// any level the reference encoder can produce.
 pub const CODEC_ZSTD: u8 = 0x02;
-/// Codec id 0x03: XZ/LZMA2 format. Decode-only in pure Rust ([`lzma-rs`]).
+/// Codec id 0x03: XZ/LZMA2 format. Decode-only in pure Rust (`lzma-rs`).
 pub const CODEC_XZ: u8 = 0x03;
 
 /// Returns the best available codec for compressible content classes.
@@ -191,7 +191,7 @@ pub fn compress_lz4_with_size(plaintext: &[u8]) -> Vec<u8> {
     lz4_flex::compress_prepend_size(plaintext)
 }
 
-/// Compress with Zstandard via [`ruzstd`] at `CompressionLevel::Fastest`
+/// Compress with Zstandard via `ruzstd` at `CompressionLevel::Fastest`
 /// (ZSTD level 1). The output is a standard ZSTD frame decodable by any
 /// conformant ZSTD decoder.
 ///
