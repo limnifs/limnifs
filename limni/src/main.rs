@@ -108,6 +108,12 @@ enum Command {
         image: PathBuf,
         /// Slash-separated file path inside the image.
         path: String,
+        /// Byte offset to start reading from (default: 0).
+        #[arg(long)]
+        offset: Option<u64>,
+        /// Maximum number of bytes to read (default: all).
+        #[arg(long)]
+        length: Option<u64>,
     },
     /// Print an inode's metadata (number, mode, sizes, content handle).
     Stat { image: PathBuf, path: String },
@@ -196,7 +202,12 @@ fn run() -> Result<(), CliError> {
         Command::Verify { image, json } => verify(&image, json),
         Command::Limn { source, output } => limn(&source, &output),
         Command::Ls { image, path } => ls(&image, &path),
-        Command::Cat { image, path } => cat(&image, &path),
+        Command::Cat {
+            image,
+            path,
+            offset,
+            length,
+        } => cat(&image, &path, offset, length),
         Command::Stat { image, path } => stat(&image, &path),
         Command::Tree { image, path } => tree(&image, &path),
         Command::Extract { image, dest } => extract(&image, &dest),
@@ -504,7 +515,7 @@ fn ls(image: &Path, path: &str) -> Result<(), CliError> {
 /// write the file at `path` to stdout. Inline files are written
 /// directly; drop-backed files are read from the slab file that lives
 /// alongside the manifest (per the writer's `file:` locator).
-fn cat(image: &Path, path: &str) -> Result<(), CliError> {
+fn cat(image: &Path, path: &str, offset: Option<u64>, length: Option<u64>) -> Result<(), CliError> {
     use std::io::Write;
     let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
         path: image.to_path_buf(),
@@ -528,14 +539,11 @@ fn cat(image: &Path, path: &str) -> Result<(), CliError> {
             },
         })?;
 
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
+    // Collect the full file data first, then apply offset/length.
+    let mut file_data: Vec<u8> = Vec::new();
     match &target_inode.content_handle {
         ContentHandle::InlineData(data) => {
-            out.write_all(data).map_err(|source| CliError::ReadFailed {
-                path: image.to_path_buf(),
-                source,
-            })?;
+            file_data.extend_from_slice(data);
         }
         ContentHandle::SliceMap(slices) => {
             for slice in slices {
@@ -563,11 +571,7 @@ fn cat(image: &Path, path: &str) -> Result<(), CliError> {
                         },
                     })?
                     .map_err(map_err)?;
-                out.write_all(&plaintext)
-                    .map_err(|source| CliError::ReadFailed {
-                        path: image.to_path_buf(),
-                        source,
-                    })?;
+                file_data.extend_from_slice(&plaintext);
             }
         }
         other => {
@@ -581,6 +585,30 @@ fn cat(image: &Path, path: &str) -> Result<(), CliError> {
             });
         }
     }
+
+    let total_len = u64::try_from(file_data.len()).unwrap_or(u64::MAX);
+    let start = offset.unwrap_or(0).min(total_len);
+    let remaining = total_len - start;
+    let take = length.unwrap_or(remaining).min(remaining);
+    let start_usize = usize::try_from(start).map_err(|_| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source: CoreError::Corrupt {
+            reason: "cat: offset exceeds addressable size on this platform".into(),
+        },
+    })?;
+    let take_usize = usize::try_from(take).map_err(|_| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source: CoreError::Corrupt {
+            reason: "cat: length exceeds addressable size on this platform".into(),
+        },
+    })?;
+    let out = std::io::stdout();
+    let mut out = out.lock();
+    out.write_all(&file_data[start_usize..start_usize + take_usize])
+        .map_err(|source| CliError::ReadFailed {
+            path: image.to_path_buf(),
+            source,
+        })?;
     Ok(())
 }
 
@@ -2101,7 +2129,7 @@ mod tests {
         // The ls-e2e tree has a.txt with content "aaa". Redirecting
         // stdout from cat() directly is hard inside a unit test; the
         // absence of an Err proves end-to-end success.
-        cat(&image, "/a.txt").expect("cat inline file succeeds");
+        cat(&image, "/a.txt", None, None).expect("cat inline file succeeds");
         let _ = std::fs::remove_file(&image);
     }
 
@@ -2112,7 +2140,7 @@ mod tests {
         std::fs::remove_file(&image).ok();
         limn(&source, &image).expect("write image");
         std::fs::remove_dir_all(&source).ok();
-        match cat(&image, "/does-not-exist") {
+        match cat(&image, "/does-not-exist", None, None) {
             Err(CliError::FormatFailed { source, .. }) => {
                 assert!(matches!(source, CoreError::Corrupt { .. }));
             }
@@ -2128,12 +2156,29 @@ mod tests {
         std::fs::remove_file(&image).ok();
         limn(&source, &image).expect("write image");
         std::fs::remove_dir_all(&source).ok();
-        match cat(&image, "/sub") {
+        match cat(&image, "/sub", None, None) {
             Err(CliError::FormatFailed { source, .. }) => {
                 assert!(matches!(source, CoreError::Corrupt { .. }));
             }
             other => panic!("expected FormatFailed, got {other:?}"),
         }
+        let _ = std::fs::remove_file(&image);
+    }
+
+    #[test]
+    fn cat_offset_length_clamps_without_error() {
+        let source = make_source_tree();
+        let image = make_temp_file(&[]);
+        std::fs::remove_file(&image).ok();
+        limn(&source, &image).expect("write image");
+        std::fs::remove_dir_all(&source).ok();
+
+        // offset beyond EOF should clamp to empty, not error.
+        cat(&image, "/a.txt", Some(1_000_000), None).expect("offset past EOF clamps");
+        // length past remaining should clamp to remaining.
+        cat(&image, "/a.txt", Some(0), Some(1_000_000)).expect("length past EOF clamps");
+        // both set should slice the inline bytes without erroring.
+        cat(&image, "/a.txt", Some(1), Some(1)).expect("subrange reads succeed");
         let _ = std::fs::remove_file(&image);
     }
 
@@ -2166,7 +2211,7 @@ mod tests {
         ls(&img, "/").expect("ls succeeds");
 
         // Cat a file.
-        cat(&img, "/small.txt").expect("cat succeeds");
+        cat(&img, "/small.txt", None, None).expect("cat succeeds");
 
         // Tree.
         tree(&img, "/").expect("tree succeeds");
