@@ -3,6 +3,55 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-31 — Crypto + full CLI suite (session 23)
+
+### Done
+
+- **XChaCha20-Poly1305 crypto** — `limnifs-core/src/crypto.rs`. Actual
+  AEAD seal/open operations using `chacha20poly1305` crate. 10 tests
+  covering round-trip, wrong key/AAD rejection, tamper detection,
+  key/nonce size validation.
+- **`limni keygen`** — generates cryptographically secure 32-byte
+  XChaCha20-Poly1305 keys using `getrandom` (CSPRNG).
+- **`limni check`** — deep integrity verification: decompresses each
+  drop and verifies BLAKE3 hash matches the DropId.
+- **`limni benchmark`** — quick write/verify/extract performance
+  measurement on a synthetic 2 MB tree.
+- **`limni slab`** — slab file inspection with per-drop codec/ratio.
+- **`limni gc`** — unreferenced drop analysis.
+- **`limni dedup`** — drop dedup analysis.
+- **`limni compact`** — slab GC (extract → re-write).
+- **Proper slab compaction** — `limnifs-write/src/compaction.rs`.
+  Preserves codecs, no file I/O. 3 tests.
+- **`limni tree`** — recursive directory tree listing.
+- **`limni history`** — image provenance display.
+- **CLI README** — documents all 18 commands with examples.
+- **E2E lifecycle test** — exercises all 13 CLI commands in one test.
+
+### CLI commands (18 total)
+
+verify, limn, ls, cat, stat, tree, extract, diff, inspect, slab, gc,
+history, dedup, compact, check, benchmark, keygen, mount.
+
+### Test counts
+
+- Rust: 333 tests. Python: 55 tests. All green.
+- Zero open PRs across all three repos.
+
+### Phase 2 status
+
+| Task | Status |
+|---|---|
+| 05-aead-registry | ✅ |
+| 05-crypto (encrypt/decrypt) | ✅ (seal/open + keygen) |
+| 05-key-wrap-hpke | pending |
+| 05-signing-sigstore | pending |
+| 08-locator-trait | ✅ |
+| 08-http/s3 locators | pending |
+| 06-delta-builder | ✅ |
+| 06-metadata-flatten | pending |
+| 06-turnover | partially (compact module) |
+
 ## 2026-07-31 — CLI completion + registries + slab compaction (session 22)
 
 ### Done
