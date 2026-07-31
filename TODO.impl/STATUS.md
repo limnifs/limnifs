@@ -3,6 +3,59 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-31 — Benchmark suite + profiling-driven optimizations (session 27)
+
+### Done
+
+Profiling the LimniFS reader revealed two algorithmic bottlenecks.
+Both fixed; reader is now ~140x faster for many-file workloads.
+
+**Benchmark suite** —
+[limnifs/limnifs#100](https://github.com/limnifs/limnifs/pull/100).
+DwarFS-style Python orchestrator (`benchmarks/run_benchmarks.py`)
+with three datasets (tiny synthetic, Python source, Linux kernel),
+four operations (create, verify, extract, cat), cross-format
+comparison (tar+zstd, mksquashfs, mkdwarfs), JSON + Markdown
+output. CI workflow runs on release tags and attaches reports.
+
+**cat-multi (process amortization)** —
+[limnifs/limnifs#101](https://github.com/limnifs/limnifs/pull/101).
+Profile showed `limni cat` spending 6ms per file in per-process
+overhead. Added `limni cat-multi <image> <path>...` that parses
+once and reads many files. **47x faster** on 1001 files (2.33s →
+0.05s).
+
+**Path index (algorithmic fix)** —
+[limnifs/limnifs#102](https://github.com/limnifs/limnifs/pull/102).
+Profile showed cat-multi's remaining time in `resolve_path`'s
+linear directory scans (O(N²) for N files in a flat directory).
+Added `MetadataBlob::build_path_index()` that walks the tree once
+and builds a `HashMap<String, u64>` for O(1) lookups. **24x
+additional speedup** on 5000 files (1.05s → 0.044s). Combined:
+~140x faster than the original cat-per-file approach.
+
+### Profiled operations (no further action needed)
+
+| Operation | Dataset | Time | Throughput |
+|---|---|---|---|
+| limn (create) | 440 MB text | 0.62s | 700 MB/s |
+| limn (create) | 95 MB random binary | 0.28s | 350 MB/s |
+| verify | 440 MB image (24 KB manifest) | 5 ms | n/a |
+| check | 440 MB image (46 drops) | 39 ms | 11 GB/s (BLAKE3) |
+| extract | 5000 files | 0.59s | 8500 files/s |
+| cat-multi | 5000 files | 44 ms | 114k files/s |
+
+The writer is already at 350-700 MB/s depending on compressibility.
+Further improvement would require parallel chunking / SIMD BLAKE3
+tuning — deferred to when the writer becomes a bottleneck (it
+isn't today; users hit the reader path far more often).
+
+### Test counts
+
+- Rust: 476 tests. Python: 55 tests. All green.
+- 9 cargo-fuzz targets wired into nightly CI.
+- Zero open PRs.
+
 ## 2026-07-31 — Campaign close: audit + opt-in features + fuzz (session 26)
 
 ### Done
