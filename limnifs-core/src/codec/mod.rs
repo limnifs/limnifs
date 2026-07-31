@@ -14,6 +14,7 @@
 //! | 0x01 | lz4   | yes (`lz4_flex`) | yes | Fast baseline; pure Rust |
 //! | 0x02 | zstd  | yes (`ruzstd` `Fastest`) | yes (`ruzstd`) | Pure Rust; ZSTD level 1 |
 //! | 0x03 | xz    | **no** | yes (`lzma-rs`) | Decode-only for legacy drops |
+//! | 0x04 | brotli | yes (`brotli` q11) | yes (`brotli`) | Best ratio; pure Rust |
 //!
 //! **Why XZ is decode-only.** `lzma-rs` 0.3.0 ships an LZMA2 "encoder" that
 //! wraps input as uncompressed chunks (`encode/lzma2.rs`) and a raw-LZMA
@@ -27,6 +28,7 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+mod brotli;
 mod lz4;
 mod store;
 mod xz;
@@ -46,6 +48,9 @@ pub const CODEC_LZ4: u8 = 0x01;
 pub const CODEC_ZSTD: u8 = 0x02;
 /// Codec id 0x03: XZ/LZMA2 format. Decode-only in pure Rust (`lzma-rs`).
 pub const CODEC_XZ: u8 = 0x03;
+/// Codec id 0x04: Brotli frame format (`brotli`, pure Rust). Encode at
+/// quality 11 (best ratio); decode at any quality.
+pub const CODEC_BROTLI: u8 = 0x04;
 
 /// The behaviour every compression codec implements. New codecs register
 /// a `Codec` impl with [`CodecRegistry::register`]; the dispatch code
@@ -162,6 +167,7 @@ impl Default for CodecRegistry {
         registry.register(Box::new(lz4::Lz4Codec));
         registry.register(Box::new(zstd::ZstdCodec));
         registry.register(Box::new(xz::XzCodec));
+        registry.register(Box::new(brotli::BrotliCodec));
         registry
     }
 }
@@ -242,6 +248,15 @@ pub fn compress_lz4_with_size(plaintext: &[u8]) -> Vec<u8> {
 /// Returns [`CoreError::Corrupt`] if the ZSTD encoder fails.
 pub fn compress_zstd(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
     zstd::compress(plaintext)
+}
+
+/// Compress with Brotli at quality 11 (best ratio).
+///
+/// # Errors
+///
+/// Returns [`CoreError::Corrupt`] if the Brotli encoder fails.
+pub fn compress_brotli(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
+    brotli::compress(plaintext, brotli::DEFAULT_QUALITY)
 }
 
 #[cfg(test)]
@@ -370,6 +385,56 @@ mod tests {
     }
 
     #[test]
+    fn brotli_round_trips() {
+        let data = b"The quick brown fox jumps over the lazy dog. ".repeat(1000);
+        let compressed = compress_brotli(&data).expect("brotli compress");
+        let decompressed = decompress(
+            CODEC_BROTLI,
+            &compressed,
+            u32::try_from(data.len()).expect("fits u32"),
+        )
+        .expect("brotli decompress");
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn brotli_compresses_repetitive_data() {
+        let data = vec![0x41u8; 10_000];
+        let compressed = compress_brotli(&data).expect("brotli compress");
+        assert!(
+            compressed.len() < data.len(),
+            "brotli should compress repetitive data: {} vs {}",
+            compressed.len(),
+            data.len()
+        );
+    }
+
+    #[test]
+    fn brotli_beats_zstd_on_text() {
+        let data = b"The quick brown fox. ".repeat(10_000);
+        let zstd = compress_zstd(&data).expect("zstd");
+        let br = compress_brotli(&data).expect("brotli");
+        assert!(
+            br.len() < zstd.len(),
+            "brotli q11 ({}) should beat zstd-1 ({}) on text",
+            br.len(),
+            zstd.len()
+        );
+    }
+
+    #[test]
+    fn brotli_decompress_rejects_length_mismatch() {
+        let data = b"hello world";
+        let compressed = compress_brotli(data).expect("brotli compress");
+        match decompress(CODEC_BROTLI, &compressed, 99) {
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(reason.contains("does not match"), "got: {reason}");
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn registry_registers_custom_codec_without_changing_dispatch() {
         struct NoopCodec;
         const NOOP_ID: u8 = 0xFE;
@@ -420,12 +485,13 @@ mod tests {
     }
 
     #[test]
-    fn default_registry_has_all_four_codecs() {
+    fn default_registry_has_all_five_codecs() {
         let registry = default_registry();
         assert!(registry.find(CODEC_STORE).is_some());
         assert!(registry.find(CODEC_LZ4).is_some());
         assert!(registry.find(CODEC_ZSTD).is_some());
         assert!(registry.find(CODEC_XZ).is_some());
+        assert!(registry.find(CODEC_BROTLI).is_some());
         assert!(registry.find(0xFF).is_none());
     }
 }
