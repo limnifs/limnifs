@@ -28,7 +28,7 @@ pub mod flatten;
 pub mod turnover;
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::chunker::FastCDC;
 use limnifs_core::{
@@ -87,15 +87,94 @@ impl From<std::io::Error> for WriteError {
 /// are stored inline; larger files are packed into a single slab as
 /// content-addressed drops.
 ///
+/// File contents (read, `FastCDC` chunk, `BLAKE3` hash, `LZ4` compress) are
+/// processed in parallel across `CPU` cores via `rayon`. The directory
+/// tree walk and slab assembly remain sequential so the output is
+/// deterministic.
+///
 /// # Errors
 ///
 /// Returns [`WriteError::Io`] for filesystem errors.
 pub fn write_directory(root: &Path) -> Result<WriteArtifact, WriteError> {
+    use rayon::prelude::*;
+
     let mut ctx = WriteContext::new();
+
+    // Phase 1: walk the tree SEQUENTIALLY (deterministic inode
+    // allocation). Collect files that need chunking (> INLINE_THRESHOLD)
+    // for parallel processing.
     let root_inode_number = ctx.walk(root)?;
     ctx.root_inode_number = root_inode_number;
+
+    // Phase 2: process each pending chunked file in PARALLEL via rayon.
+    // This is the CPU-heavy path: file read + FastCDC + BLAKE3 + LZ4.
+    // Each file is independent; results are collected in original order
+    // so the output stays deterministic.
+    let pending = std::mem::take(&mut ctx.pending_files);
+    if !pending.is_empty() {
+        let chunker = ctx.chunker.clone();
+        let classifier = ctx.classifier;
+        let results: Vec<ChunkedFileResult> = pending
+            .par_iter()
+            .map(|pf| process_file(pf, &chunker, classifier))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Phase 3: merge results SEQUENTIALLY into drops + inodes.
+        // Dedup happens here so the slab layout is deterministic.
+        for (pf, result) in pending.iter().zip(results.into_iter()) {
+            ctx.merge_chunked_file(pf, result);
+        }
+    }
+
     let artifact = ctx.assemble();
     Ok(artifact)
+}
+
+/// One chunk of a file before dedup: (`drop_id`, `plaintext`, `compressed`, `codec`).
+type RawDrop = ([u8; 32], Vec<u8>, Vec<u8>, u8);
+/// Result of parallel file processing: the drop data (uncompressed,
+struct ChunkedFileResult {
+    drops: Vec<RawDrop>, // (id, plaintext, compressed, codec)
+    slices: Vec<PendingSlice>,
+}
+
+/// Process a single file's contents (CPU-heavy work that runs in a
+/// rayon worker thread). Returns the unique chunks and slice map.
+fn process_file(
+    pf: &PendingFile,
+    chunker: &FastCDC,
+    classifier: classifier::Classifier,
+) -> Result<ChunkedFileResult, WriteError> {
+    let data = std::fs::read(&pf.path)?;
+    let file_len = data.len();
+    let chunks = chunker.chunk_slice(&data);
+    let mut drops = Vec::with_capacity(chunks.len());
+    let mut slices = Vec::with_capacity(chunks.len());
+    let mut file_offset: u64 = 0;
+
+    for chunk in chunks {
+        let chunk_len = u64::try_from(chunk.len()).expect("chunk len fits u64");
+        let drop_id = hash_section(chunk);
+
+        let class = classifier.classify(chunk);
+        let (codec, compressed) = match class {
+            classifier::Class::Text | classifier::Class::Code | classifier::Class::Binary => {
+                let c = limnifs_core::codec::compress_lz4_with_size(chunk);
+                (limnifs_core::codec::CODEC_LZ4, c)
+            }
+            _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
+        };
+
+        drops.push((drop_id, chunk.to_vec(), compressed, codec));
+        slices.push(PendingSlice {
+            drop_id,
+            file_byte_start: file_offset,
+            file_byte_end: file_offset + chunk_len,
+        });
+        file_offset += chunk_len;
+    }
+    let _ = file_len;
+    Ok(ChunkedFileResult { drops, slices })
 }
 
 struct PendingDrop {
@@ -130,6 +209,15 @@ struct PendingSlice {
     file_byte_end: u64,
 }
 
+/// A file that needs chunking (> `INLINE_THRESHOLD`). Collected during
+/// the sequential tree walk and processed in parallel by `rayon`.
+struct PendingFile {
+    inode_number: u64,
+    path: PathBuf,
+    mtime_ns: u64,
+    file_len: u64,
+}
+
 struct PendingInode {
     number: u64,
     mode: u32,
@@ -158,6 +246,7 @@ struct WriteContext {
     dir_nodes: Vec<DirNode>,
     drops: Vec<PendingDrop>,
     drop_index: HashMap<[u8; 32], (u32, u32)>,
+    pending_files: Vec<PendingFile>,
     file_count: usize,
     dir_count: usize,
     root_inode_number: u64,
@@ -173,6 +262,7 @@ impl WriteContext {
             dir_nodes: Vec::new(),
             drops: Vec::new(),
             drop_index: HashMap::new(),
+            pending_files: Vec::new(),
             file_count: 0,
             dir_count: 0,
             root_inode_number: 0,
@@ -187,10 +277,49 @@ impl WriteContext {
         n
     }
 
+    /// Merge a parallel-processed chunked file's results into the
+    /// context. Dedup: only new `DropId`s get added to the drops list.
+    fn merge_chunked_file(&mut self, pf: &PendingFile, result: ChunkedFileResult) {
+        for (drop_id, plaintext, compressed, codec) in result.drops {
+            if !self.drop_index.contains_key(&drop_id) {
+                let offset = self
+                    .drops
+                    .iter()
+                    .map(PendingDrop::len_in_window)
+                    .sum::<u32>();
+                let len = u32::try_from(compressed.len()).unwrap_or(0);
+                self.drops.push(PendingDrop {
+                    id: drop_id,
+                    plaintext,
+                    compressed,
+                    codec,
+                    offset_in_window: offset,
+                });
+                self.drop_index.insert(drop_id, (offset, len));
+            }
+        }
+        self.inodes.push(PendingInode {
+            number: pf.inode_number,
+            mode: 0o100_644,
+            mtime_ns: pf.mtime_ns,
+            content: PendingContent::DropBacked {
+                file_len: pf.file_len,
+                slices: result.slices,
+            },
+        });
+    }
+
     /// Apply the seine classifier to a chunk and compress it if the
     /// class is compressible. Text, Code, and Binary drops get LZ4;
     /// Compressed, Media, and Sparse drops stay as store (re-compressing
     /// already-compressed data wastes CPU for no gain).
+    /// Apply the seine classifier to a chunk and compress it if the
+    /// class is compressible. Text, Code, and Binary drops get LZ4;
+    /// Compressed, Media, and Sparse drops stay as store.
+    ///
+    /// Kept for API compatibility; the parallel writer uses
+    /// [`process_file`] which inlines this logic.
+    #[allow(dead_code)]
     fn deepen_drop(&self, drop_id: [u8; 32], plaintext: &[u8]) -> PendingDrop {
         let class = self.classifier.classify(plaintext);
         let (codec, compressed) = match class {
@@ -247,10 +376,10 @@ impl WriteContext {
         } else if file_type.is_file() {
             self.file_count += 1;
             let inode_number = self.alloc_inode();
-            let data = std::fs::read(path)?;
-            let file_len = data.len();
+            let file_len = meta.len();
 
-            if file_len <= INLINE_THRESHOLD {
+            if file_len <= u64::try_from(INLINE_THRESHOLD).unwrap_or(u64::MAX) {
+                let data = std::fs::read(path)?;
                 self.inodes.push(PendingInode {
                     number: inode_number,
                     mode: 0o100_644,
@@ -258,42 +387,12 @@ impl WriteContext {
                     content: PendingContent::Inline(data),
                 });
             } else {
-                let chunks = self.chunker.chunk_slice(&data);
-                let mut slices = Vec::with_capacity(chunks.len());
-                let mut file_offset: u64 = 0;
-                for chunk in chunks {
-                    let chunk_len = u64::try_from(chunk.len()).expect("chunk len fits u64");
-                    let drop_id = hash_section(chunk);
-                    if !self.drop_index.contains_key(&drop_id) {
-                        let drop = self.deepen_drop(drop_id, chunk);
-                        let offset = self
-                            .drops
-                            .iter()
-                            .map(PendingDrop::len_in_window)
-                            .sum::<u32>();
-                        let len = drop.len_in_window();
-                        let _ = len;
-                        self.drops.push(PendingDrop {
-                            offset_in_window: offset,
-                            ..drop
-                        });
-                        self.drop_index.insert(drop_id, (offset, len));
-                    }
-                    slices.push(PendingSlice {
-                        drop_id,
-                        file_byte_start: file_offset,
-                        file_byte_end: file_offset + chunk_len,
-                    });
-                    file_offset += chunk_len;
-                }
-                self.inodes.push(PendingInode {
-                    number: inode_number,
-                    mode: 0o100_644,
+                // Defer to parallel processing — collect the file info.
+                self.pending_files.push(PendingFile {
+                    inode_number,
+                    path: path.to_path_buf(),
                     mtime_ns,
-                    content: PendingContent::DropBacked {
-                        file_len: file_len as u64,
-                        slices,
-                    },
+                    file_len,
                 });
             }
             Ok(inode_number)
