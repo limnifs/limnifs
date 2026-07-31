@@ -21,4 +21,5 @@ pedantic = "warn"
 blake3 = { version = "1.5", default-features = false, features = ["std"] }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "getrandom"] }
 clap = { version = "4.5", features = ["derive", "string"] }
+getrandom = "0.2"
 lz4_flex = { version = "0.11", default-features = false, features = ["std"] }

@@ -161,6 +161,8 @@ enum Command {
     },
     /// Quick write/read/extract benchmark on a synthetic tree.
     Benchmark,
+    /// Generate a random AEAD key (XChaCha20-Poly1305, 32 bytes).
+    Keygen,
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -193,6 +195,7 @@ fn run() -> Result<(), CliError> {
         Command::Compact { source, output } => compact(&source, &output),
         Command::Check { image } => check_cmd(&image),
         Command::Benchmark => benchmark(),
+        Command::Keygen => keygen(),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -1386,6 +1389,30 @@ fn benchmark() -> Result<(), CliError> {
         let _ = std::fs::remove_file(&slab_path);
         let _ = slab_bytes;
     }
+    Ok(())
+}
+
+/// Generate a random AEAD key (XChaCha20-Poly1305, 32 bytes).
+fn keygen() -> Result<(), CliError> {
+    let mut key = vec![0u8; 32];
+    getrandom::getrandom(&mut key).map_err(|e| CliError::FormatFailed {
+        path: PathBuf::from("/dev/urandom"),
+        source: CoreError::Corrupt {
+            reason: format!("keygen: CSPRNG failed: {e}"),
+        },
+    })?;
+
+    let hex = format_hex(&key);
+    println!("XChaCha20-Poly1305 key (32 bytes):");
+    println!("  hex:   {hex}");
+    println!("  b3:    b3:{}", {
+        let mut s = String::with_capacity(52);
+        for b in &key {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+        }
+        s
+    });
     Ok(())
 }
 

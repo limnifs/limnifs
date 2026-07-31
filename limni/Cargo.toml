@@ -16,6 +16,7 @@ limnifs-core = { path = "../limnifs-core", version = "0.1.0" }
 limnifs-write = { path = "../limnifs-write", version = "0.1.0" }
 clap.workspace = true
 fuser = { version = "0.18", optional = true }
+getrandom.workspace = true
 
 [features]
 fuse = ["dep:fuser"]
