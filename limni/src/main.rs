@@ -1335,6 +1335,11 @@ fn benchmark() -> Result<(), CliError> {
         limnifs_write::write_directory(&src).map_err(|e| CliError::WriteFailed { source: e })?;
     let write_ms = t0.elapsed().as_millis();
     std::fs::write(&img, &artifact.bytes).expect("write image");
+    if let (Some(slab_bytes), Some(locator)) = (&artifact.slab_bytes, &artifact.slab_locator) {
+        let slab_name = locator.strip_prefix("file:").unwrap_or(locator);
+        let slab_path = img.parent().unwrap_or(std::path::Path::new(".")).join(slab_name);
+        std::fs::write(&slab_path, slab_bytes).expect("write slab");
+    }
 
     // Verify benchmark.
     let t1 = Instant::now();
