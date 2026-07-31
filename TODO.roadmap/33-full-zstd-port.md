@@ -1,10 +1,11 @@
-# 33 — Full pure-Rust ZSTD encoder (repo: [limnifs/zstd](https://github.com/limnifs/zstd))
+# 33 — Full pure-Rust ZSTD encoder (repo: [omnizip/omnizip-rs](https://github.com/omnizip/omnizip-rs))
 
 - **Priority:** P1 (blocks "best ratio" tier without it)
 - **Depends on:** 35 (registry refactor), 31 (codec 0x04 brotli — for ratio comparison)
-- **Estimated effort:** **months** (calendar-quarter scale)
-- **Repos touched:** [`limnifs/zstd`](https://github.com/limnifs/zstd) (new), then `limnifs/limnifs`
-- **Porting strategy:** decoder forked from ruzstd 0.9 (MIT/Apache); encoder ported line-by-line from `facebook/zstd` (BSD-3-Clause); test fixtures adopted verbatim from `facebook/zstd/tests/`. Full plan in [`limnifs/zstd/PLAN.md`](https://github.com/limnifs/zstd/blob/main/PLAN.md).
+- **Estimated effort:** **weeks–months** (algorithmic logic already done in Ruby)
+- **Repos touched:** [`omnizip/omnizip-rs`](https://github.com/omnizip/omnizip-rs) `omnizip-zstd` crate, then `limnifs/limnifs`
+- **Porting strategy:** line-by-line Rust port of omnizip's Ruby ZSTD reference (`omnizip/lib/omnizip/algorithms/zstandard/`, 3,150 LOC, MIT). C reference (`facebook/zstd`, BSD-3-Clause) consulted for perf tuning only after the Ruby port verifies correct. Test fixtures adopted from `omnizip/spec/fixtures/`. Full plan: [`omnizip-rs/PLAN.md`](https://github.com/omnizip/omnizip-rs/blob/main/PLAN.md).
+- **Supersedes:** the archived `limnifs/zstd` skeleton (2026-07-31).
 
 ## Problem
 
