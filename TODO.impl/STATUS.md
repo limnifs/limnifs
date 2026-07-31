@@ -3,6 +3,117 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-31 — Campaign close: audit + opt-in features + fuzz (session 26)
+
+### Done
+
+This session closed out the campaign. Every task file in `TODO.impl/`
+now carries an accurate Status marker. The user's review questions
+("why do you need X?") reshaped the opt-in surface — performance and
+convenience features are user choice, not mandatory dependencies.
+
+**Opt-in features (user direction):**
+
+- **Composefs fast path** —
+  [limnifs/limnifs#96](https://github.com/limnifs/limnifs/pull/96).
+  `limni composefs-export` extracts the tree and shells out to
+  `mkcomposefs` (EROFS + fs-verity). Default install has no
+  composefs-utils dependency; Linux users with the tool get kernel-
+  level mount performance.
+- **Sigstore keyless** —
+  [limnifs/limnifs#97](https://github.com/limnifs/limnifs/pull/97).
+  `limni sigstore-sign` and `sigstore-verify` shell out to `cosign`
+  (Fulcio cert + Rekor transparency log). Default install has no
+  Fulcio/Rekor/OIDC dependency; users who want keyless install cosign.
+  Sovereign signing via `limnifs-core::signing` Ed25519 keypair API
+  remains the default.
+
+**CI infrastructure:**
+
+- **Reproducible release pipeline** —
+  [limnifs/limnifs#94](https://github.com/limnifs/limnifs/pull/94).
+  Tag-triggered `release.yml`: `cargo-deny` license scan (GPL-3 hard
+  fail), `cargo-cyclonedx` SBOM, build matrix (linux + macOS × x86_64
+  + aarch64), SHA256 checksums, GitHub Release with SBOM attached.
+- **Phase 1 + Phase 2 exit gates** —
+  [limnifs/limnifs (2aa65e3)](https://github.com/limnifs/limnifs/commit/2aa65e3).
+  Aggregate jobs blocking merges while red: writer pipeline matrix,
+  CLI suite, crypto + locators + deltas matrix, end-to-end key wrap,
+  end-to-end signing.
+- **Cargo-fuzz nightly** —
+  [limnifs/limnifs#98](https://github.com/limnifs/limnifs/pull/98).
+  9 targets covering every parser in `limnifs-core`. 10 min per
+  target, parallel. Crashes auto-uploaded as artifacts.
+
+**Workflow hygiene:**
+
+- **Task file audit** (44 files in same PR #98): every
+  `TODO.impl/<component>/<task>.md` now carries an accurate Status
+  marker — 35 done with code-evidence pointers, 2 deferred per user
+  direction (09-frozen2: separate filesystem), 2 dropped per user
+  direction (12-tebako: tebako's concern), 5 deferred by design.
+
+### Phase 1 status
+
+| Task | Status |
+|---|---|
+| 04-writer-pipeline | done |
+| 10-cli | done (25+ commands) |
+| 11-mount (FUSE + composefs-export) | done |
+| 12-tebako-integration | dropped (user direction) |
+
+### Phase 2 status
+
+| Task | Status |
+|---|---|
+| 05-aead-registry | done |
+| 05-crypto (encrypt/decrypt) | done |
+| 05-key-wrap-hpke | done |
+| 05-signing-sigstore (keypair + keyless opt-in) | done |
+| 08-locator-trait | done |
+| 08-http-range-streaming | done |
+| 08-s3-locator | done |
+| 08-ipfs-car | done |
+| 06-delta-builder | done |
+| 06-metadata-flatten | done |
+| 06-turnover | done |
+
+### Phase 3 status
+
+| Task | Status |
+|---|---|
+| 07-reed-solomon-slabs | done |
+| 07-ec-repair | done |
+| 05-dms (Shamir) | done |
+| 05-dms (time-lock) | gated on hardware-drift calibration |
+| IPFS locator + CAR | done |
+| 11-composefs-path | done (opt-in) |
+
+### Cross-repo state
+
+- **limnifs/limnifs.github.io** — Astro 7 + Vue 3 + Tailwind 4. Pages
+  for index, about, format, scenarios, adapters, docs, blog.
+- **limnifs/limnifs-py** — spec-only Python reference reader, 55 tests.
+- **limnifs/spec** — format spec + bit-level docs.
+- **limnifs/limnifs-frozen2** — placeholder repo, deferred per user
+  direction (LimniFS is a separate filesystem).
+
+### Test counts
+
+- Rust: 475 tests. Python: 55 tests. All green.
+- 9 cargo-fuzz targets wired into nightly CI.
+- Zero open PRs across all repos.
+
+### Campaign Done criteria status
+
+| Criterion | Status |
+|---|---|
+| Every task file done with CI evidence linked | done (this session) |
+| `phase-N-exit` jobs green | done (phase-0, 1, 2 all green) |
+| Reproducible releases with SBOM + sigstore | done (release pipeline + Ed25519 + sigstore keyless opt-in) |
+| Parity suite green against dwarfs-t | removed from scope per user direction |
+| limnifs.org live | done (limnifs.github.io repo) |
+
 ## 2026-07-31 — Phase 2 + Phase 3 depth (session 24)
 
 ### Done
