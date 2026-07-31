@@ -57,6 +57,8 @@ pub mod locator;
 pub mod merkle;
 pub mod metadata;
 pub mod metadata_reference;
+#[cfg(feature = "http")]
+pub mod s3_locator;
 pub mod slab;
 pub mod slab_index;
 pub mod slab_reader;
@@ -118,5 +120,7 @@ pub use slab_reader::{parse_slab, SlabView};
 
 #[cfg(feature = "http")]
 pub use http_locator::HttpLocator;
+#[cfg(feature = "http")]
+pub use s3_locator::{S3Locator, DEFAULT_S3_ENDPOINT};
 
 pub use limnifs_format::{ManifestRoot, MANIFEST_HEADER_LEN};
