@@ -1,0 +1,145 @@
+name: Release
+
+# Tag-driven release pipeline. Triggers on `v*` tags.
+#
+# Pipeline:
+#   1. cargo-deny license scan (hard fail on GPL-3/AGPL/LGPL).
+#   2. cargo-cyclonedx SBOM generation per workspace crate.
+#   3. Reproducible release build: linux + macOS, x86_64 + aarch64.
+#   4. SHA256 checksums per artifact.
+#   5. GitHub Releases upload with SBOM + checksums + binaries.
+#
+# Sigstore keyless signing is deferred — v1 ships Ed25519 keypair
+# signatures via `limni sign` (see limnifs-core/src/signing.rs).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name to simulate (e.g. v0.1.0)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  license-scan:
+    name: License scan (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --workspace --all-features
+
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx --locked --version ^0.5
+      - name: Generate SBOM
+        run: cargo cyclonedx --workspace --all-features --format json --output-pattern package
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            **/*.cdx.json
+            **/build/cyclonedx/*.cdx.json
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: [license-scan, sbom]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin limni
+      - name: Package
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF##*/}"
+          if [ -z "$tag" ] || [ "$tag" = "refs/heads/main" ]; then
+            tag="${{ inputs.tag }}"
+          fi
+          if [ -z "$tag" ]; then
+            tag="dev"
+          fi
+          staging="limni-${tag}-${{ matrix.target }}"
+          mkdir "$staging"
+          cp target/${{ matrix.target }}/release/limni "$staging/"
+          cp README.md LICENSE-* "$staging/" 2>/dev/null || true
+          tar czf "${staging}.tar.gz" "$staging"
+          shasum -a 256 "${staging}.tar.gz" > "${staging}.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: limni-${{ matrix.target }}
+          path: |
+            limni-*.tar.gz
+            limni-*.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [license-scan, sbom, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+      - name: Display structure
+        run: find release -type f | sort
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/limni-*/*.tar.gz
+            release/limni-*/*.sha256
+            release/sbom/*.cdx.json
+          generate_release_notes: true
+          fail_on_unmatched_files: true
