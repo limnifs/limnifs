@@ -15,8 +15,11 @@ path = "src/main.rs"
 limnifs-core = { path = "../limnifs-core", version = "0.1.0" }
 limnifs-write = { path = "../limnifs-write", version = "0.1.0" }
 clap.workspace = true
-fuser = { version = "0.18", optional = true }
+fuser = { version = "0.18", optional = true, default-features = false }
 getrandom.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+fuser = { version = "0.18", optional = true, default-features = false, features = ["macos-no-mount"] }
 
 [features]
 fuse = ["dep:fuser"]

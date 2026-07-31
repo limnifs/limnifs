@@ -16,14 +16,12 @@ use std::ffi::OsStr;
 use std::time::Duration;
 
 use fuser::{
-    Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen,
-    ReplyWrite, Request, FUSE_ROOT_ID,
+    Config, Errno, FileHandle, FileType, Filesystem, FopenFlags, Generation, INodeNo, LockOwner,
+    OpenFlags, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite,
+    Request, WriteFlags,
 };
 
 use crate::vfs::{Vfs, VfsType};
-
-/// Convert a VFS type to a `fuser` file type constant.
-const ROOT_MODE: u32 = 0o755;
 
 /// A read-only `FUSE` filesystem backed by a [`Vfs`].
 pub struct FuseVfs {
@@ -38,28 +36,26 @@ impl FuseVfs {
     }
 
     /// Map a `FUSE` inode number to a `VFS` inode number. The `FUSE`
-    /// root (`FUSE_ROOT_ID = 1`) maps to the `VFS` root.
-    fn map_inode(&self, ino: u64) -> u64 {
-        if ino == FUSE_ROOT_ID {
+    /// root (`INodeNo::ROOT = 1`) maps to the `VFS` root.
+    fn map_inode(&self, ino: INodeNo) -> u64 {
+        if ino == INodeNo::ROOT {
             self.vfs.root_inode()
         } else {
-            ino
+            ino.0
         }
     }
 
-    fn vfs_type_to_ftype(kind: VfsType) -> fuser::FileType {
+    fn vfs_type_to_ftype(kind: VfsType) -> FileType {
         match kind {
-            VfsType::Regular => fuser::FileType::RegularFile,
-            VfsType::Directory => fuser::FileType::Directory,
-            VfsType::Symlink => fuser::FileType::Symlink,
-            VfsType::Other => fuser::FileType::RegularFile,
+            VfsType::Directory => FileType::Directory,
+            VfsType::Symlink => FileType::Symlink,
+            VfsType::Regular | VfsType::Other => FileType::RegularFile,
         }
     }
 
-    fn make_attr(&self, ino: u64, attr: &crate::vfs::VfsAttr) -> fuser::FileAttr {
-        let mapped = self.map_inode(ino);
+    fn make_attr(ino: u64, attr: &crate::vfs::VfsAttr) -> fuser::FileAttr {
         fuser::FileAttr {
-            ino: mapped,
+            ino: INodeNo(ino),
             size: attr.size,
             blocks: attr.size.div_ceil(512),
             atime: epoch_to_time(attr.mtime_ns),
@@ -85,138 +81,124 @@ fn epoch_to_time(ns: u64) -> std::time::SystemTime {
 }
 
 impl Filesystem for FuseVfs {
-    fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         let parent_vfs = self.map_inode(parent);
-        let name_str = match name.to_str() {
-            Some(s) => s,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
-            }
+        let Some(name_str) = name.to_str() else {
+            reply.error(Errno::ENOENT);
+            return;
         };
         match self.vfs.lookup(parent_vfs, name_str) {
             Some(child_ino) => {
                 if let Some(attr) = self.vfs.getattr(child_ino) {
-                    let fattr = self.make_attr(child_ino, &attr);
-                    reply.entry(&Duration::from_secs(1), &fattr, 0);
+                    let fattr = Self::make_attr(child_ino, &attr);
+                    reply.entry(&Duration::from_secs(1), &fattr, Generation(0));
                 } else {
-                    reply.error(libc::ENOENT);
+                    reply.error(Errno::ENOENT);
                 }
             }
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(Errno::ENOENT);
             }
         }
-        let _ = req;
     }
 
-    fn getattr(&mut self, req: &Request, ino: u64, reply: ReplyAttr) {
+    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
         let vfs_ino = self.map_inode(ino);
         match self.vfs.getattr(vfs_ino) {
             Some(attr) => {
-                let fattr = self.make_attr(ino, &attr);
+                let fattr = Self::make_attr(vfs_ino, &attr);
                 reply.attr(&Duration::from_secs(1), &fattr);
             }
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(Errno::ENOENT);
             }
         }
-        let _ = req;
     }
 
     fn readdir(
-        &mut self,
-        req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
         mut reply: ReplyDirectory,
     ) {
         let vfs_ino = self.map_inode(ino);
         let entries = self.vfs.readdir(vfs_ino);
 
-        let mut idx = offset;
-        if idx == 0 {
-            let attr = self.vfs.getattr(vfs_ino).map(|a| self.make_attr(ino, &a));
-            if reply.add(ino, 1, fuser::FileType::Directory, ".") {
+        if offset == 0 {
+            if reply.add(ino, 1, FileType::Directory, ".") {
                 return;
             }
-            if reply.add(ino, 2, fuser::FileType::Directory, "..") {
+            if reply.add(ino, 2, FileType::Directory, "..") {
                 return;
             }
-            let _ = attr;
-            idx = 2;
         }
 
         for (i, (child_ino, name, kind)) in entries.iter().enumerate() {
-            let entry_idx = i64::try_from(i).unwrap_or(0) + 2;
+            let entry_idx = u64::try_from(i).unwrap_or(0) + 2;
             if entry_idx < offset {
                 continue;
             }
             let ftype = Self::vfs_type_to_ftype(*kind);
-            if reply.add(*child_ino, entry_idx + 1, ftype, name) {
+            if reply.add(INodeNo(*child_ino), entry_idx + 1, ftype, name) {
                 break;
             }
         }
         reply.ok();
-        let _ = req;
     }
 
-    fn open(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
-        let _ = (req, ino, flags);
-        reply.opened(0, 0);
+    fn open(&self, _req: &Request, _ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
+        reply.opened(FileHandle(0), FopenFlags::empty());
     }
 
     fn read(
-        &mut self,
-        req: &Request,
-        ino: u64,
-        _fh: u64,
-        offset: i64,
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        offset: u64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
         let vfs_ino = self.map_inode(ino);
         match self
             .vfs
-            .read(vfs_ino, u64::try_from(offset).unwrap_or(0), size as usize)
+            .read(vfs_ino, offset, usize::try_from(size).unwrap_or(usize::MAX))
         {
             Ok(data) => reply.data(&data),
-            Err(_) => reply.error(libc::EIO),
+            Err(_) => reply.error(Errno::EIO),
         }
-        let _ = req;
     }
 
     fn release(
-        &mut self,
-        req: &Request,
-        ino: u64,
-        fh: u64,
-        flags: i32,
-        lock_owner: Option<u64>,
-        flush: bool,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        _fh: FileHandle,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
+        _flush: bool,
         reply: ReplyEmpty,
     ) {
-        let _ = (req, ino, fh, flags, lock_owner, flush);
         reply.ok();
     }
 
     fn write(
-        &mut self,
-        req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
-        data: &[u8],
-        write_flags: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        _fh: FileHandle,
+        _offset: u64,
+        _data: &[u8],
+        _write_flags: WriteFlags,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
-        let _ = (req, ino, fh, offset, data, write_flags, flags, lock_owner);
-        reply.error(libc::ENOSYS);
+        reply.error(Errno::ENOSYS);
     }
 }
 
@@ -229,7 +211,7 @@ impl Filesystem for FuseVfs {
 /// does not exist, or `FUSE` kernel support is unavailable).
 pub fn mount(vfs: Vfs, mountpoint: &std::path::Path) -> std::io::Result<()> {
     let fs = FuseVfs::new(vfs);
-    fuser::mount2(fs, mountpoint, &[])
+    fuser::mount(fs, mountpoint, &Config::default())
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! AEAD encrypt/decrypt — actual cryptographic operations.
 //!
-//! Uses the [`aead`] registry for metadata dispatch. Currently
+//! Uses the [`crate::aead`] registry for metadata dispatch. Currently
 //! supports:
 //!
 //! - `0x00` plaintext: no-op (returns input unchanged)
