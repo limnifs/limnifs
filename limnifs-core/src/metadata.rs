@@ -31,7 +31,7 @@
 use crate::cursor::ManifestCursor;
 use crate::directory_node::{parse_directory_node, DirEntry, DirectoryNode};
 use crate::error::CoreError;
-use crate::inode::{parse_inode_with_ceiling, Inode};
+use crate::inode::{parse_inode_with_ceiling, ContentHandle, Inode};
 
 /// Parsed metadata blob.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -91,6 +91,53 @@ impl MetadataBlob {
         } else {
             Some(first)
         }
+    }
+
+    /// Build a path → inode-number index by walking the directory
+    /// tree from the root.
+    ///
+    /// Returns a map from absolute POSIX-style paths (e.g. `"/a/b.txt"`)
+    /// to inode numbers. Build cost is O(N) in the number of inodes;
+    /// subsequent path lookups are O(1).
+    ///
+    /// Callers that resolve many paths against the same blob (e.g.
+    /// `limni cat-multi`) should build this once rather than calling
+    /// [`Self::inode_by_number`] + [`Self::dir_node_by_hash`] per
+    /// component.
+    #[must_use]
+    pub fn build_path_index(&self) -> std::collections::HashMap<String, u64> {
+        let mut index: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::with_capacity(self.inodes.len());
+        let Some(root) = self.root_inode_number() else {
+            return index;
+        };
+        index.insert(String::from("/"), root);
+        // BFS from the root. Each directory's entries extend the
+        // current path by one component.
+        let mut queue: std::collections::VecDeque<(u64, String)> =
+            std::collections::VecDeque::with_capacity(self.inodes.len());
+        queue.push_back((root, String::from("/")));
+        while let Some((inode_number, prefix)) = queue.pop_front() {
+            let Some(inode) = self.inode_by_number(inode_number) else {
+                continue;
+            };
+            let ContentHandle::Directory(dir_hash) = &inode.content_handle else {
+                continue;
+            };
+            let Some(node) = self.dir_node_by_hash(dir_hash) else {
+                continue;
+            };
+            for entry in &node.entries {
+                let path = if prefix == "/" {
+                    format!("/{}", entry.name)
+                } else {
+                    format!("{prefix}/{}", entry.name)
+                };
+                index.insert(path.clone(), entry.inode_number);
+                queue.push_back((entry.inode_number, path));
+            }
+        }
+        index
     }
 }
 
