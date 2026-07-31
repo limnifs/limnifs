@@ -1,6 +1,6 @@
 # 14 — Vue islands
 
-- **Status:** pending
+- **Status:** in-progress — TierDiagram shipped; DropViz WASM demo deferred
 - **Phase:** 1 (TierDiagram), 2 (DropViz)
 - **Depends on:** 14-site-skeleton; DropViz also needs 04-chunking-fastcdc semantics from spec
 - **Design refs:** §3, §6

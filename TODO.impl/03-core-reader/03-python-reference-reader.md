@@ -1,6 +1,6 @@
 # 03 — Python reference reader
 
-- **Status:** pending
+- **Status:** done — limnifs/limnifs-py repo (spec-only oracle)
 - **Phase:** 0
 - **Depends on:** 01-format-spec-v01, 03-manifest-parser
 - **Design refs:** §11, §15 (Phase 0 exit)

@@ -1,6 +1,6 @@
 # 05 — Key wrap (HPKE)
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/key_wrap.rs (HPKE-style X25519, behind key-wrap feature)
 - **Phase:** 2
 - **Depends on:** 05-aead-registry
 - **Design refs:** §9 (keys, recipients)

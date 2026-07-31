@@ -1,6 +1,6 @@
 # 07 — EC repair
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/ec_repair.rs (offline reconstruction)
 - **Phase:** 3
 - **Depends on:** 07-reed-solomon-slabs, 08-locator-trait-registry
 - **Design refs:** §8, §10.2 (IPFS churn)

@@ -1,6 +1,6 @@
 # 01 — FlatBuffers schema + codegen
 
-- **Status:** pending
+- **Status:** superseded — wire-format pivot 2026-07-29 (D1): custom format, not FlatBuffers
 - **Phase:** 0
 - **Depends on:** 01-format-spec-v01
 - **Design refs:** §5, §14

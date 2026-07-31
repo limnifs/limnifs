@@ -1,6 +1,6 @@
 # 12 — tebako press consumes .limni
 
-- **Status:** pending
+- **Status:** dropped — user direction 2026-07-31: tebako integration is tebako's concern, not LimniFS's
 - **Phase:** 1
 - **Depends on:** 10-cli-limn-merge, 11-fuse-daemon
 - **Design refs:** §15 (Phase 1 exit), §12

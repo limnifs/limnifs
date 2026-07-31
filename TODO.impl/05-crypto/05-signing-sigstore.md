@@ -1,6 +1,6 @@
 # 05 — Sigstore manifest signing
 
-- **Status:** pending
+- **Status:** done — keypair mode in limnifs-core/src/signing.rs; keyless via limni sigstore-sign (cosign)
 - **Phase:** 2
 - **Depends on:** 05-aead-registry
 - **Design refs:** §9 (signatures), §11 (supply chain)

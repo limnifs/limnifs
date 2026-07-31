@@ -1,6 +1,6 @@
 # 08 — Locator trait, registry, file locator
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/fetch.rs (Locator trait + MultiLocator + FileLocator)
 - **Phase:** 2
 - **Depends on:** 03-drop-store-reader
 - **Design refs:** §10.1 (registry), §4 (lying-locator detection)

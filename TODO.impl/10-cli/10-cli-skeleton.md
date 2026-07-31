@@ -1,6 +1,6 @@
 # 10 — CLI skeleton
 
-- **Status:** pending
+- **Status:** done — limni/src/main.rs (clap, 25+ subcommands)
 - **Phase:** 1
 - **Depends on:** 03-core-reader
 - **Design refs:** §3 (vocabulary), §15

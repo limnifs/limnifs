@@ -1,6 +1,6 @@
 # 09 — import-dwarfs (one-way migration)
 
-- **Status:** pending
+- **Status:** deferred — depends on 09-frozen2-reader; same user direction
 - **Phase:** 1
 - **Depends on:** 09-frozen2-reader, 04-ingest-epilimnion
 - **Design refs:** §5.1, §15 (Phase 1 exit)

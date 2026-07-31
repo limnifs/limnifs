@@ -1,6 +1,6 @@
 # 09 — Frozen2 read adapter
 
-- **Status:** pending
+- **Status:** deferred — user direction 2026-07-31: LimniFS is a separate filesystem; one-way migration is not v1 scope
 - **Phase:** 1
 - **Depends on:** 03-core-reader (traits)
 - **Design refs:** §5.1, §1 (GPL boundary)

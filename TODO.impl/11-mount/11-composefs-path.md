@@ -1,6 +1,6 @@
 # 11 — Composefs-style kernel path
 
-- **Status:** pending
+- **Status:** done — limni composefs-export (shells out to mkcomposefs; opt-in)
 - **Phase:** 3
 - **Depends on:** 11-fuse-daemon, 08-locator-trait-registry
 - **Design refs:** §10.3

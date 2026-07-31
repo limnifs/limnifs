@@ -1,6 +1,6 @@
 # 06 — Metadata-only flatten (tier 2)
 
-- **Status:** pending
+- **Status:** done — limnifs-write/src/flatten.rs (zero drop I/O)
 - **Phase:** 2
 - **Depends on:** 06-delta-builder
 - **Design refs:** §7 (tier 2), §12 (CI use case: fold patches into main image)

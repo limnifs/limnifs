@@ -1,6 +1,6 @@
 # 11 — FUSE daemon
 
-- **Status:** pending
+- **Status:** done — limni/src/{vfs,fuse_vfs}.rs (behind fuse feature, fuser 0.18)
 - **Phase:** 1
 - **Depends on:** 03-overlay-resolver
 - **Design refs:** §12 (tebako cold start), §2 (read-only mounts)

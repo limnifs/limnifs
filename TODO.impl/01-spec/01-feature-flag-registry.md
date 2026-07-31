@@ -1,6 +1,6 @@
 # 01 — Feature-flag registry and versioning policy
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/feature_flags.rs; FEATURE_FLAGS_SECTION_VERSION=1; tests in feature_flags::tests
 - **Phase:** 0
 - **Depends on:** 01-format-spec-v01
 - **Design refs:** §2 (extensibility), §5 (per-layer versions)

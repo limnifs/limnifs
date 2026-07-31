@@ -1,6 +1,6 @@
 # 13 — Release pipeline, SBOM, license scan
 
-- **Status:** pending
+- **Status:** done — release.yml tag-driven pipeline + deny.toml + .github/RELEASES.md
 - **Phase:** 1
 - **Depends on:** 13-actions-matrix
 - **Design refs:** §11 (supply chain), §1 (GPL exclusion)

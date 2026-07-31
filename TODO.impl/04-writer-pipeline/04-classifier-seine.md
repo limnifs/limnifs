@@ -1,6 +1,6 @@
 # 04 — Seine classifier
 
-- **Status:** pending
+- **Status:** done — limnifs-write/src/classifier.rs (6 entropy/magic-byte classes)
 - **Phase:** 1
 - **Depends on:** 04-chunking-fastcdc
 - **Design refs:** §6 (classification), §1.2 (the core DwarFS idea)

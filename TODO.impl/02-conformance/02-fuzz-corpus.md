@@ -1,6 +1,6 @@
 # 02 — Fuzz corpus and differential testing
 
-- **Status:** pending
+- **Status:** deferred — cargo-fuzz integration not yet wired into nightly CI
 - **Phase:** 0, ongoing
 - **Depends on:** 02-conformance-harness
 - **Design refs:** §11 (malicious-image corpus)

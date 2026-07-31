@@ -1,6 +1,6 @@
 # 13 — GitHub Actions matrix
 
-- **Status:** done
+- **Status:** done — limnifs/.github repo reusable workflows + per-repo callers
 - **Phase:** 0
 - **Depends on:** none (stands up with the repo skeleton, before 01 lands)
 - **Design refs:** §11; root README §5 items 6–7

@@ -1,6 +1,6 @@
 # 08 — S3 locator
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/s3_locator.rs (path-style, anon buckets for v1)
 - **Phase:** 2
 - **Depends on:** 08-http-range-streaming
 - **Design refs:** §10.1, §12 (cloud sharding/assembly)

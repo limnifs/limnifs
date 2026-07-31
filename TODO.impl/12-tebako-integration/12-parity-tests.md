@@ -1,6 +1,6 @@
 # 12 — Parity test suite
 
-- **Status:** pending
+- **Status:** dropped — depends on 12-press-consume-limni
 - **Phase:** 1
 - **Depends on:** 12-press-consume-limni, 09-import-dwarfs
 - **Design refs:** §15 (Phase 1 exit gate)

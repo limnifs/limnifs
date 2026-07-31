@@ -1,6 +1,6 @@
 # 06 — Turnover (tier 3, full re-encode defrag)
 
-- **Status:** pending
+- **Status:** done — limnifs-write/src/turnover.rs (wraps compaction)
 - **Phase:** 2
 - **Depends on:** 06-metadata-flatten, 04-slab-packing-gc
 - **Design refs:** §7 (tier 3), §3 (turnover vocabulary)

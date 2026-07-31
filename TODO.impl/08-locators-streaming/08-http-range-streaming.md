@@ -1,6 +1,6 @@
 # 08 — HTTP range streaming
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/http_locator.rs (hand-rolled HTTP/1.1, behind http feature)
 - **Phase:** 2
 - **Depends on:** 08-locator-trait-registry
 - **Design refs:** §10.1 (streaming-native), §6 (read path), §1.1 (DwarFS read amplification)
