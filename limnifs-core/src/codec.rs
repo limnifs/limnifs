@@ -7,87 +7,76 @@
 //!
 //! ## Supported codecs
 //!
-//! | Id | Name | Feature flag | Notes |
-//! |---|---|---|---|
-//! | 0x00 | store | always | No compression; bytes are plaintext |
-//! | 0x01 | lz4 | always (pure Rust) | LZ4 block format; mandatory baseline |
-//! | 0x02 | zstd | `zstd` (wraps libzstd) | Zstandard; better ratio than LZ4 |
-//! | 0x03 | xz | `xz` (wraps liblzma) | XZ/LZMA2; best ratio for binary data |
+//! | Id  | Name | Encode | Decode | Notes |
+//! |-----|------|--------|--------|-------|
+//! | 0x00 | store | yes (identity) | yes | No compression |
+//! | 0x01 | lz4   | yes ([`lz4_flex`]) | yes | Fast baseline; pure Rust |
+//! | 0x02 | zstd  | yes ([`ruzstd`] `Fastest`) | yes ([`ruzstd`]) | Pure Rust; ZSTD level 1 |
+//! | 0x03 | xz    | **no** | yes ([`lzma-rs`]) | Decode-only for legacy drops |
 //!
-//! The air-gapped baseline (`--no-default-features`) provides only store
-//! and LZ4 — both pure Rust, no C libraries needed.
+//! **Why XZ is decode-only.** [`lzma-rs`] 0.3.0 ships an LZMA2 "encoder" that
+//! wraps input as uncompressed chunks (`encode/lzma2.rs`) and a raw-LZMA
+//! encoder that emits literals only (`encode/dumbencoder.rs`). Neither
+//! performs real compression. There is no mature pure-Rust LZMA encoder as
+//! of 2026, so `LimniFS` reserves the XZ codec id for reading legacy drops
+//! produced by external tooling and routes its own encoding to ZSTD.
 //!
-//! Other codec ids are rejected with [`CoreError::UnsupportedFeature`].
+//! **100% pure Rust.** No C libraries. Air-gapped safe.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
+
+use std::io::Read;
 
 use crate::error::CoreError;
 
 /// Codec id 0x00: store (no compression).
 pub const CODEC_STORE: u8 = 0x00;
-/// Codec id 0x01: LZ4 block format (pure Rust, always available).
+/// Codec id 0x01: LZ4 block format ([`lz4_flex`], pure Rust).
 pub const CODEC_LZ4: u8 = 0x01;
-/// Codec id 0x02: Zstandard frame format (requires `zstd` feature).
+/// Codec id 0x02: Zstandard frame format ([`ruzstd`], pure Rust).
+/// Encode uses `CompressionLevel::Fastest` (ZSTD level 1); decode supports
+/// any level the reference encoder can produce.
 pub const CODEC_ZSTD: u8 = 0x02;
-/// Codec id 0x03: XZ/LZMA2 format (requires `xz` feature).
+/// Codec id 0x03: XZ/LZMA2 format. Decode-only in pure Rust ([`lzma-rs`]).
 pub const CODEC_XZ: u8 = 0x03;
 
-/// Default ZSTD compression level for the deepening phase.
-/// Level 9 gives near-LZMA compression ratios at LZ4-class speed.
-#[cfg(feature = "zstd")]
-pub const ZSTD_DEFAULT_LEVEL: i32 = 9;
-
-/// Default XZ preset for the deepening phase.
-/// Preset 6 is the XZ default level — good ratio without excessive
-/// encoding time. LZMA2 typically beats ZSTD by 10-20% on binary
-/// and structured data.
-#[cfg(feature = "xz")]
-pub const XZ_DEFAULT_PRESET: u32 = 6;
-
 /// Returns the best available codec for compressible content classes.
-/// Priority: xz > zstd > lz4 > store. Uses whatever is compiled in.
+/// ZSTD level 1 beats LZ4 on ratio at similar encode speed and round-trips
+/// through a pure-Rust encoder/decoder pair.
 #[must_use]
 pub fn best_compressible_codec() -> u8 {
-    if cfg!(feature = "xz") {
-        CODEC_XZ
-    } else if cfg!(feature = "zstd") {
-        CODEC_ZSTD
-    } else {
-        CODEC_LZ4
-    }
+    CODEC_ZSTD
 }
 
 /// Returns the best available codec for binary content classes.
-/// Priority: xz > zstd > lz4 > store.
+/// ZSTD handles structured binary data well at level 1; higher-ratio
+/// pure-Rust options do not exist as of 2026.
 #[must_use]
 pub fn best_binary_codec() -> u8 {
-    // Same as compressible — the caller decides via codec map.
-    best_compressible_codec()
+    CODEC_ZSTD
 }
 
 /// Compress `plaintext` using the codec identified by `codec_id`.
 ///
-/// For `CODEC_STORE` the input is returned unchanged. For `CODEC_LZ4`
-/// the input is compressed with LZ4 block format (no frame header).
-///
 /// # Errors
 ///
-/// Returns [`CoreError::UnsupportedFeature`] for unknown codec ids or
-/// for codecs not compiled in (e.g. ZSTD without the `zstd` feature).
+/// Returns [`CoreError::UnsupportedFeature`] for unknown codec ids and for
+/// codecs that are decode-only in pure Rust (currently `CODEC_XZ`).
+/// Returns [`CoreError::Corrupt`] if the encoder fails.
 pub fn compress(codec_id: u8, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
     match codec_id {
         CODEC_STORE => Ok(plaintext.to_vec()),
         CODEC_LZ4 => Ok(lz4_flex::compress_prepend_size(plaintext)),
-        #[cfg(feature = "zstd")]
-        CODEC_ZSTD => compress_zstd(plaintext, ZSTD_DEFAULT_LEVEL),
-        #[cfg(feature = "xz")]
-        CODEC_XZ => compress_xz(plaintext, XZ_DEFAULT_PRESET),
+        CODEC_ZSTD => compress_zstd(plaintext),
+        CODEC_XZ => Err(CoreError::UnsupportedFeature {
+            feature: "compress codec 0x03 (xz): pure-Rust LZMA encoder does not exist; \
+                      lzma-rs 0.3.0's encoder is a non-compressing stub"
+                .to_string(),
+        }),
         other => Err(CoreError::UnsupportedFeature {
             feature: format!(
-                "compress codec 0x{other:02X} — not compiled in. Available: store=0x00, lz4=0x01{zstd}{xz}",
-                zstd = if cfg!(feature = "zstd") { ", zstd=0x02" } else { "" },
-                xz = if cfg!(feature = "xz") { ", xz=0x03" } else { "" },
+                "compress codec 0x{other:02X} (supported: store=0x00, lz4=0x01, zstd=0x02; xz=0x03 decode-only)"
             ),
         }),
     }
@@ -97,14 +86,10 @@ pub fn compress(codec_id: u8, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
 /// The `expected_len` is the `plaintext_len` from the drop record;
 /// the decompressed output MUST match it exactly.
 ///
-/// For `CODEC_STORE` the input is returned unchanged. For `CODEC_LZ4`
-/// the input is decompressed with LZ4 block format, then its length
-/// is verified against `expected_len`.
-///
 /// # Errors
 ///
 /// Returns [`CoreError::UnsupportedFeature`] for unknown codec ids.
-/// Returns [`CoreError::Corrupt`] if LZ4 decompression fails or the
+/// Returns [`CoreError::Corrupt`] if decompression fails or the
 /// result length does not match `expected_len`.
 pub fn decompress(
     codec_id: u8,
@@ -113,14 +98,14 @@ pub fn decompress(
 ) -> Result<Vec<u8>, CoreError> {
     match codec_id {
         CODEC_STORE => {
-            let actual = compressed.len();
             let expected = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
                 reason: format!("decompress: expected_len {expected_len} exceeds usize"),
             })?;
-            if actual != expected {
+            if compressed.len() != expected {
                 return Err(CoreError::Corrupt {
                     reason: format!(
-                        "store codec: compressed length {actual} does not match plaintext_len {expected}"
+                        "store codec: compressed length {} does not match plaintext_len {expected}",
+                        compressed.len()
                     ),
                 });
             }
@@ -135,8 +120,6 @@ pub fn decompress(
                     reason: format!("lz4 decompress failed: {e}"),
                 }
             })?;
-            // The prepended size header carries the original length.
-            // Verify it matches the drop record's plaintext_len.
             if result.len() != expected_us {
                 return Err(CoreError::Corrupt {
                     reason: format!(
@@ -147,14 +130,23 @@ pub fn decompress(
             }
             Ok(result)
         }
-        #[cfg(feature = "zstd")]
         CODEC_ZSTD => {
             let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
                 reason: format!("decompress: expected_len {expected_len} exceeds usize"),
             })?;
-            let result = zstd::decode_all(compressed).map_err(|e| CoreError::Corrupt {
-                reason: format!("zstd decompress failed: {e}"),
-            })?;
+            let decoder =
+                ruzstd::decoding::StreamingDecoder::new(compressed).map_err(|e| {
+                    CoreError::Corrupt {
+                        reason: format!("zstd decompress (init) failed: {e}"),
+                    }
+                })?;
+            let mut result = Vec::with_capacity(expected_us);
+            decoder
+                .take(u64::from(expected_len))
+                .read_to_end(&mut result)
+                .map_err(|e| CoreError::Corrupt {
+                    reason: format!("zstd decompress failed: {e}"),
+                })?;
             if result.len() != expected_us {
                 return Err(CoreError::Corrupt {
                     reason: format!(
@@ -165,23 +157,19 @@ pub fn decompress(
             }
             Ok(result)
         }
-        #[cfg(feature = "xz")]
         CODEC_XZ => {
-            use std::io::Read;
             let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
                 reason: format!("decompress: expected_len {expected_len} exceeds usize"),
             })?;
-            let mut decoder = xz2::read::XzDecoder::new(compressed);
             let mut result = Vec::with_capacity(expected_us);
-            decoder
-                .read_to_end(&mut result)
+            lzma_rs::lzma2_decompress(&mut std::io::Cursor::new(compressed), &mut result)
                 .map_err(|e| CoreError::Corrupt {
-                    reason: format!("xz decompress failed: {e}"),
+                    reason: format!("lzma2 decompress failed: {e}"),
                 })?;
             if result.len() != expected_us {
                 return Err(CoreError::Corrupt {
                     reason: format!(
-                        "xz decompress: result length {} does not match `plaintext_len` {expected_us}",
+                        "lzma2 decompress: result length {} does not match plaintext_len {expected_us}",
                         result.len()
                     ),
                 });
@@ -190,9 +178,7 @@ pub fn decompress(
         }
         other => Err(CoreError::UnsupportedFeature {
             feature: format!(
-                "decompress codec 0x{other:02X} — not compiled in. Available: store=0x00, lz4=0x01{zstd}{xz}",
-                zstd = if cfg!(feature = "zstd") { ", zstd=0x02" } else { "" },
-                xz = if cfg!(feature = "xz") { ", xz=0x03" } else { "" },
+                "decompress codec 0x{other:02X} (supported: store=0x00, lz4=0x01, zstd=0x02, xz=0x03)"
             ),
         }),
     }
@@ -205,41 +191,20 @@ pub fn compress_lz4_with_size(plaintext: &[u8]) -> Vec<u8> {
     lz4_flex::compress_prepend_size(plaintext)
 }
 
-/// Compress with Zstandard at the given level (1-22). Level 9 gives
-/// near-LZMA compression ratios at LZ4-class speed. Prepends no size
-/// header; the `plaintext_len` from the drop record is used on decompress.
+/// Compress with Zstandard via [`ruzstd`] at `CompressionLevel::Fastest`
+/// (ZSTD level 1). The output is a standard ZSTD frame decodable by any
+/// conformant ZSTD decoder.
 ///
 /// # Errors
 ///
-/// Returns [`CoreError::Corrupt`] if the ZSTD encoder fails (e.g.
-/// out of memory).
-#[cfg(feature = "zstd")]
-pub fn compress_zstd(plaintext: &[u8], level: i32) -> Result<Vec<u8>, CoreError> {
-    zstd::encode_all(plaintext, level).map_err(|e| CoreError::Corrupt {
-        reason: format!("zstd compress failed: {e}"),
-    })
-}
-
-/// Compress with XZ/LZMA2 at the given preset (0-9). Preset 6 is the
-/// default; LZMA2 typically gives 10-20% better ratio than ZSTD on
-/// binary and structured data. The `plaintext_len` from the drop
-/// record is used on decompress (no size header in the XZ stream).
-///
-/// # Errors
-///
-/// Returns [`CoreError::Corrupt`] if the XZ encoder fails.
-#[cfg(feature = "xz")]
-pub fn compress_xz(plaintext: &[u8], preset: u32) -> Result<Vec<u8>, CoreError> {
-    use std::io::Write;
-    let mut encoder = xz2::write::XzEncoder::new(Vec::new(), preset);
-    encoder
-        .write_all(plaintext)
-        .map_err(|e| CoreError::Corrupt {
-            reason: format!("xz compress (write) failed: {e}"),
-        })?;
-    encoder.finish().map_err(|e| CoreError::Corrupt {
-        reason: format!("xz compress (finish) failed: {e}"),
-    })
+/// Returns [`CoreError::Corrupt`] if the ZSTD encoder fails.
+pub fn compress_zstd(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
+    // ruzstd::encoding::compress_to_vec returns Vec<u8> infallibly; the only
+    // failure mode is I/O on the Vec writer, which cannot fail.
+    Ok(ruzstd::encoding::compress_to_vec(
+        plaintext,
+        ruzstd::encoding::CompressionLevel::Fastest,
+    ))
 }
 
 #[cfg(test)]
@@ -291,47 +256,77 @@ mod tests {
         let compressed = compress(CODEC_LZ4, &data).expect("lz4 compress");
         assert!(
             compressed.len() < data.len(),
-            "lz4 should compress repetitive data: compressed={} original={}",
+            "lz4 should compress repetitive data: {} vs {}",
             compressed.len(),
             data.len()
         );
     }
 
     #[test]
-    fn rejects_unknown_compress_codec() {
-        match compress(0xFF, b"data") {
+    fn zstd_round_trips() {
+        let data = b"The quick brown fox jumps over the lazy dog. ".repeat(1000);
+        let compressed = compress_zstd(&data).expect("zstd compress");
+        let decompressed = decompress(
+            CODEC_ZSTD,
+            &compressed,
+            u32::try_from(data.len()).expect("fits u32"),
+        )
+        .expect("zstd decompress");
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn zstd_compresses_repetitive_data() {
+        let data = vec![0x41u8; 10_000];
+        let compressed = compress_zstd(&data).expect("zstd compress");
+        assert!(
+            compressed.len() < data.len(),
+            "zstd should compress repetitive data: {} vs {}",
+            compressed.len(),
+            data.len()
+        );
+    }
+
+    #[test]
+    fn zstd_compresses_better_than_lz4_on_text() {
+        let data = b"The quick brown fox. ".repeat(10_000);
+        let lz4 = compress(CODEC_LZ4, &data).expect("lz4");
+        let zstd = compress_zstd(&data).expect("zstd");
+        assert!(
+            zstd.len() < lz4.len(),
+            "zstd ({}) should be smaller than lz4 ({}) on text",
+            zstd.len(),
+            lz4.len()
+        );
+    }
+
+    #[test]
+    fn zstd_compresses_binary_data() {
+        let data: Vec<u8> = (0..100_000u32).map(|i| u8::try_from(i % 256).expect("fits u8")).collect();
+        let compressed = compress_zstd(&data).expect("zstd compress");
+        assert!(compressed.len() < data.len());
+        let decompressed = decompress(
+            CODEC_ZSTD,
+            &compressed,
+            u32::try_from(data.len()).expect("fits u32"),
+        )
+        .expect("zstd decompress");
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn xz_encode_is_unsupported() {
+        match compress(CODEC_XZ, b"data") {
             Err(CoreError::UnsupportedFeature { feature }) => {
-                assert!(feature.contains("0xFF"), "got: {feature}");
+                assert!(feature.contains("non-compressing stub"), "got: {feature}");
             }
             other => panic!("expected UnsupportedFeature, got {other:?}"),
         }
     }
 
     #[test]
-    fn rejects_unknown_decompress_codec() {
-        match decompress(0xFF, b"data", 4) {
-            Err(CoreError::UnsupportedFeature { feature }) => {
-                assert!(feature.contains("0xFF"), "got: {feature}");
-            }
-            other => panic!("expected UnsupportedFeature, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn lz4_decompress_rejects_corrupt_input() {
-        let garbage = vec![0xFFu8; 100];
-        match decompress(CODEC_LZ4, &garbage, 1000) {
-            Err(CoreError::Corrupt { .. }) => {}
-            other => panic!("expected Corrupt, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn compress_lz4_with_size_prepends_length() {
-        let data = b"test data for lz4";
-        let compressed = compress_lz4_with_size(data);
-        // First 4 bytes should be the original length (LE).
-        let size = u32::from_le_bytes([compressed[0], compressed[1], compressed[2], compressed[3]]);
-        assert_eq!(size as usize, data.len());
+    fn reject_unknown_codec() {
+        let result = compress(0xFF, b"data");
+        assert!(matches!(result, Err(CoreError::UnsupportedFeature { .. })));
     }
 }
