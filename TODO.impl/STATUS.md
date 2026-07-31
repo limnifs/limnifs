@@ -8,7 +8,7 @@ Living log of work sessions. Newest entry on top. Each entry: what's done
 ### Done
 
 This session pushed Phase 2 to substantive completion and landed
-three Phase 3 depth primitives. Every PR was rebase-merged immediately
+four Phase 3 depth primitives. Every PR was rebase-merged immediately
 to main; zero open PRs.
 
 **Phase 2:**
@@ -29,6 +29,17 @@ to main; zero open PRs.
   `flatten.rs` merges N manifests with zero drop I/O; `turnover.rs`
   wraps compaction with stable spec-named API. DropIds preserved
   across both.
+- **HPKE-style X25519 key wrap** —
+  [limnifs/limnifs#89](https://github.com/limnifs/limnifs/pull/89).
+  Per-recipient X25519 envelopes for the image master key.
+  Ciphersuite `DHKEM(X25519, HKDF-SHA256), HKDF-SHA256,
+  XChaCha20-Poly1305`. DropId stable across multi-recipient wrap.
+  Behind `key-wrap` feature.
+- **Ed25519 manifest signing** —
+  [limnifs/limnifs#90](https://github.com/limnifs/limnifs/pull/90).
+  Offline-verifiable keypair signatures over the `ManifestRoot`.
+  Keyless Fulcio + Rekor mode deferred to v2 (SignMode enum is
+  forward-compatible). Behind `signing` feature.
 
 **Phase 3:**
 
@@ -45,12 +56,10 @@ to main; zero open PRs.
   [limnifs/limnifs#88](https://github.com/limnifs/limnifs/pull/88).
   `IpfsLocator` (HTTP gateway), LEB128 varint, BLAKE3-256 multihash,
   CIDv1 codec, CARv1 encode/decode. Kubo RPC deferred to v2. 17 tests.
-- **HPKE-style X25519 key wrap** —
-  [limnifs/limnifs#89](https://github.com/limnifs/limnifs/pull/89).
-  Per-recipient X25519 envelopes for the image master key.
-  Ciphersuite DHKEM(X25519, HKDF-SHA256), HKDF-SHA256,
-  XChaCha20-Poly1305. DropId stable across multi-recipient wrap.
-  Behind new `key-wrap` feature. 9 tests.
+- **Slab repair via Reed-Solomon** —
+  [limnifs/limnifs#91](https://github.com/limnifs/limnifs/pull/91).
+  `ec_repair.rs` reconstructs missing shards from a DegradedSlab.
+  Offline by design — background/CLI op. 7 tests.
 
 ### Phase 2 task status
 
@@ -59,7 +68,7 @@ to main; zero open PRs.
 | 05-aead-registry | done |
 | 05-crypto (encrypt/decrypt) | done |
 | 05-key-wrap-hpke | done |
-| 05-signing-sigstore | pending |
+| 05-signing-sigstore | done (keypair mode; keyless Fulcio/Rekor deferred) |
 | 08-locator-trait | done |
 | 08-http-range-streaming | done |
 | 08-s3-locator | done |
@@ -73,17 +82,26 @@ to main; zero open PRs.
 | Task | Status |
 |---|---|
 | 07-reed-solomon-slabs | done |
-| 07-ec-repair | pending |
+| 07-ec-repair | done |
 | 05-dms (Shamir) | done |
 | 05-dms (time-lock) | gated on hardware-drift calibration |
 | IPFS locator + CAR | done |
 | 11-composefs-path | pending |
-| 14-website | pending |
+| 14-website | pending (separate repo limnifs/limnifs.org) |
+
+### Phase 1 status
+
+| Task | Status |
+|---|---|
+| 04-writer-pipeline | done |
+| 10-cli | done (20 commands) |
+| 11-mount (FUSE) | done |
+| 12-tebako-integration | blocked (cross-org, needs tebako upstream) |
 
 ### Test counts
 
-- Rust: 453 tests. Python: 55 tests. All green.
-- Zero open PRs.
+- Rust: 469 tests. Python: 55 tests. All green.
+- Zero open PRs across all repos.
 
 ## 2026-07-31 — Crypto + full CLI suite (session 23)
 
