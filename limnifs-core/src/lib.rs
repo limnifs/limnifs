@@ -36,6 +36,7 @@
 
 pub mod aead;
 pub mod codec;
+pub mod crypto;
 pub mod cursor;
 pub mod delta_linkage;
 pub mod directory_node;
