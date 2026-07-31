@@ -587,17 +587,18 @@ fn cat(image: &Path, path: &str) -> Result<(), CliError> {
 /// Mount a `.lim` image as a read-only FUSE filesystem.
 #[cfg(feature = "fuse")]
 fn mount(image: &Path, mountpoint: &Path) -> Result<(), CliError> {
-    let vfs = crate::vfs::Vfs::open(image).map_err(|e| CliError::FormatFailed {
-        path: image.to_path_buf(),
-        source: match e {
-            crate::vfs::VfsError::Core(c) => c,
-            crate::vfs::VfsError::Io(io) => {
-                return Err(CliError::ReadFailed {
-                    path: image.to_path_buf(),
-                    source: io,
-                })
-            }
-            crate::vfs::VfsError::NotFound => CoreError::Corrupt {
+    let vfs = crate::vfs::Vfs::open(image).map_err(|e| match e {
+        crate::vfs::VfsError::Core(c) => CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: c,
+        },
+        crate::vfs::VfsError::Io(io) => CliError::ReadFailed {
+            path: image.to_path_buf(),
+            source: io,
+        },
+        crate::vfs::VfsError::NotFound => CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
                 reason: "mount: image content not found".into(),
             },
         },
@@ -1208,7 +1209,7 @@ fn dedup_cmd(image: &Path) -> Result<(), CliError> {
 
 /// Compact an image by extracting → re-writing, eliminating slab garbage.
 fn compact(source: &Path, output: &Path) -> Result<(), CliError> {
-    let source_size = std::fs::metadata(source).map(|m| m.len()).unwrap_or(0);
+    let source_size = std::fs::metadata(source).map_or(0, |m| m.len());
 
     let temp_dir = std::env::temp_dir().join(format!(
         "limnifs-compact-{}-{}",

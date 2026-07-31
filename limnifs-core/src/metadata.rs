@@ -154,6 +154,21 @@ pub fn parse_metadata_blob_with_ceiling(
     let inode_count_us = usize::try_from(inode_count).map_err(|_| CoreError::Corrupt {
         reason: format!("metadata blob inode_count {inode_count} exceeds usize"),
     })?;
+    // DoS check: each inode needs at least INODE_FIXED_PREFIX_LEN + 1 (flags)
+    // bytes before any optional fields. Reject before allocating.
+    let min_inode_width = crate::inode::INODE_FIXED_PREFIX_LEN + 1;
+    let min_inodes_size =
+        inode_count_us
+            .checked_mul(min_inode_width)
+            .ok_or_else(|| CoreError::Corrupt {
+                reason: format!("metadata blob inode_count {inode_count_us} overflows usize"),
+            })?;
+    if cursor.remaining_len() < min_inodes_size {
+        return Err(CoreError::TooShort {
+            have: cursor.remaining_len(),
+            need: min_inodes_size,
+        });
+    }
     let mut inodes = Vec::with_capacity(inode_count_us);
     for _ in 0..inode_count_us {
         inodes.push(parse_inode_with_ceiling(cursor, max_inline_bytes)?);
@@ -163,6 +178,20 @@ pub fn parse_metadata_blob_with_ceiling(
     let dir_node_count_us = usize::try_from(dir_node_count).map_err(|_| CoreError::Corrupt {
         reason: format!("metadata blob dir_node_count {dir_node_count} exceeds usize"),
     })?;
+    // Each directory node needs at least 1 (version) + 4 (entry_count) bytes
+    // before any entries. Reject before allocating.
+    let min_dir_node_width = 5;
+    let min_dir_nodes_size = dir_node_count_us
+        .checked_mul(min_dir_node_width)
+        .ok_or_else(|| CoreError::Corrupt {
+            reason: format!("metadata blob dir_node_count {dir_node_count_us} overflows usize"),
+        })?;
+    if cursor.remaining_len() < min_dir_nodes_size {
+        return Err(CoreError::TooShort {
+            have: cursor.remaining_len(),
+            need: min_dir_nodes_size,
+        });
+    }
     let mut dir_nodes = Vec::with_capacity(dir_node_count_us);
     for _ in 0..dir_node_count_us {
         dir_nodes.push(parse_directory_node(cursor)?);
