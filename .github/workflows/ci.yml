@@ -17,6 +17,18 @@ jobs:
     name: No-shims gate
     uses: limnifs/.github/.github/workflows/no-shims-gate.yml@main
 
+  license-scan:
+    name: License scan (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --workspace --all-features
+
   rust:
     name: Rust matrix
     uses: limnifs/.github/.github/workflows/rust-ci.yml@main
