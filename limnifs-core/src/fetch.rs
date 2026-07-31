@@ -10,7 +10,7 @@
 //! | Scheme | Implementation | Notes |
 //! |---|---|---|
 //! | `file:` | [`FileLocator`] | Local path relative to manifest |
-//! | `https:` | _future_ | HTTP range streaming (08-locators) |
+//! | `http:` / `https:` | [`crate::http_locator::HttpLocator`] | HTTP range streaming (08-locators) |
 //! | `s3:` | _future_ | S3 GetObject (08-locators) |
 //! | `ipfs:` | _future_ | IPFS CAR (Phase 3) |
 
@@ -30,6 +30,8 @@ pub enum LocatorError {
     Io(std::io::Error),
     /// The resource was not found.
     NotFound,
+    /// The server returned an error status (HTTP-only).
+    Status { code: u16, body: String },
 }
 
 impl std::fmt::Display for LocatorError {
@@ -41,6 +43,9 @@ impl std::fmt::Display for LocatorError {
             Self::InvalidUri { reason } => write!(f, "invalid URI: {reason}"),
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::NotFound => write!(f, "resource not found"),
+            Self::Status { code, body } => {
+                write!(f, "HTTP {code}: {body}")
+            }
         }
     }
 }
@@ -75,6 +80,29 @@ pub trait Locator: Send + Sync {
     /// Returns [`LocatorError`] if the URI is unsupported, malformed,
     /// or the fetch fails.
     fn fetch(&self, uri: &str) -> Result<Vec<u8>, LocatorError>;
+
+    /// Fetch a byte range `[offset, offset + length)` from `uri`.
+    ///
+    /// The default implementation fetches the full resource and slices
+    /// in memory; locators that support range requests natively (HTTP,
+    /// S3) override this to avoid downloading the entire resource.
+    ///
+    /// `offset` past EOF returns an empty `Vec`. `offset + length` past
+    /// EOF returns the available suffix (clamped to the resource size).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LocatorError`] if the URI is unsupported, malformed,
+    /// or the fetch fails.
+    fn fetch_range(&self, uri: &str, offset: u64, length: u64) -> Result<Vec<u8>, LocatorError> {
+        let data = self.fetch(uri)?;
+        let total = u64::try_from(data.len()).unwrap_or(u64::MAX);
+        let start = offset.min(total);
+        let end = start.saturating_add(length).min(total);
+        let start_us = usize::try_from(start).unwrap_or(usize::MAX);
+        let end_us = usize::try_from(end).unwrap_or(usize::MAX);
+        Ok(data[start_us..end_us].to_vec())
+    }
 
     /// The URI scheme this locator handles (e.g. `"file"`).
     fn scheme(&self) -> &'static str;
