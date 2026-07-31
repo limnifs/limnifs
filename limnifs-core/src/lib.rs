@@ -66,6 +66,8 @@ pub mod reed_solomon;
 #[cfg(feature = "http")]
 pub mod s3_locator;
 pub mod shamir;
+#[cfg(feature = "signing")]
+pub mod signing;
 pub mod slab;
 pub mod slab_index;
 pub mod slab_reader;

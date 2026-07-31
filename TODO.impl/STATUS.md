@@ -3,6 +3,88 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-31 — Phase 2 + Phase 3 depth (session 24)
+
+### Done
+
+This session pushed Phase 2 to substantive completion and landed
+three Phase 3 depth primitives. Every PR was rebase-merged immediately
+to main; zero open PRs.
+
+**Phase 2:**
+
+- **HTTP range-streaming locator** —
+  [limnifs/limnifs#83](https://github.com/limnifs/limnifs/pull/83).
+  Hand-rolled HTTP/1.1 client over `std::net::TcpStream` (no
+  `reqwest`/`ureq` dep). `Locator::fetch_range` default method +
+  native range override. 14 tests including chunked encoding, 4xx/5xx,
+  EOF clamping.
+- **S3-compatible object store locator** —
+  [limnifs/limnifs#84](https://github.com/limnifs/limnifs/pull/84).
+  Path-style `s3://bucket/key` → HTTP translation. Works against AWS
+  S3, MinIO, DigitalOcean Spaces, Backblaze B2. SigV4 deferred to
+  future `aws-sigv4` feature.
+- **Metadata-only flatten + tier-3 turnover** —
+  [limnifs/limnifs#87](https://github.com/limnifs/limnifs/pull/87).
+  `flatten.rs` merges N manifests with zero drop I/O; `turnover.rs`
+  wraps compaction with stable spec-named API. DropIds preserved
+  across both.
+
+**Phase 3:**
+
+- **Shamir secret sharing over GF(2^8)** —
+  [limnifs/limnifs#85](https://github.com/limnifs/limnifs/pull/85).
+  k-of-n threshold split/combine using the Rijndael field. Caller-
+  supplied RNG closure (decouples math from system RNG). 23 tests.
+- **Reed-Solomon erasure coding** —
+  [limnifs/limnifs#86](https://github.com/limnifs/limnifs/pull/86).
+  Systematic (k+m) Vandermonde. Shared `gf256` module (Rijndael
+  field, same as AES). 30 GF + 17 RS tests. Identity preservation:
+  reconstruction byte-exact, DropIds stable.
+- **IPFS gateway + CARv1 codec** —
+  [limnifs/limnifs#88](https://github.com/limnifs/limnifs/pull/88).
+  `IpfsLocator` (HTTP gateway), LEB128 varint, BLAKE3-256 multihash,
+  CIDv1 codec, CARv1 encode/decode. Kubo RPC deferred to v2. 17 tests.
+- **HPKE-style X25519 key wrap** —
+  [limnifs/limnifs#89](https://github.com/limnifs/limnifs/pull/89).
+  Per-recipient X25519 envelopes for the image master key.
+  Ciphersuite DHKEM(X25519, HKDF-SHA256), HKDF-SHA256,
+  XChaCha20-Poly1305. DropId stable across multi-recipient wrap.
+  Behind new `key-wrap` feature. 9 tests.
+
+### Phase 2 task status
+
+| Task | Status |
+|---|---|
+| 05-aead-registry | done |
+| 05-crypto (encrypt/decrypt) | done |
+| 05-key-wrap-hpke | done |
+| 05-signing-sigstore | pending |
+| 08-locator-trait | done |
+| 08-http-range-streaming | done |
+| 08-s3-locator | done |
+| 08-ipfs-car | done |
+| 06-delta-builder | done |
+| 06-metadata-flatten | done |
+| 06-turnover | done |
+
+### Phase 3 task status
+
+| Task | Status |
+|---|---|
+| 07-reed-solomon-slabs | done |
+| 07-ec-repair | pending |
+| 05-dms (Shamir) | done |
+| 05-dms (time-lock) | gated on hardware-drift calibration |
+| IPFS locator + CAR | done |
+| 11-composefs-path | pending |
+| 14-website | pending |
+
+### Test counts
+
+- Rust: 453 tests. Python: 55 tests. All green.
+- Zero open PRs.
+
 ## 2026-07-31 — Crypto + full CLI suite (session 23)
 
 ### Done
