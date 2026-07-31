@@ -54,6 +54,8 @@ pub mod history;
 #[cfg(feature = "http")]
 pub mod http_locator;
 pub mod inode;
+#[cfg(feature = "http")]
+pub mod ipfs_locator;
 pub mod locator;
 pub mod merkle;
 pub mod metadata;
