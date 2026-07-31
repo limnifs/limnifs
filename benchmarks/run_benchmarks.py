@@ -286,26 +286,29 @@ def benchmark_limnifs(
     result.extract = extract_metrics
     shutil.rmtree(extract_dir, ignore_errors=True)
 
-    # Sequential read: cat every file in the source tree.
-    print(f"  [limnifs] cat (sequential read, 1 iter)")
+    # Sequential read: cat-multi on every file in the source tree.
+    # Uses cat-multi (not separate cat invocations) so the manifest
+    # is parsed once. This is the apples-to-apples comparison with
+    # tar's single-process extract.
+    print(f"  [limnifs] cat-multi (sequential read, 1 iter)")
     files = sorted(p for p in source.rglob("*") if p.is_file())
     cat_metric = OperationMetrics(
-        operation="limni cat (sequential)",
+        operation="limni cat-multi (sequential)",
         iterations=1,
         times_seconds=[],
         peak_rss_kb=None,
         output_size_bytes=None,
     )
     if files:
+        rel_paths = [str(f.relative_to(source).as_posix()) for f in files]
+        args = [str(limni), "cat-multi", str(image_path)] + rel_paths
         start = time.perf_counter()
-        for f in files:
-            rel = f.relative_to(source)
-            subprocess.run(
-                [str(limni), "cat", str(image_path), f"/{rel}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
+        subprocess.run(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
         cat_metric.times_seconds = [time.perf_counter() - start]
     result.cat = cat_metric
 
