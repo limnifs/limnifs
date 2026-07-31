@@ -159,6 +159,8 @@ enum Command {
         /// Path to the `.lim` image.
         image: PathBuf,
     },
+    /// Quick write/read/extract benchmark on a synthetic tree.
+    Benchmark,
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -190,6 +192,7 @@ fn run() -> Result<(), CliError> {
         Command::Dedup { image } => dedup_cmd(&image),
         Command::Compact { source, output } => compact(&source, &output),
         Command::Check { image } => check_cmd(&image),
+        Command::Benchmark => benchmark(),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -1297,6 +1300,84 @@ fn check_cmd(image: &Path) -> Result<(), CliError> {
         });
     }
     println!("  status:         all drops verified");
+    Ok(())
+}
+
+/// Quick write/read/extract benchmark on a synthetic tree.
+fn benchmark() -> Result<(), CliError> {
+    use std::time::Instant;
+
+    let id = std::process::id();
+    let src = std::env::temp_dir().join(format!("limnifs-bench-{id}-src"));
+    let img = std::env::temp_dir().join(format!("limnifs-bench-{id}.lim"));
+    let dest = std::env::temp_dir().join(format!("limnifs-bench-{id}-dest"));
+
+    // Create synthetic tree: 100 files of 1KB, 10 files of 100KB, 1 file of 1MB.
+    std::fs::create_dir_all(&src).expect("create src");
+    let mut total_bytes = 0u64;
+    for i in 0..100 {
+        let data = vec![u8::try_from(i & 0xFF).unwrap(); 1024];
+        total_bytes += data.len() as u64;
+        std::fs::write(src.join(format!("small{i:03}.txt")), &data).expect("write");
+    }
+    for i in 0..10 {
+        let data = vec![0x42u8; 100 * 1024];
+        total_bytes += data.len() as u64;
+        std::fs::write(src.join(format!("medium{i:02}.bin")), &data).expect("write");
+    }
+    let big = vec![0x55u8; 1024 * 1024];
+    total_bytes += big.len() as u64;
+    std::fs::write(src.join("large.bin"), &big).expect("write");
+
+    // Write benchmark.
+    let t0 = Instant::now();
+    let artifact =
+        limnifs_write::write_directory(&src).map_err(|e| CliError::WriteFailed { source: e })?;
+    let write_ms = t0.elapsed().as_millis();
+    std::fs::write(&img, &artifact.bytes).expect("write image");
+
+    // Verify benchmark.
+    let t1 = Instant::now();
+    verify(&img, false).expect("verify");
+    let verify_ms = t1.elapsed().as_millis();
+
+    // Extract benchmark.
+    let t2 = Instant::now();
+    extract(&img, &dest).expect("extract");
+    let extract_ms = t2.elapsed().as_millis();
+
+    let write_throughput = if write_ms > 0 {
+        total_bytes / u64::try_from(write_ms).unwrap_or(1) / 1024
+    } else {
+        0
+    };
+
+    #[allow(clippy::cast_precision_loss)]
+    {
+        println!(
+            "benchmark: synthetic tree ({:.1} MB)",
+            total_bytes as f64 / 1_048_576.0
+        );
+    }
+    println!("  write:   {write_ms} ms ({write_throughput} MB/s)");
+    println!("  verify:  {verify_ms} ms");
+    println!("  extract: {extract_ms} ms");
+    println!("  manifest: {} bytes", artifact.bytes.len());
+    println!(
+        "  drops: {} (inodes: {}, files: {}, dirs: {})",
+        artifact.drop_count, artifact.inode_count, artifact.file_count, artifact.dir_count
+    );
+
+    // Cleanup.
+    std::fs::remove_dir_all(&src).ok();
+    std::fs::remove_dir_all(&dest).ok();
+    std::fs::remove_file(&img).ok();
+    if let (Some(slab_bytes), Some(locator)) = (&artifact.slab_bytes, &artifact.slab_locator) {
+        let slab_name = locator.strip_prefix("file:").unwrap_or(locator);
+        let slab_path = std::env::temp_dir().join(slab_name);
+        let _ = std::fs::remove_file(&slab_path);
+        let _ = slab_bytes;
+    }
     Ok(())
 }
 
