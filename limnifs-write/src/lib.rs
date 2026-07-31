@@ -24,6 +24,8 @@ pub mod chunker;
 pub mod classifier;
 pub mod compaction;
 pub mod delta_builder;
+pub mod flatten;
+pub mod turnover;
 
 use std::collections::HashMap;
 use std::path::Path;
