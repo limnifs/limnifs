@@ -1,0 +1,106 @@
+name: Phase 2 exit gate
+
+# Phase 2 exit per TODO.impl/CAMPAIGN.md: crypto (AEAD, HPKE key wrap,
+# signing), locators (HTTP, S3, IPFS), deltas (flatten, turnover) all
+# green on linux + macOS. Blocks merges to main while red.
+#
+# Components covered:
+#   05-crypto (aead, crypto, key-wrap, signing)
+#   08-locators (HTTP range, S3, IPFS CAR)
+#   06-deltas (delta builder, flatten, turnover)
+#
+# Sigstore keyless is intentionally NOT in this gate — v1 ships
+# Ed25519 keypair mode (limnifs-core/src/signing.rs).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  crypto-suite:
+    name: Crypto + locators + deltas
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: phase2-${{ matrix.os }}
+      - name: Build all features
+        run: cargo build --workspace --all-features
+      - name: Crypto (AEAD, XChaCha20-Poly1305, key wrap, signing)
+        run: |
+          cargo test --workspace --all-features crypto
+          cargo test --package limnifs-core --features key-wrap key_wrap
+          cargo test --package limnifs-core --features signing signing
+      - name: Locators (HTTP, S3, IPFS)
+        run: |
+          cargo test --package limnifs-core --features http http_locator
+          cargo test --package limnifs-core --features http s3_locator
+          cargo test --package limnifs-core --features http ipfs_locator
+      - name: Deltas (flatten, turnover, delta builder)
+        run: cargo test --workspace --all-features flatten
+      - name: Deltas (turnover)
+        run: cargo test --workspace --all-features turnover
+
+  end-to-end-key-wrap:
+    name: End-to-end key wrap (seal master key, unwrap as recipient)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: phase2-e2e-keywrap
+      - name: Build key-wrap tests
+        run: cargo test --package limnifs-core --features key-wrap --no-run
+      - name: Run round-trip + multi-recipient + tamper tests
+        run: |
+          cargo test --package limnifs-core --features key-wrap \
+            key_wrap::tests::wrap_unwrap_round_trip
+          cargo test --package limnifs-core --features key-wrap \
+            key_wrap::tests::multiple_recipients_share_drop_id
+          cargo test --package limnifs-core --features key-wrap \
+            key_wrap::tests::wrong_recipient_cannot_unwrap
+
+  end-to-end-signing:
+    name: End-to-end signing (sign manifest, verify offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: phase2-e2e-signing
+      - name: Build signing tests
+        run: cargo test --package limnifs-core --features signing --no-run
+      - name: Run round-trip + tamper + offline-verify tests
+        run: |
+          cargo test --package limnifs-core --features signing \
+            signing::tests::sign_verify_round_trip
+          cargo test --package limnifs-core --features signing \
+            signing::tests::verify_rejects_tampered_root
+          cargo test --package limnifs-core --features signing \
+            signing::tests::bundle_is_offline_verifiable

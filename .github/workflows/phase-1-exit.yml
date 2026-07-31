@@ -1,0 +1,95 @@
+name: Phase 1 exit gate
+
+# Phase 1 exit per TODO.impl/CAMPAIGN.md: writer pipeline + CLI + FUSE
+# mount + 4-writer-pipeline acceptance all green on linux + macOS.
+# Blocks merges to main while red.
+#
+# Components covered:
+#   04-writer-pipeline (chunker, classifier, deepening, ingest, slab GC)
+#   10-cli (all subcommands)
+#   11-mount (FUSE frontend, optional feature)
+#
+# Note: 12-tebako-integration is intentionally NOT in this gate —
+# tebako integration is tebako's concern, not LimniFS's.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  writer-pipeline:
+    name: Writer pipeline (linux + macOS)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: phase1-writer-${{ matrix.os }}
+      - name: Build writer + CLI
+        run: cargo build --release --workspace --all-features --bin limni
+      - name: Run writer test suite
+        run: cargo test --release --package limnifs-write
+      - name: Smoke-test the CLI end-to-end
+        run: |
+          set -euo pipefail
+          SRC=$(mktemp -d)
+          mkdir "$SRC/sub"
+          printf "hello phase 1" > "$SRC/hello.txt"
+          printf "nested content" > "$SRC/sub/nested.txt"
+          IMG=$(mktemp -d)/image.lim
+          ./target/release/limni limn "$SRC" "$IMG"
+          ./target/release/limni verify "$IMG"
+          ./target/release/limni ls "$IMG" /
+          ./target/release/limni tree "$IMG" /
+          ./target/release/limni cat "$IMG" /hello.txt
+          ./target/release/limni inspect "$IMG"
+          ./target/release/limni check "$IMG"
+          ./target/release/limni history "$IMG"
+          ./target/release/limni dedup "$IMG"
+          DEST=$(mktemp -d)
+          ./target/release/limni extract "$IMG" "$DEST"
+          diff "$SRC/hello.txt" "$DEST/hello.txt"
+          diff "$SRC/sub/nested.txt" "$DEST/sub/nested.txt"
+
+  cli-full-suite:
+    name: CLI full command suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: phase1-cli
+      - name: Build with all features
+        run: cargo build --workspace --all-features --bin limni
+      - name: Run CLI tests
+        run: cargo test --workspace --all-features limni
+      - name: Verify CLI surface
+        run: |
+          ./target/debug/limni --help > /dev/null
+          ./target/debug/limni limn --help > /dev/null
+          ./target/debug/limni verify --help > /dev/null
+          ./target/debug/limni cat --help > /dev/null
+          ./target/debug/limni shamir-split --help > /dev/null
+          ./target/debug/limni shamir-combine --help > /dev/null
