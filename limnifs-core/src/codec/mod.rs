@@ -15,6 +15,7 @@
 //! | 0x02 | zstd  | yes (`ruzstd` `Fastest`) | yes (`ruzstd`) | Pure Rust; ZSTD level 1 |
 //! | 0x03 | xz    | **no** | yes (`lzma-rs`) | Decode-only for legacy drops |
 //! | 0x04 | brotli | yes (`brotli` q11) | yes (`brotli`) | Best ratio; pure Rust |
+//! | 0x05 | deflate | yes (`miniz_oxide`) | yes (`miniz_oxide`) | RFC 1951; universal interop; pure Rust |
 //!
 //! **Why XZ is decode-only.** `lzma-rs` 0.3.0 ships an LZMA2 "encoder" that
 //! wraps input as uncompressed chunks (`encode/lzma2.rs`) and a raw-LZMA
@@ -29,6 +30,7 @@
 #![warn(clippy::pedantic)]
 
 mod brotli;
+mod deflate;
 mod lz4;
 mod store;
 mod xz;
@@ -51,6 +53,9 @@ pub const CODEC_XZ: u8 = 0x03;
 /// Codec id 0x04: Brotli frame format (`brotli`, pure Rust). Encode at
 /// quality 11 (best ratio); decode at any quality.
 pub const CODEC_BROTLI: u8 = 0x04;
+/// Codec id 0x05: DEFLATE stream format (`miniz_oxide`, pure Rust).
+/// Raw RFC 1951 inside a zlib wrapper (RFC 1950).
+pub const CODEC_DEFLATE: u8 = 0x05;
 
 /// The behaviour every compression codec implements. New codecs register
 /// a `Codec` impl with [`CodecRegistry::register`]; the dispatch code
@@ -168,6 +173,7 @@ impl Default for CodecRegistry {
         registry.register(Box::new(zstd::ZstdCodec));
         registry.register(Box::new(xz::XzCodec));
         registry.register(Box::new(brotli::BrotliCodec));
+        registry.register(Box::new(deflate::DeflateCodec));
         registry
     }
 }
@@ -257,6 +263,17 @@ pub fn compress_zstd(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
 /// Returns [`CoreError::Corrupt`] if the Brotli encoder fails.
 pub fn compress_brotli(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
     brotli::compress(plaintext, brotli::DEFAULT_QUALITY)
+}
+
+/// Compress with DEFLATE at level 6 (default). Output is a zlib-framed
+/// DEFLATE stream (RFC 1950) decodable by any zlib decoder (`gzip -d`,
+/// `zlib.decompress`, etc.).
+///
+/// # Errors
+///
+/// Returns [`CoreError::Corrupt`] if the DEFLATE encoder fails (rare).
+pub fn compress_deflate(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
+    deflate::compress(plaintext, deflate::DEFAULT_LEVEL)
 }
 
 #[cfg(test)]
@@ -435,6 +452,43 @@ mod tests {
     }
 
     #[test]
+    fn deflate_round_trips() {
+        let data = b"The quick brown fox jumps over the lazy dog. ".repeat(1000);
+        let compressed = compress_deflate(&data).expect("deflate compress");
+        let decompressed = decompress(
+            CODEC_DEFLATE,
+            &compressed,
+            u32::try_from(data.len()).expect("fits u32"),
+        )
+        .expect("deflate decompress");
+        assert_eq!(decompressed, data);
+    }
+
+    #[test]
+    fn deflate_compresses_repetitive_data() {
+        let data = vec![0x41u8; 10_000];
+        let compressed = compress_deflate(&data).expect("deflate compress");
+        assert!(
+            compressed.len() < data.len(),
+            "deflate should compress repetitive data: {} vs {}",
+            compressed.len(),
+            data.len()
+        );
+    }
+
+    #[test]
+    fn deflate_decompress_rejects_length_mismatch() {
+        let data = b"hello world";
+        let compressed = compress_deflate(data).expect("deflate compress");
+        match decompress(CODEC_DEFLATE, &compressed, 99) {
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(reason.contains("does not match"), "got: {reason}");
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn registry_registers_custom_codec_without_changing_dispatch() {
         struct NoopCodec;
         const NOOP_ID: u8 = 0xFE;
@@ -485,13 +539,14 @@ mod tests {
     }
 
     #[test]
-    fn default_registry_has_all_five_codecs() {
+    fn default_registry_has_all_six_codecs() {
         let registry = default_registry();
         assert!(registry.find(CODEC_STORE).is_some());
         assert!(registry.find(CODEC_LZ4).is_some());
         assert!(registry.find(CODEC_ZSTD).is_some());
         assert!(registry.find(CODEC_XZ).is_some());
         assert!(registry.find(CODEC_BROTLI).is_some());
+        assert!(registry.find(CODEC_DEFLATE).is_some());
         assert!(registry.find(0xFF).is_none());
     }
 }

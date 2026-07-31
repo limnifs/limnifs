@@ -16,6 +16,7 @@ ed25519-dalek = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
 lz4_flex.workspace = true
 lzma-rs.workspace = true
+miniz_oxide.workspace = true
 rand_core = { workspace = true, optional = true }
 rayon.workspace = true
 ruzstd.workspace = true
