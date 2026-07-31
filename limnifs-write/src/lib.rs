@@ -121,7 +121,7 @@ pub fn write_directory(root: &Path) -> Result<WriteArtifact, WriteError> {
 
         // Phase 3: merge results SEQUENTIALLY into drops + inodes.
         // Dedup happens here so the slab layout is deterministic.
-        for (pf, result) in pending.iter().zip(results.into_iter()) {
+        for (pf, result) in pending.iter().zip(results) {
             ctx.merge_chunked_file(pf, result);
         }
     }
@@ -158,7 +158,15 @@ fn process_file(
 
         let class = classifier.classify(chunk);
         let (codec, compressed) = match class {
-            classifier::Class::Text | classifier::Class::Code | classifier::Class::Binary => {
+            classifier::Class::Binary => {
+                // LZMA2 beats ZSTD by 10-20% on structured/binary data.
+                let c =
+                    limnifs_core::codec::compress_xz(chunk, limnifs_core::codec::XZ_DEFAULT_PRESET)
+                        .unwrap_or_else(|_| chunk.to_vec());
+                (limnifs_core::codec::CODEC_XZ, c)
+            }
+            classifier::Class::Text | classifier::Class::Code => {
+                // ZSTD handles repetitive text/code near-optimally.
                 let c = limnifs_core::codec::compress_zstd(
                     chunk,
                     limnifs_core::codec::ZSTD_DEFAULT_LEVEL,
