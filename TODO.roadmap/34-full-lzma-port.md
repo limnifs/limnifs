@@ -1,9 +1,10 @@
-# 34 — Full pure-Rust LZMA/LZMA2/XZ encoder (limnifs/lzma fork of lzma-rs)
+# 34 — Full pure-Rust LZMA/LZMA2/XZ encoder (repo: [limnifs/lzma](https://github.com/limnifs/lzma))
 
 - **Priority:** P1 (blocks ratio parity with reference `xz`)
 - **Depends on:** 35 (registry refactor)
 - **Estimated effort:** **months** (calendar-quarter scale)
-- **Repos touched:** new repo `limnifs/lzma`, then `limnifs/limnifs`
+- **Repos touched:** [`limnifs/lzma`](https://github.com/limnifs/lzma) (new), then `limnifs/limnifs`
+- **Porting strategy:** decoder forked from lzma-rs 0.3 (MIT/Apache); encoder ported line-by-line from `tukaani-project/xz` liblzma (0BSD / public domain); test fixtures adopted verbatim from `tukaani-project/xz/tests/`. Full plan in [`limnifs/lzma/PLAN.md`](https://github.com/limnifs/lzma/blob/main/PLAN.md).
 
 ## Problem
 

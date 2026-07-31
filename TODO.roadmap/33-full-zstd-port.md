@@ -1,9 +1,10 @@
-# 33 — Full pure-Rust ZSTD encoder (limnifs/zstd fork of ruzstd)
+# 33 — Full pure-Rust ZSTD encoder (repo: [limnifs/zstd](https://github.com/limnifs/zstd))
 
 - **Priority:** P1 (blocks "best ratio" tier without it)
 - **Depends on:** 35 (registry refactor), 31 (codec 0x04 brotli — for ratio comparison)
 - **Estimated effort:** **months** (calendar-quarter scale)
-- **Repos touched:** new repo `limnifs/zstd`, then `limnifs/limnifs`
+- **Repos touched:** [`limnifs/zstd`](https://github.com/limnifs/zstd) (new), then `limnifs/limnifs`
+- **Porting strategy:** decoder forked from ruzstd 0.9 (MIT/Apache); encoder ported line-by-line from `facebook/zstd` (BSD-3-Clause); test fixtures adopted verbatim from `facebook/zstd/tests/`. Full plan in [`limnifs/zstd/PLAN.md`](https://github.com/limnifs/zstd/blob/main/PLAN.md).
 
 ## Problem
 
