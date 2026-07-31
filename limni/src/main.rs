@@ -1090,6 +1090,7 @@ fn print_tree(
 
 /// Extract an image to a filesystem directory.
 fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
+    use rayon::prelude::*;
     let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
         path: image.to_path_buf(),
         source,
@@ -1104,33 +1105,112 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
         source,
     })?;
     let root_inode = blob.inode_by_number(root_inode_number).expect("validated");
-    let mut files = 0usize;
-    let mut dirs = 0usize;
-    extract_dir(
+
+    // Phase 1: walk the tree SEQUENTIALLY to create directories and
+    // collect file paths. Directory creation must be sequential to
+    // avoid races.
+    let mut file_tasks: Vec<(PathBuf, &limnifs_core::Inode)> = Vec::new();
+    let mut dir_count = 0usize;
+    let slab_path = if slab_index.is_empty() {
+        None
+    } else {
+        Some(resolve_slab_path(image, &slab_index)?)
+    };
+    extract_dir_collect(
         &blob,
         root_inode,
         dest,
-        image,
-        &slab_index,
-        &mut files,
-        &mut dirs,
+        &mut file_tasks,
+        &mut dir_count,
     )?;
+
+    // Phase 2: load the slab once (if any) and write files IN PARALLEL.
+    // Each file write is independent; rayon distributes them across cores.
+    let slab_bytes: Option<Vec<u8>> = match &slab_path {
+        Some(p) => Some(std::fs::read(p).map_err(|source| CliError::ReadFailed {
+            path: p.clone(),
+            source,
+        })?),
+        None => None,
+    };
+    let slab_view = slab_bytes
+        .as_deref()
+        .map(limnifs_core::parse_slab)
+        .transpose()
+        .map_err(map_err)?;
+
+    let file_count = file_tasks.len();
+    let write_errors: Vec<Option<CliError>> = file_tasks
+        .par_iter()
+        .map(|(path, inode)| {
+            extract_file(path, inode, slab_view.as_ref()).err()
+        })
+        .collect();
+    if let Some(Some(err)) = write_errors.into_iter().next() {
+        return Err(err);
+    }
+
     println!(
-        "{}: extracted {files} files, {dirs} directories",
+        "{}: extracted {file_count} files, {dir_count} directories",
         dest.display()
     );
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn extract_dir(
-    blob: &MetadataBlob,
+/// Write a single file to disk. Called from a rayon worker thread.
+fn extract_file(
+    path: &Path,
+    inode: &limnifs_core::Inode,
+    slab_view: Option<&limnifs_core::SlabView>,
+) -> Result<(), CliError> {
+    match &inode.content_handle {
+        ContentHandle::InlineData(data) => {
+            std::fs::write(path, data).map_err(|source| CliError::ReadFailed {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        }
+        ContentHandle::SliceMap(slices) => {
+            let view = slab_view.ok_or_else(|| CliError::FormatFailed {
+                path: path.to_path_buf(),
+                source: CoreError::Corrupt {
+                    reason: "extract: file references drops but slab is missing".into(),
+                },
+            })?;
+            let mut data = Vec::new();
+            for slice in slices {
+                let plaintext = view
+                    .plaintext_for(slice.drop_id.as_bytes())
+                    .ok_or_else(|| CliError::FormatFailed {
+                        path: path.to_path_buf(),
+                        source: CoreError::Corrupt {
+                            reason: "slab: drop not found".into(),
+                        },
+                    })?
+                    .map_err(|e| CliError::FormatFailed {
+                        path: path.to_path_buf(),
+                        source: e,
+                    })?;
+                data.extend_from_slice(&plaintext);
+            }
+            std::fs::write(path, &data).map_err(|source| CliError::ReadFailed {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Walk a directory inode recursively, creating directories and
+/// collecting file extraction tasks.
+fn extract_dir_collect<'a>(
+    blob: &'a MetadataBlob,
     dir_inode: &limnifs_core::Inode,
     dir_path: &Path,
-    image: &Path,
-    slab_index: &limnifs_core::SlabIndex,
-    files: &mut usize,
-    dirs: &mut usize,
+    file_tasks: &mut Vec<(PathBuf, &'a limnifs_core::Inode)>,
+    dir_count: &mut usize,
 ) -> Result<(), CliError> {
     let hash = match &dir_inode.content_handle {
         ContentHandle::Directory(h) => *h,
@@ -1141,95 +1221,37 @@ fn extract_dir(
         .ok_or_else(|| CliError::FormatFailed {
             path: dir_path.to_path_buf(),
             source: CoreError::Corrupt {
-                reason: "dir node missing".into(),
+                reason: "directory node not found in blob".into(),
             },
         })?;
     for entry in &node.entries {
-        let child =
-            blob.inode_by_number(entry.inode_number)
-                .ok_or_else(|| CliError::FormatFailed {
-                    path: dir_path.to_path_buf(),
-                    source: CoreError::Corrupt {
-                        reason: format!("inode {} missing", entry.inode_number),
-                    },
-                })?;
-        let child_path = dir_path.join(&entry.name);
-        match entry.entry_type {
-            0x01 => {
-                write_file(blob, child, &child_path, image, slab_index)?;
-                *files += 1;
+        let entry_path = dir_path.join(&entry.name);
+        let child_inode = blob.inode_by_number(entry.inode_number).ok_or_else(|| {
+            CliError::FormatFailed {
+                path: dir_path.to_path_buf(),
+                source: CoreError::Corrupt {
+                    reason: format!("inode {} missing", entry.inode_number),
+                },
             }
-            0x02 => {
-                std::fs::create_dir_all(&child_path).map_err(|source| CliError::ReadFailed {
-                    path: child_path.clone(),
+        })?;
+        match &child_inode.content_handle {
+            ContentHandle::Directory(_) => {
+                *dir_count += 1;
+                std::fs::create_dir_all(&entry_path).map_err(|source| CliError::ReadFailed {
+                    path: entry_path.clone(),
                     source,
                 })?;
-                *dirs += 1;
-                extract_dir(blob, child, &child_path, image, slab_index, files, dirs)?;
+                extract_dir_collect(blob, child_inode, &entry_path, file_tasks, dir_count)?;
             }
-            _ => {}
+            _ => {
+                file_tasks.push((entry_path, child_inode));
+            }
         }
     }
     Ok(())
 }
 
-fn write_file(
-    _blob: &MetadataBlob,
-    inode: &limnifs_core::Inode,
-    target: &Path,
-    image: &Path,
-    slab_index: &limnifs_core::SlabIndex,
-) -> Result<(), CliError> {
-    use std::io::Write;
-    let mut file = std::fs::File::create(target).map_err(|source| CliError::ReadFailed {
-        path: target.to_path_buf(),
-        source,
-    })?;
-    match &inode.content_handle {
-        ContentHandle::InlineData(d) => {
-            file.write_all(d).map_err(|source| CliError::ReadFailed {
-                path: target.to_path_buf(),
-                source,
-            })?;
-        }
-        ContentHandle::SliceMap(slices) => {
-            for slice in slices {
-                let slab_path = resolve_slab_path(image, slab_index)?;
-                let slab_bytes =
-                    std::fs::read(&slab_path).map_err(|source| CliError::ReadFailed {
-                        path: slab_path.clone(),
-                        source,
-                    })?;
-                let view = limnifs_core::parse_slab(&slab_bytes).map_err(|source| {
-                    CliError::FormatFailed {
-                        path: slab_path.clone(),
-                        source,
-                    }
-                })?;
-                let plaintext = view
-                    .plaintext_for(slice.drop_id.as_bytes())
-                    .ok_or_else(|| CliError::FormatFailed {
-                        path: slab_path.clone(),
-                        source: CoreError::Corrupt {
-                            reason: "drop not found".into(),
-                        },
-                    })?
-                    .map_err(|source| CliError::FormatFailed {
-                        path: slab_path.clone(),
-                        source,
-                    })?;
-                file.write_all(&plaintext)
-                    .map_err(|source| CliError::ReadFailed {
-                        path: target.to_path_buf(),
-                        source,
-                    })?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
+#[allow(clippy::too_many_arguments)]
 /// Compute the delta between two images and print tree operations.
 fn diff(parent: &Path, child: &Path) -> Result<(), CliError> {
     let artifact = limnifs_write::delta_builder::compute_delta(parent, child).map_err(|e| {

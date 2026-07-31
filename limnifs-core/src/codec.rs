@@ -11,6 +11,7 @@
 //! |---|---|---|
 //! | 0x00 | store | No compression; bytes are plaintext |
 //! | 0x01 | lz4 | LZ4 block format (no frame); mandatory baseline |
+//! | 0x02 | zstd | Zstandard frame format; better ratio than LZ4 |
 //!
 //! Other codec ids are rejected with [`CoreError::UnsupportedFeature`].
 
@@ -23,6 +24,12 @@ use crate::error::CoreError;
 pub const CODEC_STORE: u8 = 0x00;
 /// Codec id 0x01: LZ4 block format.
 pub const CODEC_LZ4: u8 = 0x01;
+/// Codec id 0x02: Zstandard frame format.
+pub const CODEC_ZSTD: u8 = 0x02;
+
+/// Default ZSTD compression level for the deepening phase.
+/// Level 9 gives near-LZMA compression ratios at LZ4-class speed.
+pub const ZSTD_DEFAULT_LEVEL: i32 = 9;
 
 /// Compress `plaintext` using the codec identified by `codec_id`.
 ///
@@ -36,8 +43,11 @@ pub fn compress(codec_id: u8, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
     match codec_id {
         CODEC_STORE => Ok(plaintext.to_vec()),
         CODEC_LZ4 => Ok(lz4_flex::compress_prepend_size(plaintext)),
+        CODEC_ZSTD => compress_zstd(plaintext, ZSTD_DEFAULT_LEVEL),
         other => Err(CoreError::UnsupportedFeature {
-            feature: format!("compress codec 0x{other:02X} (supported: store=0x00, lz4=0x01)"),
+            feature: format!(
+                "compress codec 0x{other:02X} (supported: store=0x00, lz4=0x01, zstd=0x02)"
+            ),
         }),
     }
 }
@@ -96,8 +106,27 @@ pub fn decompress(
             }
             Ok(result)
         }
+        CODEC_ZSTD => {
+            let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
+                reason: format!("decompress: expected_len {expected_len} exceeds usize"),
+            })?;
+            let result = zstd::decode_all(compressed).map_err(|e| CoreError::Corrupt {
+                reason: format!("zstd decompress failed: {e}"),
+            })?;
+            if result.len() != expected_us {
+                return Err(CoreError::Corrupt {
+                    reason: format!(
+                        "zstd decompress: result length {} does not match plaintext_len {expected_us}",
+                        result.len()
+                    ),
+                });
+            }
+            Ok(result)
+        }
         other => Err(CoreError::UnsupportedFeature {
-            feature: format!("decompress codec 0x{other:02X} (supported: store=0x00, lz4=0x01)"),
+            feature: format!(
+                "decompress codec 0x{other:02X} (supported: store=0x00, lz4=0x01, zstd=0x02)"
+            ),
         }),
     }
 }
@@ -107,6 +136,21 @@ pub fn decompress(
 #[must_use]
 pub fn compress_lz4_with_size(plaintext: &[u8]) -> Vec<u8> {
     lz4_flex::compress_prepend_size(plaintext)
+}
+
+/// Compress with Zstandard at the given level (1-22). Level 9 gives
+/// near-LZMA compression ratios at LZ4-class speed. Prepends no size
+/// header; the `plaintext_len` from the drop record is used on decompress.
+///
+/// # Errors
+///
+/// Returns [`CoreError::Corrupt`] if the ZSTD encoder fails (e.g.
+/// out of memory).
+pub fn compress_zstd(plaintext: &[u8], level: i32) -> Result<Vec<u8>, CoreError> {
+    zstd::encode_all(plaintext, level)
+        .map_err(|e| CoreError::Corrupt {
+            reason: format!("zstd compress failed: {e}"),
+        })
 }
 
 #[cfg(test)]
