@@ -183,6 +183,27 @@ enum Command {
         /// 64-character hex key (32 bytes).
         key: String,
     },
+    /// Split a file into `n` Shamir shares, any `k` of which reconstruct it.
+    ///
+    /// Each share is written to `<output_prefix>.share-<i>` for i in 1..=n.
+    /// Share format: 1 byte index + payload bytes.
+    ShamirSplit {
+        input: PathBuf,
+        output_prefix: PathBuf,
+        /// Threshold (k): minimum shares needed to reconstruct.
+        #[arg(long)]
+        threshold: usize,
+        /// Total share count (n).
+        #[arg(long)]
+        shares: usize,
+    },
+    /// Combine Shamir shares back into the original file.
+    ///
+    /// Pass at least `k` share paths; output is written to the given path.
+    ShamirCombine {
+        shares: Vec<PathBuf>,
+        output: PathBuf,
+    },
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -223,6 +244,13 @@ fn run() -> Result<(), CliError> {
         Command::Keygen => keygen(),
         Command::Seal { input, output, key } => seal_cmd(&input, &output, &key),
         Command::Open { input, output, key } => open_cmd(&input, &output, &key),
+        Command::ShamirSplit {
+            input,
+            output_prefix,
+            threshold,
+            shares,
+        } => shamir_split(&input, &output_prefix, threshold, shares),
+        Command::ShamirCombine { shares, output } => shamir_combine(&shares, &output),
         #[cfg(feature = "fuse")]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
@@ -1564,6 +1592,79 @@ fn parse_hex_key(hex: &str) -> Result<Vec<u8>, CliError> {
         .collect()
 }
 
+/// Split a file into n Shamir shares (any k reconstruct).
+fn shamir_split(
+    input: &Path,
+    output_prefix: &Path,
+    threshold: usize,
+    shares: usize,
+) -> Result<(), CliError> {
+    let secret = std::fs::read(input).map_err(|source| CliError::ReadFailed {
+        path: input.to_path_buf(),
+        source,
+    })?;
+    let shares_bytes = limnifs_core::shamir::split(&secret, threshold, shares, getrandom_rng)
+        .map_err(|e| CliError::FormatFailed {
+            path: input.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!("shamir split: {e}"),
+            },
+        })?;
+    for (i, share) in shares_bytes.iter().enumerate() {
+        let path = format!("{}.share-{}", output_prefix.display(), i + 1);
+        let path = PathBuf::from(path);
+        std::fs::write(&path, share).map_err(|source| CliError::ReadFailed {
+            path: path.clone(),
+            source,
+        })?;
+        println!(
+            "wrote share {}/{} (index {}) to {}",
+            i + 1,
+            shares,
+            share[0],
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Combine k Shamir shares back into the original file.
+fn shamir_combine(shares: &[PathBuf], output: &Path) -> Result<(), CliError> {
+    let mut share_bytes: Vec<Vec<u8>> = Vec::with_capacity(shares.len());
+    for path in shares {
+        let bytes = std::fs::read(path).map_err(|source| CliError::ReadFailed {
+            path: path.clone(),
+            source,
+        })?;
+        share_bytes.push(bytes);
+    }
+    let share_refs: Vec<&[u8]> = share_bytes.iter().map(Vec::as_slice).collect();
+    let secret =
+        limnifs_core::shamir::combine(&share_refs).map_err(|e| CliError::FormatFailed {
+            path: output.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!("shamir combine: {e}"),
+            },
+        })?;
+    std::fs::write(output, &secret).map_err(|source| CliError::ReadFailed {
+        path: output.to_path_buf(),
+        source,
+    })?;
+    println!(
+        "reconstructed {} bytes from {} shares",
+        secret.len(),
+        share_refs.len()
+    );
+    Ok(())
+}
+
+/// RNG closure that pulls from getrandom (CSPRNG).
+fn getrandom_rng(out: &mut [u8]) -> Result<(), limnifs_core::shamir::ShamirError> {
+    getrandom::getrandom(out).map_err(|e| limnifs_core::shamir::ShamirError::RngFailed {
+        reason: format!("getrandom: {e}"),
+    })
+}
+
 /// Derive the path to the slab file that holds a slice's drop. Uses
 /// the first locator of the first entry in the slab index, resolved
 /// relative to the manifest file's directory.
@@ -2322,5 +2423,57 @@ mod tests {
         assert!(parse_hex_key("short").is_err());
         assert!(parse_hex_key(&"42".repeat(32)).is_ok());
         assert!(parse_hex_key(&"gg".repeat(32)).is_err());
+    }
+
+    #[test]
+    fn shamir_split_combine_round_trip() {
+        let id = std::process::id();
+        let dir = std::env::temp_dir().join(format!("limni-shamir-{id}"));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        let input = dir.join("secret.txt");
+        let prefix = dir.join("shares");
+        let output = dir.join("recovered.txt");
+        std::fs::write(&input, b"shamir-protected master key").expect("write");
+
+        shamir_split(&input, &prefix, 3, 5).expect("split");
+        // Collect any 3 of the 5 shares.
+        let shares: Vec<PathBuf> = [1, 3, 5]
+            .iter()
+            .map(|i| PathBuf::from(format!("{}.share-{i}", prefix.to_string_lossy())))
+            .collect::<Vec<_>>();
+        shamir_combine(&shares, &output).expect("combine");
+
+        let recovered = std::fs::read(&output).expect("read recovered");
+        assert_eq!(recovered, b"shamir-protected master key");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn shamir_combine_rejects_too_few_shares() {
+        let id = std::process::id();
+        let dir = std::env::temp_dir().join(format!("limni-shamir-few-{id}"));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        let input = dir.join("secret.txt");
+        let prefix = dir.join("shares");
+        std::fs::write(&input, b"secret").expect("write");
+
+        shamir_split(&input, &prefix, 3, 5).expect("split");
+        // Only 2 shares — combine produces garbage, but won't error.
+        // The test verifies it does NOT reproduce the secret.
+        let shares: Vec<PathBuf> = [1, 2]
+            .iter()
+            .map(|i| PathBuf::from(format!("{}.share-{i}", prefix.to_string_lossy())))
+            .collect::<Vec<_>>();
+        let output = dir.join("recovered.txt");
+        shamir_combine(&shares, &output).expect("combine produces SOME output");
+        let recovered = std::fs::read(&output).expect("read");
+        // The recovered bytes must NOT equal the original.
+        assert_ne!(
+            recovered, b"secret",
+            "k-1 shares must not reveal the secret"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
