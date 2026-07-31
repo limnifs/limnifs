@@ -17,8 +17,8 @@ hkdf = { workspace = true, optional = true }
 lz4_flex.workspace = true
 lzma-rs.workspace = true
 miniz_oxide.workspace = true
-omnizip-codecs = { path = "../../../omnizip/omnizip-rs/omnizip-codecs" }
-omnizip-snappy = { path = "../../../omnizip/omnizip-rs/omnizip-snappy" }
+omnizip-codecs = { git = "https://github.com/omnizip/omnizip-rs.git", branch = "main" }
+omnizip-snappy = { git = "https://github.com/omnizip/omnizip-rs.git", branch = "main" }
 rand_core = { workspace = true, optional = true }
 rayon.workspace = true
 ruzstd.workspace = true
