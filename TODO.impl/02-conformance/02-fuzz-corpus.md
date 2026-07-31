@@ -1,6 +1,6 @@
 # 02 — Fuzz corpus and differential testing
 
-- **Status:** deferred — cargo-fuzz integration not yet wired into nightly CI
+- **Status:** done — 9 cargo-fuzz targets in fuzz/, nightly-fuzz.yml CI workflow, fuzz/README.md
 - **Phase:** 0, ongoing
 - **Depends on:** 02-conformance-harness
 - **Design refs:** §11 (malicious-image corpus)
