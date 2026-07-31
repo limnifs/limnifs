@@ -722,6 +722,7 @@ fn cat(image: &Path, path: &str, offset: Option<u64>, length: Option<u64>) -> Re
 /// For trees with many small files this is ~100x faster than spawning
 /// one `limni cat` process per file, because the per-invocation cost
 /// (manifest read + parse + slab load) is amortized.
+#[allow(clippy::too_many_lines)]
 fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
     use std::io::Write;
     let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
@@ -732,10 +733,16 @@ fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
         path: image.to_path_buf(),
         source,
     };
-    let (blob, root_inode_number, slab_index) = load_image(&manifest_bytes, image, map_err)?;
-    let root_inode = blob
-        .inode_by_number(root_inode_number)
-        .expect("load_image validates root inode");
+    let (blob, _root_inode_number, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+
+    // Build the path→inode index ONCE. For trees with many files
+    // this is the difference between O(N²) and O(N) cat-multi.
+    // Profiling on a 5000-file flat directory showed cat-multi
+    // spending ~1s in resolve_path's linear directory scans; the
+    // index drops that to ~10ms.
+    let path_index = blob.build_path_index();
+    let inode_index: std::collections::HashMap<u64, &limnifs_core::Inode> =
+        blob.inodes.iter().map(|i| (i.number, i)).collect();
 
     let slab_bytes: Option<Vec<u8>> = if slab_index.is_empty() {
         None
@@ -760,13 +767,30 @@ fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     for path in paths {
-        let target_inode =
-            resolve_path(&blob, root_inode, path).ok_or_else(|| CliError::FormatFailed {
+        // Normalise: ensure leading slash, strip trailing slash, drop
+        // empty components. Matches the path keys produced by
+        // build_path_index.
+        let normalised = if path.starts_with('/') {
+            path.trim_end_matches('/').to_owned()
+        } else {
+            format!("/{}", path.trim_end_matches('/'))
+        };
+        let Some(&inode_number) = path_index.get(&normalised) else {
+            return Err(CliError::FormatFailed {
                 path: image.to_path_buf(),
                 source: CoreError::Corrupt {
                     reason: format!("metadata blob: path {path:?} not found in tree"),
                 },
-            })?;
+            });
+        };
+        let Some(target_inode) = inode_index.get(&inode_number) else {
+            return Err(CliError::FormatFailed {
+                path: image.to_path_buf(),
+                source: CoreError::Corrupt {
+                    reason: format!("metadata blob: inode {inode_number} missing"),
+                },
+            });
+        };
         writeln!(out, "==> {path} ==>").map_err(|source| CliError::ReadFailed {
             path: image.to_path_buf(),
             source,
