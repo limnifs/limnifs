@@ -302,7 +302,9 @@ mod tests {
 
     #[test]
     fn zstd_compresses_binary_data() {
-        let data: Vec<u8> = (0..100_000u32).map(|i| u8::try_from(i % 256).expect("fits u8")).collect();
+        let data: Vec<u8> = (0..100_000u32)
+            .map(|i| u8::try_from(i % 256).expect("fits u8"))
+            .collect();
         let compressed = compress_zstd(&data).expect("zstd compress");
         assert!(compressed.len() < data.len());
         let decompressed = decompress(
