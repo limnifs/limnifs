@@ -159,8 +159,12 @@ fn process_file(
         let class = classifier.classify(chunk);
         let (codec, compressed) = match class {
             classifier::Class::Text | classifier::Class::Code | classifier::Class::Binary => {
-                let c = limnifs_core::codec::compress_lz4_with_size(chunk);
-                (limnifs_core::codec::CODEC_LZ4, c)
+                let c = limnifs_core::codec::compress_zstd(
+                    chunk,
+                    limnifs_core::codec::ZSTD_DEFAULT_LEVEL,
+                )
+                .unwrap_or_else(|_| chunk.to_vec());
+                (limnifs_core::codec::CODEC_ZSTD, c)
             }
             _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
         };
