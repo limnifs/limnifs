@@ -3,6 +3,104 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-07-31 — Pure-Rust codecs + registry refactor + Brotli (session 28)
+
+### Done
+
+User directive 2026-07-31: "full pure-Rust ports of libzstd and liblzma
+are ABSOLUTELY NECESSARY; also add brotli and the other algos DwarFS
+uses." Five PRs delivered, all rebased-merged.
+
+**Pure-Rust codec migration —
+[limnifs/limnifs#108](https://github.com/limnifs/limnifs/pull/108).**
+Removed C wrappers `xz2` (liblzma) and `zstd` (libzstd); replaced with
+`lzma-rs` 0.3 (pure Rust, decode-only) and `ruzstd` 0.9 (pure Rust,
+encode level 1 + full decode). Root-cause finding during this work:
+`lzma-rs` 0.3's LZMA2 "encoder" (`encode/lzma2.rs`) wraps input as
+uncompressed chunks and its raw-LZMA encoder (`encode/dumbencoder.rs`)
+emits literals only — neither performs real compression. CODEC_XZ
+compress path now returns `UnsupportedFeature`; decode path preserved
+for legacy drops. Also removed ALL shell-out code from `limni`
+(composefs, sigstore, `which` crate) per the no-shell-out rule.
+475 tests pass.
+
+**Codec port plans —
+[limnifs/limnifs#109](https://github.com/limnifs/limnifs/pull/109).**
+Six new roadmap items (31–36):
+- 31: Brotli codec 0x04 (quick win)
+- 32: DEFLATE codec 0x05 via miniz_oxide (quick win)
+- 33: Full ZSTD encoder port (months; fork ruzstd + port facebook/zstd)
+- 34: Full LZMA encoder port (months; fork lzma-rs + port tukaani-project/xz)
+- 35: Codec registry refactor (P0 blocker for 31–34)
+- 36: DwarFS algorithm parity matrix (umbrella)
+
+**Codec OCP registry refactor —
+[limnifs/limnifs#110](https://github.com/limnifs/limnifs/pull/110).**
+Replaced the `match codec_id` dispatch in `codec.rs` with a `Codec`
+trait + `CodecRegistry`. Module split: `codec/mod.rs` (trait, registry,
+constants) + `codec/{store,lz4,zstd,xz}.rs` (per-codec impls). Adding a
+codec is now a new file + one `register()` call; dispatch code never
+changes. Default registry in a `static OnceLock`. 478 tests pass.
+
+**Roadmap links to new port repos —
+[limnifs/limnifs#111](https://github.com/limnifs/limnifs/pull/111).**
+Items 33 and 34 now point at the newly-created
+[`limnifs/zstd`](https://github.com/limnifs/zstd) and
+[`limnifs/lzma`](https://github.com/limnifs/lzma) repos.
+
+**Brotli codec 0x04 —
+[limnifs/limnifs#112](https://github.com/limnifs/limnifs/pull/112).**
+Pure-Rust Brotli via the `brotli` crate (Daniel Reiter Horn, the
+format's original author). Quality 11 (maximum). Now the highest-ratio
+pure-Rust codec in the registry. **OCP proof point**: adding this codec
+required exactly one new file and two lines in `codec/mod.rs`; no
+dispatch code was touched. Brotli q11 beats ZSTD-1 on text. 482 tests
+pass.
+
+**New port repos live (initial skeletons):**
+- [`limnifs/zstd`](https://github.com/limnifs/zstd) — fork ruzstd + port
+  facebook/zstd. Decoder inherited; encoder ported in three phases
+  (levels 2–3, 4–9, 10–22). Full plan in `PLAN.md`.
+- [`limnifs/lzma`](https://github.com/limnifs/lzma) — fork lzma-rs + port
+  tukaani-project/xz liblzma. Decoder inherited; encoder ported in
+  three phases (levels 0–3, 4–6, 7–9 + LZMA2 + XZ container). Full plan
+  in `PLAN.md`.
+
+### Codec table (post-session)
+
+| Id | Name | Encode | Decode | Pure Rust? |
+|---|---|---|---|---|
+| 0x00 | store | yes | yes | ✅ |
+| 0x01 | lz4 | yes | yes | ✅ (lz4_flex) |
+| 0x02 | zstd | yes (L1) | yes | ✅ (ruzstd) |
+| 0x03 | xz | **no** | yes | ✅ (lzma-rs, decode-only) |
+| 0x04 | brotli | yes (q11) | yes | ✅ (brotli) |
+
+### Test counts
+
+- Rust: 482 tests. Python: 55 tests. All green.
+- Zero open PRs.
+
+### In progress / Blockers
+
+- Nothing mid-flight. No blockers.
+
+### Next
+
+- **Item 32** (DEFLATE codec 0x05): quick win, same OCP pattern as
+  Brotli. Add `miniz_oxide` + `codec/deflate.rs`.
+- **Items 33 / 34** (full ZSTD / LZMA ports): multi-month efforts in
+  the new `limnifs/zstd` and `limnifs/lzma` repos. Phase A of each
+  (levels 2–3 ZSTD, levels 0–3 LZMA) is the natural starting point.
+- **Item 06** (`--codec-map` flag): CLI flag letting users route content
+  classes to specific codecs+levels (e.g., `Text=brotli-11,Binary=zstd-6`).
+- **Item 07** (enhanced classifier): more content classes for finer-
+  grained codec routing.
+- **Items 02–04** (epoch format, replay, commit): the writable-images
+  P0 track; independent of the codec work.
+
+---
+
 ## 2026-07-31 — Benchmark suite + profiling-driven optimizations (session 27)
 
 ### Done
