@@ -1,6 +1,6 @@
 # 08 — IPFS locator and CAR interop
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/ipfs_locator.rs (gateway + CARv1 codec, behind http feature)
 - **Phase:** 3
 - **Depends on:** 08-locator-trait-registry
 - **Design refs:** §10.2 (IPFS scale), §4 (multihash-compatible DropIds)

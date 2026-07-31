@@ -1,6 +1,6 @@
 # 02 — Conformance harness
 
-- **Status:** pending
+- **Status:** done — limnifs-conformance/src/differential.rs; phase-0-exit.yml gate green
 - **Phase:** 0
 - **Depends on:** 02-test-vector-format
 - **Design refs:** §11, §15

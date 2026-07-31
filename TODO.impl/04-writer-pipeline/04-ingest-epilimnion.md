@@ -1,6 +1,6 @@
 # 04 — Epilimnion ingest
 
-- **Status:** pending
+- **Status:** done — limnifs-write/src/lib.rs INLINE_THRESHOLD=4096; drop dedup via BLAKE3
 - **Phase:** 1
 - **Depends on:** 04-classifier-seine
 - **Design refs:** §6 (quick write), §12 (CI artifact use case)

@@ -1,6 +1,6 @@
 # 03 — Drop-store reader
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/{slab,drop_record,slab_reader}.rs
 - **Phase:** 0
 - **Depends on:** 03-manifest-parser
 - **Design refs:** §4 (identity), §5 (two-level addressing), §6 (read path)

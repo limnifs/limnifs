@@ -1,6 +1,6 @@
 # 13 — Merge gates and scheduled legs
 
-- **Status:** pending
+- **Status:** done — phase-0-exit.yml + phase-1-exit.yml + phase-2-exit.yml all green
 - **Phase:** 0, grows per phase
 - **Depends on:** 13-actions-matrix, 02-conformance-harness
 - **Design refs:** §15 (phase exits)

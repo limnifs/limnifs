@@ -1,6 +1,6 @@
 # 04 — Deepening compactor
 
-- **Status:** pending
+- **Status:** done — limnifs-write/src/lib.rs deepen_drop (LZ4 per class)
 - **Phase:** 1
 - **Depends on:** 04-ingest-epilimnion
 - **Design refs:** §6 (metalimnion → hypolimnion), §16 (open question 1: solid blocks)

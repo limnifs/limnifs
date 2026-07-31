@@ -1,6 +1,6 @@
 # 10 — inspect / verify commands
 
-- **Status:** pending
+- **Status:** done — verify, inspect, ls, cat, stat, tree, slab, gc, history, dedup, check, benchmark
 - **Phase:** 1
 - **Depends on:** 10-cli-skeleton
 - **Design refs:** §9 (verify), §11

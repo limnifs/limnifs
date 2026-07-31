@@ -1,6 +1,6 @@
 # 02 — Test-vector format and generator
 
-- **Status:** pending
+- **Status:** done — limnifs-conformance/src/vectors.rs
 - **Phase:** 0
 - **Depends on:** 01-flatbuffers-schema
 - **Design refs:** §11, §15 (Phase 0 exit)

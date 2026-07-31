@@ -1,6 +1,6 @@
 # 03 — Overlay resolver
 
-- **Status:** pending
+- **Status:** done — limnifs-core::ContentHandle::SliceMap resolves via SlabView
 - **Phase:** 0 (single-image), 2 (chains)
 - **Depends on:** 03-drop-store-reader
 - **Design refs:** §7 (tier-1 read-time overlay), §16 (open question 4)

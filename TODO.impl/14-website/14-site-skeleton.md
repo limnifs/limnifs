@@ -1,6 +1,6 @@
 # 14 — Site skeleton and deploy
 
-- **Status:** pending
+- **Status:** done — limnifs/limnifs.github.io repo (Astro 7 + Vue 3 + Tailwind 4)
 - **Phase:** 1
 - **Depends on:** none (design doc content feeds 14-content-pages)
 - **Design refs:** §3; rnpgp.org reference at `~/src/rnp/rnpgp.org/`

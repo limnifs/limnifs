@@ -1,6 +1,6 @@
 # 05 — AEAD registry
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/aead.rs (plaintext=0x00, XChaCha20-Poly1305=0x01)
 - **Phase:** 2
 - **Depends on:** 03-drop-store-reader
 - **Design refs:** §9 (registry, nonces, AD), §4 (crypto as representation)

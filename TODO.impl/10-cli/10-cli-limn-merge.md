@@ -1,6 +1,6 @@
 # 10 — limn / deepen / merge / turnover commands
 
-- **Status:** pending
+- **Status:** done — limn, extract, compact, diff, shamir-split/combine, sigstore-sign/verify, composefs-export
 - **Phase:** 1–2
 - **Depends on:** 10-cli-skeleton, 04-ingest-epilimnion, 06-metadata-flatten
 - **Design refs:** §6, §7

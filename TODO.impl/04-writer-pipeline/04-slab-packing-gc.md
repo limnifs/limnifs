@@ -1,6 +1,6 @@
 # 04 — Slab packing and drop GC
 
-- **Status:** pending
+- **Status:** done — limnifs-write/src/{compaction,turnover}.rs
 - **Phase:** 1
 - **Depends on:** 04-ingest-epilimnion
 - **Design refs:** §5 (slab packing, Taobao TFS lesson), §7 (turnover GC)

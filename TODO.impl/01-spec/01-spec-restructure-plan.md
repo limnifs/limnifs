@@ -1,6 +1,6 @@
 # 01 — Spec restructure plan (multi-file, onion-layered, bit-level)
 
-- **Status:** pending (blocked on this plan's approval)
+- **Status:** done — spec restructured into limnifs/spec repo (multi-file)
 - **Phase:** 0
 - **Depends on:** [2026-07-29-wire-format-pivot.md](../../docs/superpowers/specs/2026-07-29-wire-format-pivot.md) D6 (accepted)
 - **Design refs:** pivot decision D6; original design doc §5 (now

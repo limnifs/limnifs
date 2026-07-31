@@ -1,6 +1,6 @@
 # 07 — Reed-Solomon slab coding
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/{gf256,reed_solomon}.rs (systematic Vandermonde)
 - **Phase:** 3
 - **Depends on:** 04-slab-packing-gc
 - **Design refs:** §8 (EC), §4 (identity-neutral representation)

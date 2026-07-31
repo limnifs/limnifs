@@ -1,6 +1,6 @@
 # 06 — Delta builder
 
-- **Status:** pending
+- **Status:** done — limnifs-write/src/delta_builder.rs
 - **Phase:** 2
 - **Depends on:** 04-ingest-epilimnion
 - **Design refs:** §7 (delta manifests), §16 (open question 4)

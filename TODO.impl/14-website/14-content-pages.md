@@ -1,6 +1,6 @@
 # 14 — Content pages (home, about, install, docs, blog)
 
-- **Status:** pending
+- **Status:** done — index, about, format, scenarios, adapters, docs, blog pages
 - **Phase:** 1
 - **Depends on:** 14-site-skeleton
 - **Design refs:** §3, §12; design doc §1 (lineage), §15 (phases)

@@ -1,6 +1,6 @@
 # 04 — Content-defined chunking (FastCDC)
 
-- **Status:** pending
+- **Status:** done — limnifs-write/src/chunker.rs (FastCDC, Xia et al. 2016)
 - **Phase:** 1
 - **Depends on:** 03-drop-store-reader
 - **Design refs:** §6 (ingest), §16 (open question 2)

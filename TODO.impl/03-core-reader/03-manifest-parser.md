@@ -1,6 +1,6 @@
 # 03 — Manifest parser
 
-- **Status:** pending
+- **Status:** done — limnifs-core/src/{header,feature_flags,metadata_reference,slab_index,history,ec_params,dms_policy,delta_linkage}.rs
 - **Phase:** 0
 - **Depends on:** 01-flatbuffers-schema
 - **Design refs:** §5 (manifest), §11 (untrusted input)

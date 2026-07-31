@@ -1,6 +1,6 @@
 # 05 — Dead man's switch
 
-- **Status:** pending
+- **Status:** done — Shamir in limnifs-core/src/shamir.rs; time-lock variant deferred on hardware-drift calibration
 - **Phase:** 3
 - **Depends on:** 05-key-wrap-hpke
 - **Design refs:** §8 (DMS), §16 (open question 3)

@@ -1,6 +1,6 @@
 # 01 — Format spec v0.1
 
-- **Status:** pending
+- **Status:** done — spec lives in limnifs/spec repo; bit-level docs in limnifs/spec/bit-level/
 - **Phase:** 0
 - **Depends on:** none
 - **Design refs:** §4, §5, §9, §10.1
