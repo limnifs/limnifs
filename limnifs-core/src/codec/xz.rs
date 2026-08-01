@@ -2,7 +2,7 @@
 //!
 //! The omnizip-lzma crate is a Rust port of omnizip's Ruby LZMA reference
 //! (itself derived from tukaani-project/xz liblzma). Decode handles raw
-//! LZMA2 chunk data as stored in LimniFS drop records. Encode returns
+//! LZMA2 chunk data as stored in `LimniFS` drop records. Encode returns
 //! `UnsupportedFeature` until the LZMA encoder port is complete.
 
 #![forbid(unsafe_code)]

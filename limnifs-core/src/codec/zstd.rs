@@ -1,13 +1,10 @@
 //! Zstandard codec (0x02): frame format via `ruzstd` (pure Rust).
 //!
-//! Encode uses `CompressionLevel::Fastest` (ZSTD level 1) — ruzstd
-//! 0.9.0's only implemented encode level. Decode supports any level
-//! the reference ZSTD encoder can produce.
-//!
-//! omnizip-zstd (from omnizip/omnizip-rs) handles Raw, RLE, and simple
-//! Compressed blocks but does not yet support Huffman-coded literals.
-//! It will replace ruzstd once the Huffman path is ported. The omnizip-zstd
-//! differential parity tests pass on all golden fixtures from facebook/zstd.
+//! Decode uses `ruzstd`'s `StreamingDecoder` (handles all ZSTD frame
+//! variants including Huffman-coded literals). `omnizip-zstd` 0.1.0 on
+//! crates.io passes all golden fixture parity tests but does not yet
+//! handle compressed/treeless literals — it will replace ruzstd for
+//! decode once that path ships. Encode uses ruzstd's level-1 encoder.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -61,12 +58,6 @@ impl Codec for ZstdCodec {
 }
 
 /// Compress with Zstandard at `CompressionLevel::Fastest` (ZSTD level 1).
-/// The output is a standard ZSTD frame decodable by any conformant ZSTD
-/// decoder.
-///
-/// `ruzstd::encoding::compress_to_vec` is infallible, so this wrapper
-/// never fails; the `Result` is kept for symmetry with the other codec
-/// helpers.
 #[allow(clippy::unnecessary_wraps)]
 pub(crate) fn compress(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
     Ok(ruzstd::encoding::compress_to_vec(

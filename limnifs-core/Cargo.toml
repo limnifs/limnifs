@@ -16,10 +16,10 @@ ed25519-dalek = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
 lz4_flex.workspace = true
 miniz_oxide.workspace = true
-omnizip-codecs = { git = "https://github.com/omnizip/omnizip-rs.git", branch = "main" }
-omnizip-lzma = { git = "https://github.com/omnizip/omnizip-rs.git", branch = "main" }
-omnizip-snappy = { git = "https://github.com/omnizip/omnizip-rs.git", branch = "main" }
-omnizip-zstd = { git = "https://github.com/omnizip/omnizip-rs.git", branch = "main" }
+omnizip-codecs = "0.1"
+omnizip-lzma = "0.1"
+omnizip-snappy = "0.1"
+omnizip-zstd = "0.1"
 rand_core = { workspace = true, optional = true }
 rayon.workspace = true
 ruzstd.workspace = true

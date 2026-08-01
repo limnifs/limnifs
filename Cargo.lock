@@ -647,12 +647,14 @@ dependencies = [
 [[package]]
 name = "omnizip-codecs"
 version = "0.1.0"
-source = "git+https://github.com/omnizip/omnizip-rs.git?branch=main#8039c06cdfb12b1d9398367e8db452d6646804d6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3292b4238247b9afbdb8376b637b8991a52629e89c33d8448014f5ed8954a7be"
 
 [[package]]
 name = "omnizip-lzma"
 version = "0.1.0"
-source = "git+https://github.com/omnizip/omnizip-rs.git?branch=main#8039c06cdfb12b1d9398367e8db452d6646804d6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89ed3eaca91cbf8bc3f9aa6ee30f791634d3b62a0a3c6cee6bea5115d4a952c5"
 dependencies = [
  "omnizip-codecs",
 ]
@@ -660,7 +662,8 @@ dependencies = [
 [[package]]
 name = "omnizip-snappy"
 version = "0.1.0"
-source = "git+https://github.com/omnizip/omnizip-rs.git?branch=main#8039c06cdfb12b1d9398367e8db452d6646804d6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ea32017cf039900549ae4e696cda3184d5b78db7edc794de3bdd873f69f67eb"
 dependencies = [
  "omnizip-codecs",
  "snap",
@@ -669,7 +672,8 @@ dependencies = [
 [[package]]
 name = "omnizip-zstd"
 version = "0.1.0"
-source = "git+https://github.com/omnizip/omnizip-rs.git?branch=main#8039c06cdfb12b1d9398367e8db452d6646804d6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "924df7ba400c7778b24b14c245327e516b0c412a001cf4a47e4ecd61e4dae96a"
 dependencies = [
  "omnizip-codecs",
 ]
