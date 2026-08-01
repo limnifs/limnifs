@@ -395,7 +395,7 @@ mod tests {
     fn xz_encode_is_unsupported() {
         match compress(CODEC_XZ, b"data") {
             Err(CoreError::UnsupportedFeature { feature }) => {
-                assert!(feature.contains("non-compressing stub"), "got: {feature}");
+                assert!(feature.contains("encoder"), "got: {feature}");
             }
             other => panic!("expected UnsupportedFeature, got {other:?}"),
         }

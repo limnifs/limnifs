@@ -3,6 +3,11 @@
 //! Encode uses `CompressionLevel::Fastest` (ZSTD level 1) — ruzstd
 //! 0.9.0's only implemented encode level. Decode supports any level
 //! the reference ZSTD encoder can produce.
+//!
+//! omnizip-zstd (from omnizip/omnizip-rs) handles Raw, RLE, and simple
+//! Compressed blocks but does not yet support Huffman-coded literals.
+//! It will replace ruzstd once the Huffman path is ported. The omnizip-zstd
+//! differential parity tests pass on all golden fixtures from facebook/zstd.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -61,7 +66,7 @@ impl Codec for ZstdCodec {
 ///
 /// `ruzstd::encoding::compress_to_vec` is infallible, so this wrapper
 /// never fails; the `Result` is kept for symmetry with the other codec
-/// helpers and future higher-level encoders.
+/// helpers.
 #[allow(clippy::unnecessary_wraps)]
 pub(crate) fn compress(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
     Ok(ruzstd::encoding::compress_to_vec(
