@@ -1,0 +1,277 @@
+//! Benchmark runners — LimniFS via library calls, external tools via subprocess.
+
+#![forbid(unsafe_code)]
+#![warn(clippy::pedantic)]
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+use crate::datasets;
+use crate::metrics::OperationResult;
+
+pub struct WorkspacePaths {
+    pub cache_dir: PathBuf,
+    pub work_dir: PathBuf,
+}
+
+impl WorkspacePaths {
+    pub fn new(workspace: &Path) -> Self {
+        Self {
+            cache_dir: workspace.join(".scratch").join("bench-datasets"),
+            work_dir: workspace.join(".scratch").join("bench-work"),
+        }
+    }
+}
+
+/// Run LimniFS create via direct library call.
+pub fn limnifs_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
+    let mut results = Vec::with_capacity(iterations);
+    let image = work.join("limnifs.lim");
+
+    for i in 0..iterations {
+        let _ = std::fs::remove_file(&image);
+        let start = Instant::now();
+        let artifact = limnifs_write::write_directory(source);
+        let elapsed = start.elapsed();
+
+        match artifact {
+            Ok(a) => {
+                let image_size = a.bytes.len() as u64;
+                let _ = std::fs::write(&image, &a.bytes);
+                results.push(OperationResult::success(
+                    "limnifs", "create", elapsed, image_size,
+                ));
+            }
+            Err(e) => {
+                eprintln!("  [limnifs] create iteration {i} failed: {e}");
+                results.push(OperationResult::failure("limnifs", "create", elapsed));
+            }
+        }
+    }
+    results
+}
+
+/// Run LimniFS extract via the limni binary (subprocess — extract is in the CLI).
+pub fn limnifs_extract(image: &Path, work: &Path, iterations: usize, input_size: u64) -> Vec<OperationResult> {
+    let limni = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("limni")))
+        .unwrap_or_else(|| PathBuf::from("limni"));
+
+    let mut results = Vec::with_capacity(iterations);
+    let dest = work.join("extract_limnifs");
+
+    for _ in 0..iterations {
+        let _ = std::fs::remove_dir_all(&dest);
+        let _ = std::fs::create_dir_all(&dest);
+        let start = Instant::now();
+        let status = Command::new(&limni)
+            .args(["extract"])
+            .arg(image)
+            .arg(&dest)
+            .status();
+        let elapsed = start.elapsed();
+
+        match status {
+            Ok(s) if s.success() => {
+                results.push(OperationResult::success("limnifs", "extract", elapsed, input_size));
+            }
+            _ => {
+                results.push(OperationResult::failure("limnifs", "extract", elapsed));
+            }
+        }
+    }
+    results
+}
+
+/// Run LimniFS verify via the limni binary.
+pub fn limnifs_verify(image: &Path, iterations: usize) -> Vec<OperationResult> {
+    let limni = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("limni")))
+        .unwrap_or_else(|| PathBuf::from("limni"));
+
+    let mut results = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let start = Instant::now();
+        let status = Command::new(&limni).args(["verify"]).arg(image).status();
+        let elapsed = start.elapsed();
+        match status {
+            Ok(s) if s.success() => results.push(OperationResult::success("limnifs", "verify", elapsed, 0)),
+            _ => results.push(OperationResult::failure("limnifs", "verify", elapsed)),
+        }
+    }
+    results
+}
+
+/// Benchmark DwarFS create (mkdwarfs), if available.
+pub fn dwarfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
+    run_external("mkdwarfs", &["-i", "-o", "-l1", "--no-history"], source, work, "dwarfs", "create", "test.dwarfs", iterations)
+}
+
+pub fn dwarfs_extract(image: &Path, work: &Path, iterations: usize, input_size: u64) -> Vec<OperationResult> {
+    run_external_extract("dwarfsextract", &["-i", "-o"], image, work, "dwarfs", "extract", input_size, iterations)
+}
+
+/// SquashFS
+pub fn squashfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
+    let mut results = Vec::with_capacity(iterations);
+    let image = work.join("squashfs.squashfs");
+    for _ in 0..iterations {
+        let _ = std::fs::remove_file(&image);
+        let start = Instant::now();
+        let status = Command::new("mksquashfs")
+            .arg(source)
+            .arg(&image)
+            .args(["-noappend", "-comp", "zstd", "-Xcompression-level", "1", "-no-progress"])
+            .status();
+        let elapsed = start.elapsed();
+        match status {
+            Ok(s) if s.success() => {
+                let size = std::fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
+                results.push(OperationResult::success("squashfs", "create", elapsed, size));
+            }
+            _ => results.push(OperationResult::failure("squashfs", "create", elapsed)),
+        }
+    }
+    results
+}
+
+pub fn squashfs_extract(image: &Path, work: &Path, iterations: usize, input_size: u64) -> Vec<OperationResult> {
+    let dest = work.join("extract_sqfs");
+    let mut results = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let _ = std::fs::remove_dir_all(&dest);
+        let start = Instant::now();
+        let status = Command::new("unsquashfs")
+            .args(["-d"])
+            .arg(&dest)
+            .args(["-no-progress"])
+            .arg(image)
+            .status();
+        let elapsed = start.elapsed();
+        match status {
+            Ok(s) if s.success() => results.push(OperationResult::success("squashfs", "extract", elapsed, input_size)),
+            _ => results.push(OperationResult::failure("squashfs", "extract", elapsed)),
+        }
+    }
+    results
+}
+
+/// tar + zstd
+pub fn tar_zstd_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
+    let mut results = Vec::with_capacity(iterations);
+    let archive = work.join("test.tar.zst");
+    for _ in 0..iterations {
+        let _ = std::fs::remove_file(&archive);
+        let start = Instant::now();
+        let status = Command::new("tar")
+            .args(["-cf"])
+            .arg(&archive)
+            .args(["--use-compress-program=zstd -1"])
+            .args(["-C"])
+            .arg(source.parent().unwrap_or(Path::new(".")))
+            .arg(source.file_name().unwrap_or_default())
+            .status();
+        let elapsed = start.elapsed();
+        match status {
+            Ok(s) if s.success() => {
+                let size = std::fs::metadata(&archive).map(|m| m.len()).unwrap_or(0);
+                results.push(OperationResult::success("tar+zstd", "create", elapsed, size));
+            }
+            _ => results.push(OperationResult::failure("tar+zstd", "create", elapsed)),
+        }
+    }
+    results
+}
+
+pub fn tar_zstd_extract(archive: &Path, work: &Path, iterations: usize, input_size: u64) -> Vec<OperationResult> {
+    let dest = work.join("extract_tar");
+    let mut results = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let _ = std::fs::remove_dir_all(&dest);
+        let _ = std::fs::create_dir_all(&dest);
+        let start = Instant::now();
+        let status = Command::new("tar")
+            .args(["-xf"])
+            .arg(archive)
+            .args(["--use-compress-program=zstd -d"])
+            .args(["-C"])
+            .arg(&dest)
+            .status();
+        let elapsed = start.elapsed();
+        match status {
+            Ok(s) if s.success() => results.push(OperationResult::success("tar+zstd", "extract", elapsed, input_size)),
+            _ => results.push(OperationResult::failure("tar+zstd", "extract", elapsed)),
+        }
+    }
+    results
+}
+
+// Helpers
+
+fn run_external(
+    tool: &str, _flags: &[&str], source: &Path, work: &Path,
+    format: &str, op: &str, image_name: &str, iterations: usize,
+) -> Vec<OperationResult> {
+    if which(tool).is_none() {
+        return Vec::new();
+    }
+    let mut results = Vec::with_capacity(iterations);
+    let image = work.join(image_name);
+    for _ in 0..iterations {
+        let _ = std::fs::remove_file(&image);
+        let start = Instant::now();
+        let status = Command::new(tool)
+            .args(["-i"]).arg(source)
+            .args(["-o"]).arg(&image)
+            .args(["-l1", "--no-history"])
+            .status();
+        let elapsed = start.elapsed();
+        match status {
+            Ok(s) if s.success() => {
+                let size = std::fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
+                results.push(OperationResult::success(format, op, elapsed, size));
+            }
+            _ => results.push(OperationResult::failure(format, op, elapsed)),
+        }
+    }
+    results
+}
+
+fn run_external_extract(
+    tool: &str, _flags: &[&str], image: &Path, work: &Path,
+    format: &str, op: &str, input_size: u64, iterations: usize,
+) -> Vec<OperationResult> {
+    if which(tool).is_none() {
+        return Vec::new();
+    }
+    let dest = work.join(format!("extract_{format}"));
+    let mut results = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let _ = std::fs::remove_dir_all(&dest);
+        let start = Instant::now();
+        let status = Command::new(tool)
+            .args(["-i"]).arg(image)
+            .args(["-o"]).arg(&dest)
+            .status();
+        let elapsed = start.elapsed();
+        match status {
+            Ok(s) if s.success() => results.push(OperationResult::success(format, op, elapsed, input_size)),
+            _ => results.push(OperationResult::failure(format, op, elapsed)),
+        }
+    }
+    results
+}
+
+fn which(tool: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let full = dir.join(tool);
+        if full.is_file() {
+            return Some(full);
+        }
+    }
+    None
+}
