@@ -1,9 +1,9 @@
-//! XZ/LZMA2 codec (0x03): decode-only in pure Rust via `lzma-rs`.
+//! XZ/LZMA2 codec (0x03): decode-only in pure Rust via `omnizip-lzma`.
 //!
-//! `lzma-rs` 0.3.0's encoders are non-compressing stubs (see the parent
-//! module docs). Encode returns `UnsupportedFeature` so callers route to
-//! ZSTD for fresh compression; decode reads legacy XZ-encoded drops
-//! produced by external tooling.
+//! The omnizip-lzma crate is a Rust port of omnizip's Ruby LZMA reference
+//! (itself derived from tukaani-project/xz liblzma). Decode handles raw
+//! LZMA2 chunk data as stored in LimniFS drop records. Encode returns
+//! `UnsupportedFeature` until the LZMA encoder port is complete.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -26,7 +26,7 @@ impl Codec for XzCodec {
     fn compress(&self, _plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
         Err(CoreError::UnsupportedFeature {
             feature: "compress codec 0x03 (xz): pure-Rust LZMA encoder does not exist; \
-                      lzma-rs 0.3.0's encoder is a non-compressing stub"
+                      omnizip-lzma encoder port is in progress"
                 .to_string(),
         })
     }
@@ -35,12 +35,12 @@ impl Codec for XzCodec {
         let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
             reason: format!("decompress: expected_len {expected_len} exceeds usize"),
         })?;
-        let mut result = Vec::with_capacity(expected_us);
-        lzma_rs::lzma2_decompress(&mut std::io::Cursor::new(compressed), &mut result).map_err(
-            |e| CoreError::Corrupt {
-                reason: format!("lzma2 decompress failed: {e}"),
-            },
-        )?;
+        let (result, _consumed) =
+            omnizip_lzma::lzma2::decode_lzma2_stream(compressed).map_err(|e| {
+                CoreError::Corrupt {
+                    reason: format!("lzma2 decompress failed: {e}"),
+                }
+            })?;
         if result.len() != expected_us {
             return Err(CoreError::Corrupt {
                 reason: format!(
