@@ -114,9 +114,17 @@ mod tests {
     #[test]
     fn first_match_wins() {
         let reg = FileCategorizerRegistry::new()
-            .register(Box::new(AlwaysClaim { name: "first", codec: 0x10 }))
-            .register(Box::new(AlwaysClaim { name: "second", codec: 0x20 }));
-        let cat = reg.categorize(&PathBuf::from("/x"), b"abc").expect("first claims");
+            .register(Box::new(AlwaysClaim {
+                name: "first",
+                codec: 0x10,
+            }))
+            .register(Box::new(AlwaysClaim {
+                name: "second",
+                codec: 0x20,
+            }));
+        let cat = reg
+            .categorize(&PathBuf::from("/x"), b"abc")
+            .expect("first claims");
         assert_eq!(cat.codec_id, 0x10);
     }
 
@@ -124,8 +132,13 @@ mod tests {
     fn falls_through_to_next_when_first_passes() {
         let reg = FileCategorizerRegistry::new()
             .register(Box::new(NeverClaim))
-            .register(Box::new(AlwaysClaim { name: "second", codec: 0x20 }));
-        let cat = reg.categorize(&PathBuf::from("/x"), b"abc").expect("second claims");
+            .register(Box::new(AlwaysClaim {
+                name: "second",
+                codec: 0x20,
+            }));
+        let cat = reg
+            .categorize(&PathBuf::from("/x"), b"abc")
+            .expect("second claims");
         assert_eq!(cat.codec_id, 0x20);
     }
 }

@@ -30,8 +30,8 @@ pub mod flatten;
 pub mod turnover;
 
 pub use config::{
-    ChunkingConfig, CategorizerConfig, CodecRegistry, Defaults,
-    DictionaryConfig, EncryptionConfig, TournamentConfig, WriteConfig,
+    CategorizerConfig, ChunkingConfig, CodecRegistry, Defaults, DictionaryConfig, EncryptionConfig,
+    TournamentConfig, WriteConfig,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -40,9 +40,8 @@ use std::path::{Path, PathBuf};
 use crate::chunker::FastCDC;
 use limnifs_core::{
     compute_merkle_root, hash_empty_section, hash_section, ManifestHeader, SectionHashes,
-    FEATURE_FLAGS_SECTION_VERSION, HISTORY_SECTION_VERSION,
-    INODE_FLAG_INLINE_DATA, INODE_FLAG_SHARED_INLINE,
-    METADATA_REFERENCE_SECTION_VERSION_2, SLAB_INDEX_SECTION_VERSION,
+    FEATURE_FLAGS_SECTION_VERSION, HISTORY_SECTION_VERSION, INODE_FLAG_INLINE_DATA,
+    INODE_FLAG_SHARED_INLINE, METADATA_REFERENCE_SECTION_VERSION_2, SLAB_INDEX_SECTION_VERSION,
 };
 use limnifs_format::{ManifestRoot, SlabId};
 
@@ -249,10 +248,12 @@ fn process_whole_file_drop(
     cat: file_categorizer::Categorization,
 ) -> Result<ChunkedFileResult, WriteError> {
     let drop_id = hash_section(data);
-    let compressed = limnifs_core::codec::compress(cat.codec_id, data)
-        .map_err(|e| WriteError::Io(std::io::Error::other(format!(
-            "codec 0x{:02X} compress failed: {e}", cat.codec_id
-        ))))?;
+    let compressed = limnifs_core::codec::compress(cat.codec_id, data).map_err(|e| {
+        WriteError::Io(std::io::Error::other(format!(
+            "codec 0x{:02X} compress failed: {e}",
+            cat.codec_id
+        )))
+    })?;
     let file_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
     Ok(ChunkedFileResult {
         drops: vec![(drop_id, data.to_vec(), compressed, cat.codec_id)],
@@ -640,8 +641,11 @@ impl WriteContext {
         // Shared inline table (only present if any dedup occurred).
         // Reader checks for remaining bytes after dir_nodes.
         if !self.shared_inline_table.is_empty() {
-            metadata_blob
-                .extend_from_slice(&u32::try_from(self.shared_inline_table.len()).unwrap().to_le_bytes());
+            metadata_blob.extend_from_slice(
+                &u32::try_from(self.shared_inline_table.len())
+                    .unwrap()
+                    .to_le_bytes(),
+            );
             for entry in &self.shared_inline_table {
                 let len = u32::try_from(entry.len()).expect("shared entry fits u32");
                 metadata_blob.extend_from_slice(&len.to_le_bytes());
@@ -655,8 +659,8 @@ impl WriteContext {
         // trees. Pick quality by size: small blobs cost nothing to
         // compress at q5; large blobs (e.g. 50 K-inode trees) would
         // dominate create time at q5, so step down to q2.
-        let uncompressed_len = u32::try_from(metadata_blob.len())
-            .expect("metadata blob length fits u32");
+        let uncompressed_len =
+            u32::try_from(metadata_blob.len()).expect("metadata blob length fits u32");
         let metadata_hash = hash_section(&metadata_blob);
         let metadata_codec = limnifs_core::codec::best_compressible_codec();
         let metadata_quality = if metadata_blob.len() > METADATA_LARGE_BLOB_THRESHOLD {
@@ -925,7 +929,11 @@ fn encode_slab(ordinal: u64, drops: &[&PendingDrop]) -> SlabArtifact {
     slab_bytes.extend_from_slice(b"LIM1");
     slab_bytes.extend_from_slice(&1u16.to_le_bytes());
     slab_bytes.extend_from_slice(&slab_id.to_bytes());
-    slab_bytes.extend_from_slice(&u64::try_from(total_length).unwrap_or(u64::MAX).to_le_bytes());
+    slab_bytes.extend_from_slice(
+        &u64::try_from(total_length)
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
     slab_bytes.push(0x00);
     slab_bytes.push(0x00);
     slab_bytes.extend_from_slice(&slab_content);
@@ -1166,10 +1174,8 @@ mod tests {
         // = 30 MiB compressed (random data doesn't compress), which
         // fits in one slab. We bump to seven drops (70 MiB) to force a
         // split.
-        let temp = std::env::temp_dir().join(format!(
-            "limnifs-write-test-{}-split",
-            std::process::id()
-        ));
+        let temp =
+            std::env::temp_dir().join(format!("limnifs-write-test-{}-split", std::process::id()));
         std::fs::create_dir_all(&temp).expect("create temp dir");
         for i in 0..7u32 {
             // 10 MiB of pseudo-random bytes — incompressible.

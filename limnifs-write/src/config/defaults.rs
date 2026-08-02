@@ -40,7 +40,13 @@ pub fn fits() -> CategorizerConfig {
 pub fn delimited_text() -> CategorizerConfig {
     CategorizerConfig {
         name: "delimited_text".into(),
-        extensions: vec!["csv".into(), "tsv".into(), "json".into(), "jsonl".into(), "ndjson".into()],
+        extensions: vec![
+            "csv".into(),
+            "tsv".into(),
+            "json".into(),
+            "jsonl".into(),
+            "ndjson".into(),
+        ],
         magic_bytes: vec![],
         codec: "fsst+brotli".into(),
         max_size: Some(65_536),

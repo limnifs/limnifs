@@ -50,7 +50,9 @@ pub fn parse_categorization_policy(
     })?;
     if raw_count > MAX_RULE_COUNT {
         return Err(CoreError::Corrupt {
-            reason: format!("categorization_policy rule count {raw_count} exceeds cap {MAX_RULE_COUNT}"),
+            reason: format!(
+                "categorization_policy rule count {raw_count} exceeds cap {MAX_RULE_COUNT}"
+            ),
         });
     }
 
@@ -72,9 +74,10 @@ fn parse_rule(cursor: &mut ManifestCursor<'_>) -> Result<CategorizerRule, CoreEr
             reason: format!("categorizer name length {name_len} exceeds cap {MAX_NAME_LEN}"),
         });
     }
-    let name = String::from_utf8(cursor.read_n(name_len)?.to_vec()).map_err(|_| CoreError::Corrupt {
-        reason: "categorizer name is not valid UTF-8".into(),
-    })?;
+    let name =
+        String::from_utf8(cursor.read_n(name_len)?.to_vec()).map_err(|_| CoreError::Corrupt {
+            reason: "categorizer name is not valid UTF-8".into(),
+        })?;
 
     let ext_count = cursor.read_u32_le()?;
     if ext_count > MAX_EXT_COUNT {
@@ -90,8 +93,10 @@ fn parse_rule(cursor: &mut ManifestCursor<'_>) -> Result<CategorizerRule, CoreEr
                 reason: format!("extension length {ext_len} exceeds cap {MAX_EXT_LEN}"),
             });
         }
-        let ext = String::from_utf8(cursor.read_n(ext_len)?.to_vec()).map_err(|_| CoreError::Corrupt {
-            reason: "extension is not valid UTF-8".into(),
+        let ext = String::from_utf8(cursor.read_n(ext_len)?.to_vec()).map_err(|_| {
+            CoreError::Corrupt {
+                reason: "extension is not valid UTF-8".into(),
+            }
         })?;
         extensions.push(ext);
     }

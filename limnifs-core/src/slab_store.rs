@@ -129,14 +129,9 @@ impl SlabStore {
         let mut drop_index: HashMap<[u8; 32], usize> = HashMap::new();
 
         for (ordinal, entry) in slab_index.entries.iter().enumerate() {
-            let locator = entry
-                .locators
-                .first()
-                .ok_or_else(|| CoreError::Corrupt {
-                    reason: format!(
-                        "slab_index entry {ordinal}: zero locators (unreachable)"
-                    ),
-                })?;
+            let locator = entry.locators.first().ok_or_else(|| CoreError::Corrupt {
+                reason: format!("slab_index entry {ordinal}: zero locators (unreachable)"),
+            })?;
             let slab_name = locator.uri.strip_prefix("file:").unwrap_or(&locator.uri);
             let slab_path = parent.join(slab_name);
 
@@ -251,20 +246,27 @@ impl SlabStore {
         drop_id: &[u8; 32],
         writer: &mut W,
     ) -> Result<u64, CoreError> {
-        let ordinal = *self.drop_index.get(drop_id).ok_or_else(|| CoreError::Corrupt {
-            reason: format!("stream_drop: drop {:02x?} not in any slab", &drop_id[..4]),
-        })?;
+        let ordinal = *self
+            .drop_index
+            .get(drop_id)
+            .ok_or_else(|| CoreError::Corrupt {
+                reason: format!("stream_drop: drop {:02x?} not in any slab", &drop_id[..4]),
+            })?;
         let bytes = self.slabs.get(ordinal).ok_or_else(|| CoreError::Corrupt {
             reason: format!("stream_drop: slab ordinal {ordinal} out of range"),
         })?;
         let view: SlabView<'_> = parse_slab(bytes.as_bytes())?;
-        let plaintext = view.plaintext_for(drop_id).ok_or_else(|| CoreError::Corrupt {
-            reason: "stream_drop: slab view returned None for indexed drop".into(),
-        })??;
+        let plaintext = view
+            .plaintext_for(drop_id)
+            .ok_or_else(|| CoreError::Corrupt {
+                reason: "stream_drop: slab view returned None for indexed drop".into(),
+            })??;
         let len = plaintext.len() as u64;
-        writer.write_all(&plaintext).map_err(|e| CoreError::Corrupt {
-            reason: format!("stream_drop: write failed: {e}"),
-        })?;
+        writer
+            .write_all(&plaintext)
+            .map_err(|e| CoreError::Corrupt {
+                reason: format!("stream_drop: write failed: {e}"),
+            })?;
         Ok(len)
     }
 }

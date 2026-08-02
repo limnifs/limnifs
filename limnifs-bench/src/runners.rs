@@ -58,10 +58,15 @@ pub fn limnifs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Oper
                 }
 
                 if let Some(sidecar) = &a.metadata_sidecar {
-                    let name = sidecar.locator.strip_prefix("file:").unwrap_or(&sidecar.locator);
+                    let name = sidecar
+                        .locator
+                        .strip_prefix("file:")
+                        .unwrap_or(&sidecar.locator);
                     let sidecar_path = work.join(name);
                     if let Err(e) = std::fs::write(&sidecar_path, &sidecar.bytes) {
-                        eprintln!("  [limnifs] create iteration {i}: metadata sidecar write failed: {e}");
+                        eprintln!(
+                            "  [limnifs] create iteration {i}: metadata sidecar write failed: {e}"
+                        );
                         results.push(OperationResult::failure("limnifs", "create", elapsed));
                         continue;
                     }
@@ -83,7 +88,12 @@ pub fn limnifs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Oper
 }
 
 /// Run LimniFS extract via the limni binary (subprocess — extract is in the CLI).
-pub fn limnifs_extract(image: &Path, work: &Path, iterations: usize, input_size: u64) -> Vec<OperationResult> {
+pub fn limnifs_extract(
+    image: &Path,
+    work: &Path,
+    iterations: usize,
+    input_size: u64,
+) -> Vec<OperationResult> {
     let limni = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("limni")))
@@ -143,7 +153,9 @@ pub fn limnifs_verify(image: &Path, iterations: usize) -> Vec<OperationResult> {
         let status = Command::new(&limni).args(["verify"]).arg(image).status();
         let elapsed = start.elapsed();
         match status {
-            Ok(s) if s.success() => results.push(OperationResult::success("limnifs", "verify", elapsed, 0)),
+            Ok(s) if s.success() => {
+                results.push(OperationResult::success("limnifs", "verify", elapsed, 0))
+            }
             _ => results.push(OperationResult::failure("limnifs", "verify", elapsed)),
         }
     }
@@ -152,11 +164,34 @@ pub fn limnifs_verify(image: &Path, iterations: usize) -> Vec<OperationResult> {
 
 /// Benchmark DwarFS create (mkdwarfs), if available.
 pub fn dwarfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
-    run_external("mkdwarfs", &["-i", "-o", "-l1", "--no-history"], source, work, "dwarfs", "create", "test.dwarfs", iterations)
+    run_external(
+        "mkdwarfs",
+        &["-i", "-o", "-l1", "--no-history"],
+        source,
+        work,
+        "dwarfs",
+        "create",
+        "test.dwarfs",
+        iterations,
+    )
 }
 
-pub fn dwarfs_extract(image: &Path, work: &Path, iterations: usize, input_size: u64) -> Vec<OperationResult> {
-    run_external_extract("dwarfsextract", &["-i", "-o"], image, work, "dwarfs", "extract", input_size, iterations)
+pub fn dwarfs_extract(
+    image: &Path,
+    work: &Path,
+    iterations: usize,
+    input_size: u64,
+) -> Vec<OperationResult> {
+    run_external_extract(
+        "dwarfsextract",
+        &["-i", "-o"],
+        image,
+        work,
+        "dwarfs",
+        "extract",
+        input_size,
+        iterations,
+    )
 }
 
 /// SquashFS
@@ -169,13 +204,22 @@ pub fn squashfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Ope
         let status = Command::new("mksquashfs")
             .arg(source)
             .arg(&image)
-            .args(["-noappend", "-comp", "zstd", "-Xcompression-level", "1", "-no-progress"])
+            .args([
+                "-noappend",
+                "-comp",
+                "zstd",
+                "-Xcompression-level",
+                "1",
+                "-no-progress",
+            ])
             .status();
         let elapsed = start.elapsed();
         match status {
             Ok(s) if s.success() => {
                 let size = std::fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
-                results.push(OperationResult::success("squashfs", "create", elapsed, size));
+                results.push(OperationResult::success(
+                    "squashfs", "create", elapsed, size,
+                ));
             }
             _ => results.push(OperationResult::failure("squashfs", "create", elapsed)),
         }
@@ -183,7 +227,12 @@ pub fn squashfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Ope
     results
 }
 
-pub fn squashfs_extract(image: &Path, work: &Path, iterations: usize, input_size: u64) -> Vec<OperationResult> {
+pub fn squashfs_extract(
+    image: &Path,
+    work: &Path,
+    iterations: usize,
+    input_size: u64,
+) -> Vec<OperationResult> {
     let dest = work.join("extract_sqfs");
     let mut results = Vec::with_capacity(iterations);
     for _ in 0..iterations {
@@ -197,7 +246,9 @@ pub fn squashfs_extract(image: &Path, work: &Path, iterations: usize, input_size
             .status();
         let elapsed = start.elapsed();
         match status {
-            Ok(s) if s.success() => results.push(OperationResult::success("squashfs", "extract", elapsed, input_size)),
+            Ok(s) if s.success() => results.push(OperationResult::success(
+                "squashfs", "extract", elapsed, input_size,
+            )),
             _ => results.push(OperationResult::failure("squashfs", "extract", elapsed)),
         }
     }
@@ -223,7 +274,9 @@ pub fn tar_zstd_create(source: &Path, work: &Path, iterations: usize) -> Vec<Ope
         match status {
             Ok(s) if s.success() => {
                 let size = std::fs::metadata(&archive).map(|m| m.len()).unwrap_or(0);
-                results.push(OperationResult::success("tar+zstd", "create", elapsed, size));
+                results.push(OperationResult::success(
+                    "tar+zstd", "create", elapsed, size,
+                ));
             }
             _ => results.push(OperationResult::failure("tar+zstd", "create", elapsed)),
         }
@@ -231,7 +284,12 @@ pub fn tar_zstd_create(source: &Path, work: &Path, iterations: usize) -> Vec<Ope
     results
 }
 
-pub fn tar_zstd_extract(archive: &Path, work: &Path, iterations: usize, input_size: u64) -> Vec<OperationResult> {
+pub fn tar_zstd_extract(
+    archive: &Path,
+    work: &Path,
+    iterations: usize,
+    input_size: u64,
+) -> Vec<OperationResult> {
     let dest = work.join("extract_tar");
     let mut results = Vec::with_capacity(iterations);
     for _ in 0..iterations {
@@ -247,7 +305,9 @@ pub fn tar_zstd_extract(archive: &Path, work: &Path, iterations: usize, input_si
             .status();
         let elapsed = start.elapsed();
         match status {
-            Ok(s) if s.success() => results.push(OperationResult::success("tar+zstd", "extract", elapsed, input_size)),
+            Ok(s) if s.success() => results.push(OperationResult::success(
+                "tar+zstd", "extract", elapsed, input_size,
+            )),
             _ => results.push(OperationResult::failure("tar+zstd", "extract", elapsed)),
         }
     }
@@ -257,8 +317,14 @@ pub fn tar_zstd_extract(archive: &Path, work: &Path, iterations: usize, input_si
 // Helpers
 
 fn run_external(
-    tool: &str, _flags: &[&str], source: &Path, work: &Path,
-    format: &str, op: &str, image_name: &str, iterations: usize,
+    tool: &str,
+    _flags: &[&str],
+    source: &Path,
+    work: &Path,
+    format: &str,
+    op: &str,
+    image_name: &str,
+    iterations: usize,
 ) -> Vec<OperationResult> {
     if which(tool).is_none() {
         return Vec::new();
@@ -269,8 +335,10 @@ fn run_external(
         let _ = std::fs::remove_file(&image);
         let start = Instant::now();
         let status = Command::new(tool)
-            .args(["-i"]).arg(source)
-            .args(["-o"]).arg(&image)
+            .args(["-i"])
+            .arg(source)
+            .args(["-o"])
+            .arg(&image)
             .args(["-l1", "--no-history"])
             .status();
         let elapsed = start.elapsed();
@@ -286,8 +354,14 @@ fn run_external(
 }
 
 fn run_external_extract(
-    tool: &str, _flags: &[&str], image: &Path, work: &Path,
-    format: &str, op: &str, input_size: u64, iterations: usize,
+    tool: &str,
+    _flags: &[&str],
+    image: &Path,
+    work: &Path,
+    format: &str,
+    op: &str,
+    input_size: u64,
+    iterations: usize,
 ) -> Vec<OperationResult> {
     if which(tool).is_none() {
         return Vec::new();
@@ -298,12 +372,16 @@ fn run_external_extract(
         let _ = std::fs::remove_dir_all(&dest);
         let start = Instant::now();
         let status = Command::new(tool)
-            .args(["-i"]).arg(image)
-            .args(["-o"]).arg(&dest)
+            .args(["-i"])
+            .arg(image)
+            .args(["-o"])
+            .arg(&dest)
             .status();
         let elapsed = start.elapsed();
         match status {
-            Ok(s) if s.success() => results.push(OperationResult::success(format, op, elapsed, input_size)),
+            Ok(s) if s.success() => {
+                results.push(OperationResult::success(format, op, elapsed, input_size))
+            }
             _ => results.push(OperationResult::failure(format, op, elapsed)),
         }
     }
@@ -345,9 +423,8 @@ fn measure_subprocess(
     let rss = after.rss_bytes.max(after_children.rss_bytes);
     match status {
         Ok(s) if s.success() => {
-            let mut r = OperationResult::measure(
-                format, operation, before, after, elapsed, output_size, 1,
-            );
+            let mut r =
+                OperationResult::measure(format, operation, before, after, elapsed, output_size, 1);
             r.cpu_user_secs = user.max(0.0);
             r.cpu_system_secs = sys.max(0.0);
             r.peak_rss_bytes = rss;
@@ -387,7 +464,9 @@ pub fn extract_one(
                         .and_then(|p| p.parent().map(|d| d.join("limni")))
                         .unwrap_or_else(|| PathBuf::from("limni"));
                     Command::new(&limni)
-                        .args(["cat"]).arg(image).arg(target_path)
+                        .args(["cat"])
+                        .arg(image)
+                        .arg(target_path)
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
                         .status()
@@ -395,38 +474,49 @@ pub fn extract_one(
                 "dwarfs" => {
                     let _ = std::fs::remove_file(&dest);
                     Command::new("dwarfsextract")
-                        .args(["-i"]).arg(image)
-                        .args(["-f"]).arg(target_path.trim_start_matches('/'))
-                        .args(["-o"]).arg(&dest)
+                        .args(["-i"])
+                        .arg(image)
+                        .args(["-f"])
+                        .arg(target_path.trim_start_matches('/'))
+                        .args(["-o"])
+                        .arg(&dest)
                         .status()
                 }
                 "squashfs" => {
                     let _ = std::fs::remove_dir_all(&dest);
                     let _ = std::fs::create_dir_all(&dest);
                     Command::new("unsquashfs")
-                        .args(["-f", "-d"]).arg(&dest)
+                        .args(["-f", "-d"])
+                        .arg(&dest)
                         .arg(image)
                         .arg(target_path.trim_start_matches('/'))
                         .stdout(std::process::Stdio::null())
                         .status()
                 }
-                "tar+zstd" => {
-                    Command::new("tar")
-                        .args(["-xf"]).arg(image)
-                        .args(["-C"]).arg(&work)
-                        .arg(target_path.trim_start_matches('/'))
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                }
+                "tar+zstd" => Command::new("tar")
+                    .args(["-xf"])
+                    .arg(image)
+                    .args(["-C"])
+                    .arg(&work)
+                    .arg(target_path.trim_start_matches('/'))
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status(),
                 _ => continue,
             };
             let elapsed = start.elapsed();
             let after_children = ResourceSnapshot::children();
             let after = ResourceSnapshot::now();
             results.push(measure_subprocess(
-                format, "extract_one", status, elapsed,
-                before, before_children, after, after_children, 0,
+                format,
+                "extract_one",
+                status,
+                elapsed,
+                before,
+                before_children,
+                after,
+                after_children,
+                0,
             ));
         }
     }
@@ -459,18 +549,19 @@ pub fn locate_one(
                         .and_then(|p| p.parent().map(|d| d.join("limni")))
                         .unwrap_or_else(|| PathBuf::from("limni"));
                     Command::new(&limni)
-                        .args(["stat"]).arg(image).arg(target_path)
+                        .args(["stat"])
+                        .arg(image)
+                        .arg(target_path)
                         .stdout(std::process::Stdio::null())
                         .status()
                 }
-                "tar+zstd" => {
-                    Command::new("tar")
-                        .args(["-tvf"]).arg(image)
-                        .arg(target_path.trim_start_matches('/'))
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                }
+                "tar+zstd" => Command::new("tar")
+                    .args(["-tvf"])
+                    .arg(image)
+                    .arg(target_path.trim_start_matches('/'))
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status(),
                 "dwarfs" | "squashfs" => {
                     // No clean CLI for path-only resolution; require FUSE.
                     // Skip — return a synthetic failure.
@@ -482,8 +573,15 @@ pub fn locate_one(
             let after_children = ResourceSnapshot::children();
             let after = ResourceSnapshot::now();
             results.push(measure_subprocess(
-                format, "locate_one", status, elapsed,
-                before, before_children, after, after_children, 0,
+                format,
+                "locate_one",
+                status,
+                elapsed,
+                before,
+                before_children,
+                after,
+                after_children,
+                0,
             ));
         }
     }
@@ -532,9 +630,13 @@ pub fn read_random(
             Ok(std::process::ExitStatus::default());
         for &offset in &offsets {
             last_status = Command::new(&limni)
-                .args(["cat"]).arg(image).arg(target_path)
-                .args(["--offset"]).arg(offset.to_string())
-                .args(["--length"]).arg(read_size.to_string())
+                .args(["cat"])
+                .arg(image)
+                .arg(target_path)
+                .args(["--offset"])
+                .arg(offset.to_string())
+                .args(["--length"])
+                .arg(read_size.to_string())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();
@@ -546,8 +648,14 @@ pub fn read_random(
         let after_children = ResourceSnapshot::children();
         let after = ResourceSnapshot::now();
         let mut r = measure_subprocess(
-            "limnifs", "read_random", last_status, elapsed,
-            before, before_children, after, after_children,
+            "limnifs",
+            "read_random",
+            last_status,
+            elapsed,
+            before,
+            before_children,
+            after,
+            after_children,
             read_size * num_reads as u64,
         );
         r.items_processed = num_reads as u64;
@@ -555,4 +663,3 @@ pub fn read_random(
     }
     results
 }
-

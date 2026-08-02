@@ -110,7 +110,8 @@ pub fn stdev(values: &[f64]) -> f64 {
         return 0.0;
     }
     let mean = values.iter().sum::<f64>() / values.len() as f64;
-    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64;
+    let variance =
+        values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64;
     variance.sqrt()
 }
 
@@ -160,11 +161,19 @@ impl BenchmarkSummary {
         let times: Vec<f64> = successes.iter().map(|r| r.elapsed_secs).collect();
         let user_times: Vec<f64> = successes.iter().map(|r| r.cpu_user_secs).collect();
         let sys_times: Vec<f64> = successes.iter().map(|r| r.cpu_system_secs).collect();
-        let rss_max = successes.iter().map(|r| r.peak_rss_bytes).max().unwrap_or(0);
+        let rss_max = successes
+            .iter()
+            .map(|r| r.peak_rss_bytes)
+            .max()
+            .unwrap_or(0);
         let median_secs = median(&times);
         let input_mb = input_size as f64 / MIB_F;
         let output_mb = successes[0].output_size_bytes as f64 / MIB_F;
-        let throughput = if median_secs > 0.0 { input_mb / median_secs } else { 0.0 };
+        let throughput = if median_secs > 0.0 {
+            input_mb / median_secs
+        } else {
+            0.0
+        };
         let ratio = if input_size > 0 {
             successes[0].output_size_bytes as f64 / input_size as f64 * 100.0
         } else {

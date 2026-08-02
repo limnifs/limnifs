@@ -77,7 +77,11 @@ fn looks_like_csv_text(path: &Path, data: &[u8]) -> bool {
     if !matches!(ext.as_str(), "csv" | "tsv" | "json" | "jsonl" | "ndjson") {
         return false;
     }
-    let sample = if data.len() > 4096 { &data[..4096] } else { data };
+    let sample = if data.len() > 4096 {
+        &data[..4096]
+    } else {
+        data
+    };
     let printables = sample
         .iter()
         .filter(|&&b| (0x20..=0x7E).contains(&b) || b == b'\n' || b == b'\r' || b == b'\t')
@@ -101,7 +105,8 @@ mod tests {
     fn csv_extension_routes_when_enabled() {
         let c = CsvTextCategorizer;
         let csv = "a,b,c\n".repeat(2000);
-        let cat = c.categorize(&PathBuf::from("/x.csv"), csv.as_bytes())
+        let cat = c
+            .categorize(&PathBuf::from("/x.csv"), csv.as_bytes())
             .expect("csv extension claims");
         assert_eq!(cat.codec_id, limnifs_core::codec::CODEC_FSST_BROTLI);
     }
@@ -111,8 +116,14 @@ mod tests {
         // Toggle the const manually via a re-evaluation would require
         // a feature flag; for now just verify the heuristic.
         let csv = "a,b,c\n".repeat(2000);
-        assert!(looks_like_csv_text(&PathBuf::from("/x.csv"), csv.as_bytes()));
-        assert!(looks_like_csv_text(&PathBuf::from("/x.json"), csv.as_bytes()));
+        assert!(looks_like_csv_text(
+            &PathBuf::from("/x.csv"),
+            csv.as_bytes()
+        ));
+        assert!(looks_like_csv_text(
+            &PathBuf::from("/x.json"),
+            csv.as_bytes()
+        ));
     }
 
     #[test]
@@ -136,6 +147,9 @@ mod tests {
         // content sniffing alone is too unreliable (catches source
         // code, emails, etc.).
         let csv = "alpha,beta,gamma\n".repeat(500);
-        assert!(!looks_like_csv_text(&PathBuf::from("/noext"), csv.as_bytes()));
+        assert!(!looks_like_csv_text(
+            &PathBuf::from("/noext"),
+            csv.as_bytes()
+        ));
     }
 }

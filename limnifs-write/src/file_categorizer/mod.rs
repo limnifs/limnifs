@@ -32,9 +32,9 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
-pub mod pcm_audio;
-pub mod fits;
 pub mod csv_text;
+pub mod fits;
+pub mod pcm_audio;
 pub mod registry;
 
 pub use registry::FileCategorizerRegistry;

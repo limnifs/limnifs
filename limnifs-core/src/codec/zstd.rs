@@ -36,11 +36,10 @@ impl Codec for ZstdCodec {
     }
 
     fn decompress(&self, compressed: &[u8], expected_len: u32) -> Result<Vec<u8>, CoreError> {
-        let result = omnizip_zstd::decompress(compressed, expected_len).map_err(|e| {
-            CoreError::Corrupt {
+        let result =
+            omnizip_zstd::decompress(compressed, expected_len).map_err(|e| CoreError::Corrupt {
                 reason: format!("zstd decompress failed: {e}"),
-            }
-        })?;
+            })?;
         let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
             reason: format!("decompress: expected_len {expected_len} exceeds usize"),
         })?;

@@ -173,7 +173,9 @@ mod tests {
     fn fits_routes_to_ricepp_when_enabled() {
         let c = FitsCategorizer;
         let fits = make_fits_header();
-        let cat = c.categorize(Path::new("/x.fits"), &fits).expect("fits claims");
+        let cat = c
+            .categorize(Path::new("/x.fits"), &fits)
+            .expect("fits claims");
         assert_eq!(cat.codec_id, limnifs_core::codec::CODEC_RICEPP);
     }
 

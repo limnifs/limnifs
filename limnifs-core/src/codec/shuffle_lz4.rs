@@ -27,8 +27,8 @@
 #![warn(clippy::pedantic)]
 
 use crate::codec::Codec;
-use crate::error::CoreError;
 use crate::codec::{CODEC_BLOSC2_SHUFFLE_LZ4, CODEC_LZ4};
+use crate::error::CoreError;
 use omnizip_filters::Filter;
 
 /// Shuffle+LZ4 codec. Default item_size = 4 (float32).
@@ -102,9 +102,7 @@ impl Codec for ShuffleLz4Codec {
         len_bytes.copy_from_slice(&compressed[..4]);
         let shuffled_len = u32::from_le_bytes(len_bytes);
         let lz4_bytes = &compressed[4..];
-        let shuffled = crate::codec::decompress(
-            crate::codec::CODEC_LZ4, lz4_bytes, shuffled_len,
-        )?;
+        let shuffled = crate::codec::decompress(crate::codec::CODEC_LZ4, lz4_bytes, shuffled_len)?;
         let filter = omnizip_filters::shuffle::ByteShuffle::new(self.item_size);
         let recovered = filter.decode(&shuffled);
         Ok(recovered)
@@ -123,7 +121,9 @@ mod tests {
         let bytes: Vec<u8> = samples.iter().flat_map(|f| f.to_le_bytes()).collect();
         let codec = ShuffleLz4Codec::float32();
         let compressed = codec.compress(&bytes).expect("compress");
-        let recovered = codec.decompress(&compressed, bytes.len() as u32).expect("decompress");
+        let recovered = codec
+            .decompress(&compressed, bytes.len() as u32)
+            .expect("decompress");
         assert_eq!(recovered, bytes);
     }
 

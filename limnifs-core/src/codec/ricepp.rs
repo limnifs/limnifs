@@ -22,8 +22,8 @@
 #![warn(clippy::pedantic)]
 
 use crate::codec::Codec;
-use crate::error::CoreError;
 use crate::codec::CODEC_RICEPP;
+use crate::error::CoreError;
 
 const RICEPP_CODEC_ID: u16 = 0x08;
 
@@ -95,7 +95,9 @@ mod tests {
         }
         let codec = RiceppCodec::fits_default();
         let compressed = codec.compress(&bytes).expect("compress");
-        let recovered = codec.decompress(&compressed, bytes.len() as u32).expect("decompress");
+        let recovered = codec
+            .decompress(&compressed, bytes.len() as u32)
+            .expect("decompress");
         assert_eq!(recovered, bytes);
     }
 

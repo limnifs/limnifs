@@ -107,8 +107,8 @@ pub use history::{
 pub use inode::{
     parse_inode, parse_inode_with_ceiling, ContentHandle, Inode, SliceRef, XAttr,
     DEFAULT_INLINE_DATA_MAX_BYTES, INODE_FIXED_PREFIX_LEN, INODE_FLAG_ATIME,
-    INODE_FLAG_INLINE_DATA, INODE_FLAG_RESERVED_MASK, INODE_FLAG_SHARED_INLINE,
-    S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFMT, S_IFREG, S_IFSOCK,
+    INODE_FLAG_INLINE_DATA, INODE_FLAG_RESERVED_MASK, INODE_FLAG_SHARED_INLINE, S_IFBLK, S_IFCHR,
+    S_IFDIR, S_IFIFO, S_IFLNK, S_IFMT, S_IFREG, S_IFSOCK,
 };
 pub use locator::{
     parse_locator_entries, parse_locator_entries_with_ceiling, parse_locator_entry,

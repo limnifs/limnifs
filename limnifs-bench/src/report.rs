@@ -70,13 +70,16 @@ fn format_key(format: &str, op: &str) -> String {
 fn group(results: &[BenchmarkSummary]) -> Vec<CategoryView> {
     let mut by_dataset: BTreeMap<String, DatasetView> = BTreeMap::new();
     for r in results {
-        let dv = by_dataset.entry(r.dataset.clone()).or_insert_with(|| DatasetView {
-            name: r.dataset.clone(),
-            category: r.category,
-            input_size_mb: r.input_size_mb,
-            entries: BTreeMap::new(),
-        });
-        dv.entries.insert(format_key(&r.format, &r.operation), r.clone());
+        let dv = by_dataset
+            .entry(r.dataset.clone())
+            .or_insert_with(|| DatasetView {
+                name: r.dataset.clone(),
+                category: r.category,
+                input_size_mb: r.input_size_mb,
+                entries: BTreeMap::new(),
+            });
+        dv.entries
+            .insert(format_key(&r.format, &r.operation), r.clone());
     }
 
     let mut categories: BTreeMap<Category, CategoryView> = BTreeMap::new();
@@ -115,8 +118,12 @@ fn category_title(c: Category) -> &'static str {
 
 const FORMATS: &[&str] = &["limnifs", "dwarfs", "squashfs", "tar+zstd"];
 const OPERATIONS: &[&str] = &[
-    "create", "extract", "verify",
-    "extract_one", "locate_one", "read_random",
+    "create",
+    "extract",
+    "verify",
+    "extract_one",
+    "locate_one",
+    "read_random",
 ];
 
 struct MarkdownRenderer<'a> {
@@ -135,7 +142,10 @@ impl<'a> MarkdownRenderer<'a> {
         md.push_str("# LimniFS Benchmark Report\n\n");
         md.push_str(&format!("- **Date:** {}\n", self.report.date));
         md.push_str(&format!("- **Platform:** {}\n", self.report.platform));
-        md.push_str(&format!("- **Iterations per measurement:** {}\n\n", self.report.iterations));
+        md.push_str(&format!(
+            "- **Iterations per measurement:** {}\n\n",
+            self.report.iterations
+        ));
 
         md.push_str("## Datasets\n\n");
         md.push_str("| Category | Dataset | Input (MB) |\n");
@@ -169,9 +179,10 @@ impl<'a> MarkdownRenderer<'a> {
 
     /// For a given operation, render one table per dataset (rows = formats).
     fn render_operation_tables(&self, md: &mut String, cv: &CategoryView, op: &str) {
-        let any = cv.datasets.iter().any(|dv| {
-            FORMATS.iter().any(|f| dv.get(f, op).is_some())
-        });
+        let any = cv
+            .datasets
+            .iter()
+            .any(|dv| FORMATS.iter().any(|f| dv.get(f, op).is_some()));
         if !any {
             return;
         }
@@ -212,15 +223,20 @@ impl<'a> MarkdownRenderer<'a> {
         for cv in &self.categories {
             for dv in &cv.datasets {
                 for op in OPERATIONS {
-                    let measured: Vec<(&str, f64)> = FORMATS.iter()
+                    let measured: Vec<(&str, f64)> = FORMATS
+                        .iter()
                         .filter_map(|f| dv.get(f, op).map(|s| (*f, s.median_seconds)))
                         .collect();
                     if measured.is_empty() {
                         continue;
                     }
-                    let best = measured.iter().map(|(_, t)| *t).fold(f64::INFINITY, f64::min);
-                    let cells: Vec<String> = FORMATS.iter().map(|f| {
-                        match dv.get(f, op) {
+                    let best = measured
+                        .iter()
+                        .map(|(_, t)| *t)
+                        .fold(f64::INFINITY, f64::min);
+                    let cells: Vec<String> = FORMATS
+                        .iter()
+                        .map(|f| match dv.get(f, op) {
                             None => "·".to_string(),
                             Some(s) => {
                                 let t = s.median_seconds;
@@ -230,8 +246,8 @@ impl<'a> MarkdownRenderer<'a> {
                                     format!("{:.2}×", t / best)
                                 }
                             }
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     md.push_str(&format!(
                         "| {} | {} | {} | {} | {} | {} |\n",
                         dv.name, op, cells[0], cells[1], cells[2], cells[3],
@@ -249,13 +265,17 @@ impl<'a> MarkdownRenderer<'a> {
         for cv in &self.categories {
             for dv in &cv.datasets {
                 for op in OPERATIONS {
-                    let measured: Vec<(&str, f64)> = FORMATS.iter()
+                    let measured: Vec<(&str, f64)> = FORMATS
+                        .iter()
                         .filter_map(|f| dv.get(f, op).map(|s| (*f, s.median_seconds)))
                         .collect();
                     if measured.is_empty() {
                         continue;
                     }
-                    let best = measured.iter().map(|(_, t)| *t).fold(f64::INFINITY, f64::min);
+                    let best = measured
+                        .iter()
+                        .map(|(_, t)| *t)
+                        .fold(f64::INFINITY, f64::min);
                     for (f, t) in &measured {
                         if (t - best).abs() / best.max(1e-9) < 0.05 {
                             *wins.entry(f).or_insert(0) += 1;
@@ -265,7 +285,11 @@ impl<'a> MarkdownRenderer<'a> {
             }
         }
         for f in FORMATS {
-            md.push_str(&format!("| {} | {} |\n", f, wins.get(*f).copied().unwrap_or(0)));
+            md.push_str(&format!(
+                "| {} | {} |\n",
+                f,
+                wins.get(*f).copied().unwrap_or(0)
+            ));
         }
     }
 }

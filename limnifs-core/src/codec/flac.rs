@@ -27,8 +27,8 @@
 #![warn(clippy::pedantic)]
 
 use crate::codec::Codec;
-use crate::error::CoreError;
 use crate::codec::CODEC_FLAC;
+use crate::error::CoreError;
 
 /// FLAC codec. Encode and decode both via `omnizip-flac` 0.9.1+.
 pub struct FlacCodec;
@@ -61,7 +61,8 @@ impl Codec for FlacCodec {
             return Err(CoreError::Corrupt {
                 reason: format!(
                     "flac: PCM payload {} bytes < declared {} bytes",
-                    pcm.len(), expected
+                    pcm.len(),
+                    expected
                 ),
             });
         }
@@ -91,7 +92,10 @@ fn pcm_payload_offset(input: &[u8]) -> usize {
         while off + 8 <= input.len() {
             let chunk_id = &input[off..off + 4];
             let size = u32::from_le_bytes([
-                input[off + 4], input[off + 5], input[off + 6], input[off + 7],
+                input[off + 4],
+                input[off + 5],
+                input[off + 6],
+                input[off + 7],
             ]) as usize;
             let body = off + 8;
             if chunk_id == b"data" {
@@ -106,7 +110,10 @@ fn pcm_payload_offset(input: &[u8]) -> usize {
         while off + 8 <= input.len() {
             let chunk_id = &input[off..off + 4];
             let size = u32::from_be_bytes([
-                input[off + 4], input[off + 5], input[off + 6], input[off + 7],
+                input[off + 4],
+                input[off + 5],
+                input[off + 6],
+                input[off + 7],
             ]) as usize;
             let body = off + 8;
             if chunk_id == b"SSND" {

@@ -81,7 +81,9 @@ mod tests {
         let input = b"the quick brown fox jumps over the lazy dog. ".repeat(1000);
         let codec = Bzip2Codec::new();
         let compressed = codec.compress(&input).expect("compress");
-        let decompressed = codec.decompress(&compressed, input.len() as u32).expect("decompress");
+        let decompressed = codec
+            .decompress(&compressed, input.len() as u32)
+            .expect("decompress");
         assert_eq!(decompressed, input);
         assert!(compressed.len() < input.len());
     }

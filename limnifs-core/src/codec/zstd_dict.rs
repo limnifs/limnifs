@@ -21,15 +21,13 @@ pub fn train_dictionary(samples: &[&[u8]], target_size: usize) -> Vec<u8> {
 ///
 /// # Errors
 /// Returns [`CoreError::Corrupt`] on compression failure.
-pub fn compress_with_dict(
-    plaintext: &[u8],
-    dict_bytes: &[u8],
-) -> Result<Vec<u8>, CoreError> {
+pub fn compress_with_dict(plaintext: &[u8], dict_bytes: &[u8]) -> Result<Vec<u8>, CoreError> {
     let dict = omnizip_zstd::ZstdDictionary::from_raw(0, dict_bytes);
-    omnizip_zstd::compress_with_dict(plaintext, omnizip_zstd::ZstdLevel::Default, &dict)
-        .map_err(|e| CoreError::Corrupt {
+    omnizip_zstd::compress_with_dict(plaintext, omnizip_zstd::ZstdLevel::Default, &dict).map_err(
+        |e| CoreError::Corrupt {
             reason: format!("zstd compress_with_dict failed: {e}"),
-        })
+        },
+    )
 }
 
 /// Decompress `compressed` using a pre-trained ZSTD dictionary.
@@ -42,10 +40,11 @@ pub fn decompress_with_dict(
     dict_bytes: &[u8],
 ) -> Result<Vec<u8>, CoreError> {
     let dict = omnizip_zstd::ZstdDictionary::from_raw(0, dict_bytes);
-    omnizip_zstd::decompress_with_dict(compressed, expected_len, &dict)
-        .map_err(|e| CoreError::Corrupt {
+    omnizip_zstd::decompress_with_dict(compressed, expected_len, &dict).map_err(|e| {
+        CoreError::Corrupt {
             reason: format!("zstd decompress_with_dict failed: {e}"),
-        })
+        }
+    })
 }
 
 #[cfg(test)]
@@ -66,7 +65,8 @@ mod tests {
 
         let plaintext = b"function test_case_99() { return 99; }";
         let compressed = compress_with_dict(plaintext, &dict).expect("compress");
-        let decompressed = decompress_with_dict(&compressed, plaintext.len() as u32, &dict).expect("decompress");
+        let decompressed =
+            decompress_with_dict(&compressed, plaintext.len() as u32, &dict).expect("decompress");
         assert_eq!(decompressed, plaintext);
     }
 }

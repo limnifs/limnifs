@@ -270,7 +270,10 @@ pub fn parse_metadata_blob_with_ceiling(
         for inode in &mut inodes {
             if let crate::inode::ContentHandle::SharedInline(idx) = &inode.content_handle {
                 let data = shared_table.get(*idx).ok_or_else(|| CoreError::Corrupt {
-                    reason: format!("shared inline index {idx} out of range (table has {} entries)", shared_table.len()),
+                    reason: format!(
+                        "shared inline index {idx} out of range (table has {} entries)",
+                        shared_table.len()
+                    ),
                 })?;
                 inode.content_handle = crate::inode::ContentHandle::InlineData(data.clone());
             }
