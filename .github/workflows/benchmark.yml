@@ -1,25 +1,27 @@
 name: Benchmark
 
-# Per benchmarks/README.md: runs the benchmark suite on every release
-# tag and attaches JSON + Markdown reports to the GitHub Release.
-# Also runnable on push to main for the "tiny" dataset (smoke test).
+# Runs the Rust benchmark suite (`limnifs-bench`) on every release tag and
+# on push to main (synthetic-only smoke test). Manual dispatch supports
+# full runs (real datasets downloaded from public mirrors).
 #
-# Cross-format benchmarks (tar+zstd, squashfs, dwarfs) run only if
-# the relevant tool is installed; the LimniFS column always appears.
+# Cross-format benchmarks (tar+zstd, squashfs, dwarfs) run only if the
+# relevant tool is installed; the LimniFS column always appears.
 
 on:
   push:
+    branches: [main]
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
-      datasets:
-        description: "Comma-separated dataset names (tiny, python, linux)"
+      mode:
+        description: "Quick (synthetic) or full (all datasets, ~2 GB download)"
         required: false
-        default: "tiny"
-        type: string
+        default: "quick"
+        type: choice
+        options: ["quick", "full"]
       iterations:
-        description: "Iterations per operation"
+        description: "Iterations per measurement"
         required: false
         default: "3"
         type: string
@@ -47,9 +49,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: benchmark-${{ matrix.os }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
 
       - name: Install comparison tools (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -57,7 +56,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             squashfs-tools zstd
-          # DwarFS is optional; install if available.
           sudo apt-get install -y --no-install-recommends dwarfs || \
             echo "dwarfs not packaged on this runner; will skip"
 
@@ -68,11 +66,21 @@ jobs:
           brew install squashfs || echo "squashfs not in homebrew"
           brew install dwarfs || echo "dwarfs not in homebrew"
 
-      - name: Run benchmark
+      - name: Build limnifs-bench
+        run: cargo build --release -p limnifs-bench
+
+      - name: Build limni (for extract benchmark)
+        run: cargo build --release -p limni
+
+      - name: Run benchmark (quick smoke)
+        if: github.event_name == 'push' || inputs.mode != 'full'
+        run: cargo run --release -p limnifs-bench -- run --quick --iterations "${{ inputs.iterations || '3' }}"
+
+      - name: Run benchmark (full)
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'full'
         run: |
-          python3 benchmarks/run_benchmarks.py \
-            --datasets "${{ inputs.datasets || 'tiny' }}" \
-            --iterations "${{ inputs.iterations || '3' }}"
+          cargo run --release -p limnifs-bench -- download --all
+          cargo run --release -p limnifs-bench -- run --all --iterations "${{ inputs.iterations || '3' }}"
 
       - name: Upload report artifacts
         uses: actions/upload-artifact@v4

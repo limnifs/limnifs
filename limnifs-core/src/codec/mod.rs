@@ -31,12 +31,24 @@
 #![warn(clippy::pedantic)]
 
 mod brotli;
+mod bzip2;
+mod bitshuffle_lz4;
 mod deflate;
+mod deflate64;
+mod flac;
+mod fsst_brotli;
+mod glza;
 mod lz4;
+mod ppmd;
+mod ricepp;
+mod shuffle_lz4;
+mod shuffle_zstd;
 mod snappy;
 mod store;
 mod xz;
+mod zpaq;
 mod zstd;
+mod zstd_dict;
 
 use std::sync::OnceLock;
 
@@ -61,6 +73,31 @@ pub const CODEC_DEFLATE: u8 = 0x05;
 /// Codec id 0x06: Snappy format (`omnizip-snappy` → `snap`, pure Rust).
 /// No compression levels; ~500 MB/s encode and decode.
 pub const CODEC_SNAPPY: u8 = 0x06;
+/// Codec id 0x07: FLAC for PCM audio. **RESERVED** — pending
+/// `omnizip-flac` encoder port. The wrapper at `codec::flac::FlacCodec`
+/// returns `UnsupportedFeature` until the real codec lands.
+pub const CODEC_FLAC: u8 = 0x07;
+/// Codec id 0x08: Rice++ for FITS / scientific integer-pixel images.
+/// **RESERVED** — pending `omnizip-ricepp` encoder port.
+pub const CODEC_RICEPP: u8 = 0x08;
+/// Codec id 0x09: FSST + Brotli composite for CSV/JSON.
+pub const CODEC_FSST_BROTLI: u8 = 0x09;
+/// Codec id 0x0A: BLOSC shuffle + LZ4 for scientific float data.
+pub const CODEC_BLOSC2_SHUFFLE_LZ4: u8 = 0x0A;
+/// Codec id 0x0B: ZPAQ context-mixing archiver.
+pub const CODEC_ZPAQ: u8 = 0x0B;
+/// Codec id 0x0C: PPMd (dormant — raw fallback).
+pub const CODEC_PPMD: u8 = 0x0C;
+/// Codec id 0x0D: GLZA grammar-based LZ.
+pub const CODEC_GLZA: u8 = 0x0D;
+/// Codec id 0x0E: Shuffle+Zstd (BLOSC2 byte-shuffle + Zstd back-end).
+pub const CODEC_SHUFFLE_ZSTD: u8 = 0x0E;
+/// Codec id 0x0F: Bitshuffle+LZ4 (BLOSC2 bit-shuffle + LZ4 back-end).
+pub const CODEC_BITSHUFFLE_LZ4: u8 = 0x0F;
+/// Codec id 0x10: BZip2.
+pub const CODEC_BZIP2: u8 = 0x10;
+/// Codec id 0x11: Deflate64 (ZIP method 9, 64 KB window).
+pub const CODEC_DEFLATE64: u8 = 0x11;
 
 /// The behaviour every compression codec implements. New codecs register
 /// a `Codec` impl with [`CodecRegistry::register`]; the dispatch code
@@ -86,6 +123,15 @@ pub trait Codec: Send + Sync {
     /// Returns [`CoreError::Corrupt`] if decompression fails or the
     /// result length does not match `expected_len`.
     fn decompress(&self, compressed: &[u8], expected_len: u32) -> Result<Vec<u8>, CoreError>;
+
+    /// Minimum input size for this codec to be tried in the compression
+    /// tournament. Chunks smaller than this skip the codec entirely.
+    /// Defaults to 0 (no threshold). Override in codec impls that have
+    /// significant per-call setup cost (context model initialization,
+    /// grammar construction, etc.).
+    fn min_compress_size(&self) -> usize {
+        0
+    }
 }
 
 /// Process-wide registry of codecs, keyed by codec id.
@@ -180,6 +226,22 @@ impl Default for CodecRegistry {
         registry.register(Box::new(brotli::BrotliCodec));
         registry.register(Box::new(deflate::DeflateCodec));
         registry.register(Box::new(snappy::SnappyCodec));
+        // Reserved stubs — wire-format ids exist; codecs pending omnizip ports.
+        // Registered so `compress(CODEC_FLAC, ...)` surfaces a clear
+        // "codec 0x07 awaiting omnizip-flac" instead of "0x07 not
+        // registered". Categorizers can detect this and fall back
+        // gracefully.
+        registry.register(Box::new(flac::FlacCodec));
+        registry.register(Box::new(ricepp::RiceppCodec::fits_default()));
+        registry.register(Box::new(fsst_brotli::FsstBrotliCodec));
+        registry.register(Box::new(shuffle_lz4::ShuffleLz4Codec::float32()));
+        registry.register(Box::new(zpaq::ZpaqCodec));
+        registry.register(Box::new(ppmd::PpmdCodec));
+        registry.register(Box::new(glza::GlzaCodec));
+        registry.register(Box::new(shuffle_zstd::ShuffleZstdCodec::new()));
+        registry.register(Box::new(bitshuffle_lz4::BitshuffleLz4Codec::new()));
+        registry.register(Box::new(bzip2::Bzip2Codec::new()));
+        registry.register(Box::new(deflate64::Deflate64Codec::new()));
         registry
     }
 }
@@ -198,20 +260,29 @@ fn default_registry() -> &'static CodecRegistry {
     DEFAULT_REGISTRY.get_or_init(CodecRegistry::default)
 }
 
-/// Returns the best available codec for compressible content classes.
-/// ZSTD level 1 beats LZ4 on ratio at similar encode speed and round-trips
-/// through a pure-Rust encoder/decoder pair.
+/// Returns the best available codec for compressible content classes
+/// (Text, Code). Brotli q5 is the current default — beats ZSTD L6
+/// (omnizip 0.7+) on real source code in our benchmarks. Try
+/// switching to `CODEC_ZSTD` if ZSTD's level differentiation
+/// improves enough to beat Brotli; the change is one line.
 #[must_use]
 pub fn best_compressible_codec() -> u8 {
-    CODEC_ZSTD
+    CODEC_BROTLI
 }
 
-/// Returns the best available codec for binary content classes.
-/// ZSTD handles structured binary data well at level 1; higher-ratio
-/// pure-Rust options do not exist as of 2026.
+/// Returns the best available codec for binary content classes
+/// (structured binary — ELF, Mach-O, PE, object files, etc.).
+///
+/// LZ4 is the right choice in the current registry: ruzstd's encoder
+/// is level-1-only and produces output roughly the size of the input,
+/// so ZSTD effectively means "store with extra overhead". LZ4 gives
+/// 1.5–2× on structured binary at multiple-GB/s encode speed.
+///
+/// Will switch back to ZSTD once `omnizip-zstd` ships a real encoder
+/// (Phase C, tracked in `omnizip/omnizip-rs`).
 #[must_use]
 pub fn best_binary_codec() -> u8 {
-    CODEC_ZSTD
+    CODEC_LZ4
 }
 
 /// Compress `plaintext` using the codec identified by `codec_id`, via
@@ -271,6 +342,25 @@ pub fn compress_brotli(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
     brotli::compress(plaintext, brotli::DEFAULT_QUALITY)
 }
 
+/// Compress with Brotli at an explicit quality (0–11). Quality 0 is
+/// the fastest; quality 11 is the reference encoder's maximum.
+///
+/// This bypasses the codec registry's per-codec default and is the
+/// right call for callers that know they want Brotli at a specific
+/// quality — e.g. the writer's metadata-blob path, which often
+/// compresses multi-MiB blobs where the default q5 is the
+/// bottleneck.
+///
+/// # Errors
+///
+/// Returns [`CoreError::Corrupt`] if the Brotli encoder fails.
+pub fn compress_brotli_with_quality(
+    plaintext: &[u8],
+    quality: i32,
+) -> Result<Vec<u8>, CoreError> {
+    brotli::compress(plaintext, quality)
+}
+
 /// Compress with DEFLATE at level 6 (default). Output is a zlib-framed
 /// DEFLATE stream (RFC 1950) decodable by any zlib decoder (`gzip -d`,
 /// `zlib.decompress`, etc.).
@@ -298,6 +388,42 @@ mod tests {
         let data = b"hello world";
         let result = decompress(CODEC_STORE, data, 11).expect("store decompress");
         assert_eq!(result, data);
+    }
+
+    #[test]
+    fn zstd_higher_levels_compress_better_than_lower() {
+        // Regression for the omnizip 0.5→0.7 ZSTD level differentiation
+        // fix. omnizip 0.5 produced identical output for all 5 levels;
+        // 0.7 must differentiate.
+        let input: Vec<u8> = b"The quick brown fox jumps over the lazy dog. ".repeat(2000);
+        let l1 = omnizip_zstd::compress(&input, omnizip_zstd::ZstdLevel::Fastest)
+            .expect("zstd L1");
+        let l6 = omnizip_zstd::compress(&input, omnizip_zstd::ZstdLevel::Default)
+            .expect("zstd L6");
+        assert!(
+            l6.len() < l1.len(),
+            "ZSTD L6 ({}) should beat L1 ({}); level differentiation broken",
+            l6.len(), l1.len()
+        );
+    }
+
+    #[test]
+    fn xz_lzma_round_trips_via_lazy_parsing() {
+        // Regression for the omnizip 0.5→0.7 LZMA lazy-parsing rewrite.
+        // We don't assert LZMA beats ZSTD on synthetic-repetitive input
+        // (extreme inputs hit edge cases in the encoder), only that
+        // real-world text round-trips through the new encoder.
+        let input: Vec<u8> = b"The quick brown fox jumps over the lazy dog. \
+                               Lorem ipsum dolor sit amet. \
+                               SVG is a vector image format.".repeat(500);
+        let xz = omnizip_lzma::xz_compress(&input).expect("xz encode");
+        let recovered = omnizip_lzma::xz_container::xz_decompress(&xz).expect("xz decode");
+        assert_eq!(recovered, input);
+        assert!(
+            xz.len() < input.len(),
+            "LZMA should compress real-world text; got {} vs {}",
+            xz.len(), input.len()
+        );
     }
 
     #[test]
@@ -392,13 +518,15 @@ mod tests {
     }
 
     #[test]
-    fn xz_encode_is_unsupported() {
-        match compress(CODEC_XZ, b"data") {
-            Err(CoreError::UnsupportedFeature { feature }) => {
-                assert!(feature.contains("encoder"), "got: {feature}");
-            }
-            other => panic!("expected UnsupportedFeature, got {other:?}"),
-        }
+    fn xz_encode_round_trips() {
+        // omnizip-lzma's xz_compress is Phase B (literal-only) so the
+        // output is larger than the input, but it must round-trip
+        // through the LZMA2 decoder.
+        let plaintext = b"xz round-trip data";
+        let compressed = compress(CODEC_XZ, plaintext).expect("xz encode succeeds");
+        let decompressed = decompress(CODEC_XZ, &compressed, plaintext.len() as u32)
+            .expect("xz decode succeeds");
+        assert_eq!(decompressed.as_slice(), plaintext);
     }
 
     #[test]

@@ -244,6 +244,39 @@ pub fn parse_metadata_blob_with_ceiling(
         dir_nodes.push(parse_directory_node(cursor)?);
     }
 
+    // Shared inline table: only present if bytes remain after dir_nodes.
+    // Written by the writer when inline data dedup occurred.
+    if cursor.remaining_len() >= 4 {
+        let shared_count = cursor.read_u32_le()?;
+        let shared_count_us = usize::try_from(shared_count).map_err(|_| CoreError::Corrupt {
+            reason: format!("metadata blob shared_inline_count {shared_count} exceeds usize"),
+        })?;
+        let mut shared_table: Vec<Vec<u8>> = Vec::with_capacity(shared_count_us);
+        for _ in 0..shared_count_us {
+            let data_len = cursor.read_u32_le()?;
+            let data_len_us = usize::try_from(data_len).map_err(|_| CoreError::Corrupt {
+                reason: format!("shared inline entry len {data_len} exceeds usize"),
+            })?;
+            if data_len > max_inline_bytes {
+                return Err(CoreError::Corrupt {
+                    reason: format!(
+                        "shared inline entry len {data_len} exceeds ceiling {max_inline_bytes}"
+                    ),
+                });
+            }
+            shared_table.push(cursor.read_n_owned(data_len_us)?);
+        }
+        // Resolve all SharedInline references to InlineData.
+        for inode in &mut inodes {
+            if let crate::inode::ContentHandle::SharedInline(idx) = &inode.content_handle {
+                let data = shared_table.get(*idx).ok_or_else(|| CoreError::Corrupt {
+                    reason: format!("shared inline index {idx} out of range (table has {} entries)", shared_table.len()),
+                })?;
+                inode.content_handle = crate::inode::ContentHandle::InlineData(data.clone());
+            }
+        }
+    }
+
     Ok(MetadataBlob { inodes, dir_nodes })
 }
 

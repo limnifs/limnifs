@@ -484,7 +484,7 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
 
 fn content_handle_tag(handle: &ContentHandle) -> u8 {
     match handle {
-        ContentHandle::InlineData(_) => 1,
+        ContentHandle::InlineData(_) | ContentHandle::SharedInline(_) => 1,
         ContentHandle::SliceMap(_) => 2,
         ContentHandle::Directory(_) => 3,
         ContentHandle::Symlink(_) => 4,
@@ -501,24 +501,47 @@ fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
         source,
     })?;
 
-    if let (Some(slab_bytes), Some(locator)) = (&artifact.slab_bytes, &artifact.slab_locator) {
-        let slab_name = locator.strip_prefix("file:").unwrap_or(locator);
-        let slab_path = output
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join(slab_name);
-        std::fs::write(&slab_path, slab_bytes).map_err(|source| CliError::ReadFailed {
-            path: slab_path.clone(),
+    let parent = output
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let total_slab_bytes: u64 = artifact
+        .slabs
+        .iter()
+        .map(|slab| {
+            let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+            let slab_path = parent.join(slab_name);
+            std::fs::write(&slab_path, &slab.bytes).map_err(|source| CliError::ReadFailed {
+                path: slab_path.clone(),
+                source,
+            })?;
+            println!(
+                "{}: wrote {} bytes (slab {}, {} drops)",
+                slab_path.display(),
+                slab.bytes.len(),
+                slab.id.ordinal,
+                slab.drop_ids.len(),
+            );
+            Ok::<u64, CliError>(slab.bytes.len() as u64)
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .sum();
+
+    if let Some(sidecar) = &artifact.metadata_sidecar {
+        let name = sidecar.locator.strip_prefix("file:").unwrap_or(&sidecar.locator);
+        let sidecar_path = parent.join(name);
+        std::fs::write(&sidecar_path, &sidecar.bytes).map_err(|source| CliError::ReadFailed {
+            path: sidecar_path.clone(),
             source,
         })?;
         println!(
-            "{}: wrote {} bytes (slab, {} drops)",
-            slab_path.display(),
-            slab_bytes.len(),
-            artifact.drop_count,
+            "{}: wrote {} bytes (metadata sidecar)",
+            sidecar_path.display(),
+            sidecar.bytes.len(),
         );
     }
 
+    let slab_count = artifact.slabs.len();
     println!(
         "{output}: wrote {len} bytes, {manifest_root}",
         output = output.display(),
@@ -526,8 +549,8 @@ fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
         manifest_root = artifact.merkle_root,
     );
     println!(
-        "  inodes: {}  files: {}  dirs: {}  drops: {}",
-        artifact.inode_count, artifact.file_count, artifact.dir_count, artifact.drop_count
+        "  inodes: {}  files: {}  dirs: {}  drops: {}  slabs: {} ({total_slab_bytes} bytes)",
+        artifact.inode_count, artifact.file_count, artifact.dir_count, artifact.drop_count, slab_count,
     );
     Ok(())
 }
@@ -624,26 +647,20 @@ fn cat(image: &Path, path: &str, offset: Option<u64>, length: Option<u64>) -> Re
             file_data.extend_from_slice(data);
         }
         ContentHandle::SliceMap(slices) => {
+            let store = if slab_index.is_empty() {
+                None
+            } else {
+                Some(limnifs_core::slab_store::SlabStore::load(image, &slab_index).map_err(map_err)?)
+            };
             for slice in slices {
-                let slab_path = resolve_slab_path(image, &slab_index)?;
-                let slab_bytes =
-                    std::fs::read(&slab_path).map_err(|source| CliError::ReadFailed {
-                        path: slab_path.clone(),
-                        source,
-                    })?;
-                let slab_view = limnifs_core::parse_slab(&slab_bytes).map_err(|source| {
-                    CliError::FormatFailed {
-                        path: slab_path.clone(),
-                        source,
-                    }
-                })?;
-                let plaintext = slab_view
-                    .plaintext_for(slice.drop_id.as_bytes())
+                let plaintext = store
+                    .as_ref()
+                    .and_then(|s| s.plaintext_for(slice.drop_id.as_bytes()))
                     .ok_or_else(|| CliError::FormatFailed {
-                        path: slab_path.clone(),
+                        path: image.to_path_buf(),
                         source: CoreError::Corrupt {
                             reason: format!(
-                                "slab: drop id {} not found in slab file",
+                                "slab: drop id {} not found in any slab",
                                 format_hex(slice.drop_id.as_bytes())
                             ),
                         },
@@ -719,25 +736,11 @@ fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
     let inode_index: std::collections::HashMap<u64, &limnifs_core::Inode> =
         blob.inodes.iter().map(|i| (i.number, i)).collect();
 
-    let slab_bytes: Option<Vec<u8>> = if slab_index.is_empty() {
+    let slab_store: Option<limnifs_core::slab_store::SlabStore> = if slab_index.is_empty() {
         None
     } else {
-        let slab_path = resolve_slab_path(image, &slab_index)?;
-        Some(
-            std::fs::read(&slab_path).map_err(|source| CliError::ReadFailed {
-                path: slab_path.clone(),
-                source,
-            })?,
-        )
+        Some(limnifs_core::slab_store::SlabStore::load(image, &slab_index).map_err(map_err)?)
     };
-    let slab_view = slab_bytes
-        .as_deref()
-        .map(limnifs_core::parse_slab)
-        .transpose()
-        .map_err(|source| CliError::FormatFailed {
-            path: image.to_path_buf(),
-            source,
-        })?;
 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -778,24 +781,24 @@ fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
                 })?;
             }
             ContentHandle::SliceMap(slices) => {
-                let Some(view) = slab_view.as_ref() else {
+                let Some(store) = slab_store.as_ref() else {
                     return Err(CliError::FormatFailed {
                         path: image.to_path_buf(),
                         source: CoreError::Corrupt {
                             reason: format!(
-                                "metadata blob: path {path:?} references a drop but slab is missing"
+                                "metadata blob: path {path:?} references a drop but slab store is missing"
                             ),
                         },
                     });
                 };
                 for slice in slices {
-                    let plaintext = view
+                    let plaintext = store
                         .plaintext_for(slice.drop_id.as_bytes())
                         .ok_or_else(|| CliError::FormatFailed {
                             path: image.to_path_buf(),
                             source: CoreError::Corrupt {
                                 reason: format!(
-                                    "slab: drop id {} not found",
+                                    "slab: drop id {} not found in any slab",
                                     format_hex(slice.drop_id.as_bytes())
                                 ),
                             },
@@ -998,6 +1001,7 @@ fn stat(image: &Path, path: &str) -> Result<(), CliError> {
     println!("  nlink:   {}", inode.nlink);
     match &inode.content_handle {
         ContentHandle::InlineData(d) => println!("  content: inline ({} bytes)", d.len()),
+        ContentHandle::SharedInline(idx) => println!("  content: shared inline (index {idx}, unresolved)"),
         ContentHandle::SliceMap(s) => println!("  content: slice map ({} slices)", s.len()),
         ContentHandle::Directory(h) => println!("  content: directory (hash {})", format_hex(h)),
         ContentHandle::Symlink(t) => println!("  content: symlink -> {t:?}"),
@@ -1086,32 +1090,22 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
     // avoid races.
     let mut file_tasks: Vec<(PathBuf, &limnifs_core::Inode)> = Vec::new();
     let mut dir_count = 0usize;
-    let slab_path = if slab_index.is_empty() {
-        None
-    } else {
-        Some(resolve_slab_path(image, &slab_index)?)
-    };
     extract_dir_collect(&blob, root_inode, dest, &mut file_tasks, &mut dir_count)?;
 
-    // Phase 2: load the slab once (if any) and write files IN PARALLEL.
+    // Phase 2: load the slab store once (if any) and write files IN PARALLEL.
     // Each file write is independent; rayon distributes them across cores.
-    let slab_bytes: Option<Vec<u8>> = match &slab_path {
-        Some(p) => Some(std::fs::read(p).map_err(|source| CliError::ReadFailed {
-            path: p.clone(),
-            source,
-        })?),
-        None => None,
+    // SlabStore is `Sync` (it's all `HashMap` and `Vec<u8>` under the hood)
+    // so we can share a reference across rayon workers.
+    let slab_store: Option<limnifs_core::slab_store::SlabStore> = if slab_index.is_empty() {
+        None
+    } else {
+        Some(limnifs_core::slab_store::SlabStore::load(image, &slab_index).map_err(map_err)?)
     };
-    let slab_view = slab_bytes
-        .as_deref()
-        .map(limnifs_core::parse_slab)
-        .transpose()
-        .map_err(map_err)?;
 
     let file_count = file_tasks.len();
     let write_errors: Vec<Option<CliError>> = file_tasks
         .par_iter()
-        .map(|(path, inode)| extract_file(path, inode, slab_view.as_ref()).err())
+        .map(|(path, inode)| extract_file(path, inode, slab_store.as_ref()).err())
         .collect();
     if let Some(Some(err)) = write_errors.into_iter().next() {
         return Err(err);
@@ -1128,7 +1122,7 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
 fn extract_file(
     path: &Path,
     inode: &limnifs_core::Inode,
-    slab_view: Option<&limnifs_core::SlabView>,
+    slab_store: Option<&limnifs_core::slab_store::SlabStore>,
 ) -> Result<(), CliError> {
     match &inode.content_handle {
         ContentHandle::InlineData(data) => {
@@ -1138,20 +1132,20 @@ fn extract_file(
             })?;
         }
         ContentHandle::SliceMap(slices) => {
-            let view = slab_view.ok_or_else(|| CliError::FormatFailed {
+            let store = slab_store.ok_or_else(|| CliError::FormatFailed {
                 path: path.to_path_buf(),
                 source: CoreError::Corrupt {
-                    reason: "extract: file references drops but slab is missing".into(),
+                    reason: "extract: file references drops but slab store is missing".into(),
                 },
             })?;
             let mut data = Vec::new();
             for slice in slices {
-                let plaintext = view
+                let plaintext = store
                     .plaintext_for(slice.drop_id.as_bytes())
                     .ok_or_else(|| CliError::FormatFailed {
                         path: path.to_path_buf(),
                         source: CoreError::Corrupt {
-                            reason: "slab: drop not found".into(),
+                            reason: "slab: drop not found in any slab".into(),
                         },
                     })?
                     .map_err(|e| CliError::FormatFailed {
@@ -1487,20 +1481,27 @@ fn compact(source: &Path, output: &Path) -> Result<(), CliError> {
         source: e,
     })?;
 
-    if let (Some(slab_bytes), Some(locator)) = (&artifact.slab_bytes, &artifact.slab_locator) {
-        let slab_name = locator.strip_prefix("file:").unwrap_or(locator);
-        let slab_path = output
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join(slab_name);
-        std::fs::write(&slab_path, slab_bytes).map_err(|e| CliError::ReadFailed {
+    let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let mut slab_size: u64 = 0;
+    for slab in &artifact.slabs {
+        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        let slab_path = parent.join(slab_name);
+        std::fs::write(&slab_path, &slab.bytes).map_err(|e| CliError::ReadFailed {
             path: slab_path.clone(),
+            source: e,
+        })?;
+        slab_size += slab.bytes.len() as u64;
+    }
+    if let Some(sidecar) = &artifact.metadata_sidecar {
+        let name = sidecar.locator.strip_prefix("file:").unwrap_or(&sidecar.locator);
+        let sidecar_path = parent.join(name);
+        std::fs::write(&sidecar_path, &sidecar.bytes).map_err(|e| CliError::ReadFailed {
+            path: sidecar_path.clone(),
             source: e,
         })?;
     }
 
     let output_size = artifact.bytes.len() as u64;
-    let slab_size = artifact.slab_bytes.as_ref().map_or(0, |s| s.len() as u64);
 
     println!("compacted: {} → {}", source.display(), output.display());
     println!("  source manifest: {source_size} bytes");
@@ -1535,38 +1536,43 @@ fn check_cmd(image: &Path) -> Result<(), CliError> {
         return Ok(());
     }
 
-    let slab_path = resolve_slab_path(image, &slab_index)?;
-    let slab_bytes = std::fs::read(&slab_path).map_err(|source| CliError::ReadFailed {
-        path: slab_path.clone(),
-        source,
-    })?;
-    let view = limnifs_core::parse_slab(&slab_bytes).map_err(|source| CliError::FormatFailed {
-        path: slab_path,
-        source,
-    })?;
+    let slab_store = limnifs_core::slab_store::SlabStore::load(image, &slab_index).map_err(map_err)?;
 
     let mut checked = 0usize;
     let mut passed = 0usize;
     let mut failed = 0usize;
 
-    for record in view.drop_records() {
-        checked += 1;
-        match view.plaintext_for(record.drop_id.as_bytes()) {
-            Some(Ok(plaintext)) => {
-                let computed = hash_section(&plaintext);
-                if computed == *record.drop_id.as_bytes() {
-                    passed += 1;
-                } else {
-                    failed += 1;
-                    println!("  FAIL: drop {} — BLAKE3 mismatch", record.drop_id);
-                }
-            }
-            Some(Err(e)) => {
+    // Iterate every slab in the store, hashing every drop record's
+    // plaintext against its declared DropId.
+    for ordinal in 0..slab_store.slab_count() {
+        let Some(slab_bytes) = slab_store.slab(ordinal) else { continue };
+        let view = match limnifs_core::parse_slab(slab_bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                println!("  FAIL: slab {ordinal} — {e}");
                 failed += 1;
-                println!("  FAIL: drop {} — {e}", record.drop_id);
+                continue;
             }
-            None => {
-                // Drop not referenced by the manifest; skip silently.
+        };
+        for record in view.drop_records() {
+            checked += 1;
+            match view.plaintext_for(record.drop_id.as_bytes()) {
+                Some(Ok(plaintext)) => {
+                    let computed = hash_section(&plaintext);
+                    if computed == *record.drop_id.as_bytes() {
+                        passed += 1;
+                    } else {
+                        failed += 1;
+                        println!("  FAIL: drop {} — BLAKE3 mismatch", record.drop_id);
+                    }
+                }
+                Some(Err(e)) => {
+                    failed += 1;
+                    println!("  FAIL: drop {} — {e}", record.drop_id);
+                }
+                None => {
+                    // Drop not referenced by the manifest; skip silently.
+                }
             }
         }
     }
@@ -1619,13 +1625,21 @@ fn benchmark() -> Result<(), CliError> {
         limnifs_write::write_directory(&src).map_err(|e| CliError::WriteFailed { source: e })?;
     let write_ms = t0.elapsed().as_millis();
     std::fs::write(&img, &artifact.bytes).expect("write image");
-    if let (Some(slab_bytes), Some(locator)) = (&artifact.slab_bytes, &artifact.slab_locator) {
-        let slab_name = locator.strip_prefix("file:").unwrap_or(locator);
+    for slab in &artifact.slabs {
+        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
         let slab_path = img
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .join(slab_name);
-        std::fs::write(&slab_path, slab_bytes).expect("write slab");
+        std::fs::write(&slab_path, &slab.bytes).expect("write slab");
+    }
+    if let Some(sidecar) = &artifact.metadata_sidecar {
+        let name = sidecar.locator.strip_prefix("file:").unwrap_or(&sidecar.locator);
+        let sidecar_path = img
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(name);
+        std::fs::write(&sidecar_path, &sidecar.bytes).expect("write metadata sidecar");
     }
 
     // Verify benchmark.
@@ -1664,11 +1678,15 @@ fn benchmark() -> Result<(), CliError> {
     std::fs::remove_dir_all(&src).ok();
     std::fs::remove_dir_all(&dest).ok();
     std::fs::remove_file(&img).ok();
-    if let (Some(slab_bytes), Some(locator)) = (&artifact.slab_bytes, &artifact.slab_locator) {
-        let slab_name = locator.strip_prefix("file:").unwrap_or(locator);
+    for slab in &artifact.slabs {
+        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
         let slab_path = std::env::temp_dir().join(slab_name);
         let _ = std::fs::remove_file(&slab_path);
-        let _ = slab_bytes;
+    }
+    if let Some(sidecar) = &artifact.metadata_sidecar {
+        let name = sidecar.locator.strip_prefix("file:").unwrap_or(&sidecar.locator);
+        let sidecar_path = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_file(&sidecar_path);
     }
     Ok(())
 }
@@ -1884,37 +1902,6 @@ fn getrandom_rng(out: &mut [u8]) -> Result<(), limnifs_core::shamir::ShamirError
 /// place and a warning is printed. The user can install composefs-utils
 /// and re-run, or copy the rootfs to a Linux machine and run
 /// `mkcomposefs` there.
-/// Derive the path to the slab file that holds a slice's drop. Uses
-/// the first locator of the first entry in the slab index, resolved
-/// relative to the manifest file's directory.
-fn resolve_slab_path(
-    image: &Path,
-    slab_index: &limnifs_core::SlabIndex,
-) -> Result<PathBuf, CliError> {
-    if slab_index.is_empty() {
-        return Err(CliError::FormatFailed {
-            path: image.to_path_buf(),
-            source: CoreError::Corrupt {
-                reason: "slab index is empty but inode references a drop".into(),
-            },
-        });
-    }
-    let entry = &slab_index.entries[0];
-    if entry.locators.is_empty() {
-        return Err(CliError::FormatFailed {
-            path: image.to_path_buf(),
-            source: CoreError::Corrupt {
-                reason: "slab index entry has no locators".into(),
-            },
-        });
-    }
-    let locator = &entry.locators[0];
-    let slab_name = locator.uri.strip_prefix("file:").unwrap_or(&locator.uri);
-    Ok(image
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join(slab_name))
-}
 
 /// Common loader: parses the manifest prefix, extracts the inlined
 /// metadata blob, and returns the parsed blob + root inode number +
@@ -1928,17 +1915,32 @@ fn load_image(
     let _ = parse_manifest_header(&mut cursor).map_err(&map_err)?;
     let _ = parse_feature_flags_section(&mut cursor).map_err(&map_err)?;
     let meta_ref = parse_metadata_reference(&mut cursor).map_err(&map_err)?;
-    let blob_bytes = meta_ref
-        .inline_metadata
-        .as_deref()
-        .ok_or_else(|| CliError::FormatFailed {
+    let blob_bytes: Vec<u8> = if let Some(inline) = meta_ref.inline_metadata.as_deref() {
+        // Parser already decompressed v2 inline bytes.
+        inline.to_vec()
+    } else {
+        // External metadata blob: follow the first file: locator,
+        // then decompress if codec != 0.
+        let entry = meta_ref.locators.first().ok_or_else(|| CliError::FormatFailed {
             path: image.to_path_buf(),
             source: CoreError::Corrupt {
-                reason: "inlined metadata required (external-metadata images not yet supported)"
-                    .into(),
+                reason: "metadata_reference has neither inline data nor locators".into(),
             },
         })?;
-    let mut blob_cursor = ManifestCursor::new(blob_bytes);
+        let name = entry.uri.strip_prefix("file:").unwrap_or(&entry.uri);
+        let sidecar_path = image.parent().unwrap_or_else(|| Path::new(".")).join(name);
+        let wire_bytes = std::fs::read(&sidecar_path).map_err(|source| CliError::ReadFailed {
+            path: sidecar_path.clone(),
+            source,
+        })?;
+        if meta_ref.codec == 0 {
+            wire_bytes
+        } else {
+            limnifs_core::codec::decompress(meta_ref.codec, &wire_bytes, meta_ref.uncompressed_len)
+                .map_err(&map_err)?
+        }
+    };
+    let mut blob_cursor = ManifestCursor::new(&blob_bytes);
     let blob = parse_metadata_blob(&mut blob_cursor).map_err(&map_err)?;
 
     let slab_index = parse_slab_index(&mut cursor).map_err(&map_err)?;

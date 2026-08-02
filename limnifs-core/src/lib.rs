@@ -31,14 +31,19 @@
 //! | [`drop_record`] | [`DropRecord`] + [`parse_drop_record`] |
 //! | [`locator`] | [`LocatorEntry`] + [`parse_locator_entry`] |
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![warn(clippy::pedantic)]
 
 pub mod aead;
+pub mod aead_ops;
+pub mod categorization_policy;
+pub mod chunking_config;
 pub mod codec;
+pub mod compression_tournament_config;
 pub mod crypto;
 pub mod cursor;
 pub mod delta_linkage;
+pub mod dictionary_section;
 pub mod directory_node;
 pub mod dms_policy;
 pub mod dms_scheme;
@@ -46,6 +51,7 @@ pub mod drop_record;
 pub mod ec_params;
 pub mod ec_repair;
 pub mod ec_scheme;
+pub mod encryption_descriptor;
 pub mod epoch;
 pub mod error;
 pub mod feature_flags;
@@ -73,6 +79,7 @@ pub mod signing;
 pub mod slab;
 pub mod slab_index;
 pub mod slab_reader;
+pub mod slab_store;
 
 pub use cursor::ManifestCursor;
 pub use directory_node::{parse_directory_node, DirEntry, DirectoryNode, DIRECTORY_NODE_VERSION};
@@ -100,8 +107,8 @@ pub use history::{
 pub use inode::{
     parse_inode, parse_inode_with_ceiling, ContentHandle, Inode, SliceRef, XAttr,
     DEFAULT_INLINE_DATA_MAX_BYTES, INODE_FIXED_PREFIX_LEN, INODE_FLAG_ATIME,
-    INODE_FLAG_INLINE_DATA, INODE_FLAG_RESERVED_MASK, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK,
-    S_IFMT, S_IFREG, S_IFSOCK,
+    INODE_FLAG_INLINE_DATA, INODE_FLAG_RESERVED_MASK, INODE_FLAG_SHARED_INLINE,
+    S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFMT, S_IFREG, S_IFSOCK,
 };
 pub use locator::{
     parse_locator_entries, parse_locator_entries_with_ceiling, parse_locator_entry,
@@ -118,6 +125,7 @@ pub use metadata::{
 pub use metadata_reference::{
     parse_metadata_reference, parse_metadata_reference_with_ceilings, MetadataReference,
     DEFAULT_INLINE_METADATA_MAX_BYTES, METADATA_REFERENCE_SECTION_VERSION,
+    METADATA_REFERENCE_SECTION_VERSION_2,
 };
 pub use slab::{
     parse_slab_header, parse_slab_header_with_ceiling, SlabHeader, CRYPTO_HINT_EXTENDED,

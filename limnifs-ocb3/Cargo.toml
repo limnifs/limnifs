@@ -1,0 +1,15 @@
+[package]
+name = "limnifs-ocb3"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure-Rust OCB3 (RFC 7253) AEAD on stable aes 0.8 — no RC dependencies"
+
+[dependencies]
+aes = "0.8"
+cipher = "0.4"
+
+[lints]
+workspace = true

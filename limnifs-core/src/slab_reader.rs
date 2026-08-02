@@ -236,6 +236,7 @@ mod tests {
             drop_records.push(0x00); // solid_window_index
             drop_records.extend_from_slice(&offset_in_window.to_le_bytes());
             drop_records.extend_from_slice(&plaintext_len.to_le_bytes());
+            drop_records.push(crate::drop_record::NO_DICT); // dict_id: no dictionary
             solid_window.extend_from_slice(plaintext);
         }
         let slab_content = [&drop_records[..], &solid_window[..]].concat();

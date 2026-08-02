@@ -359,6 +359,12 @@ fn encode_inode(out: &mut Vec<u8>, inode: &Inode) {
             out.extend_from_slice(&len.to_le_bytes());
             out.extend_from_slice(data);
         }
+        ContentHandle::SharedInline(_) => {
+            // Should never reach here — resolved during metadata parse.
+            // Emit as empty inline to avoid panic.
+            out.push(0x04);
+            out.extend_from_slice(&0u32.to_le_bytes());
+        }
         ContentHandle::SliceMap(slices) => {
             out.push(0x00);
             let slice_count = u32::try_from(slices.len()).expect("slice count fits u32");

@@ -1,9 +1,10 @@
-//! XZ/LZMA2 codec (0x03): decode-only in pure Rust via `omnizip-lzma`.
+//! XZ/LZMA2 codec (0x03): pure Rust via `omnizip-lzma` 0.5.
 //!
-//! The omnizip-lzma crate is a Rust port of omnizip's Ruby LZMA reference
-//! (itself derived from tukaani-project/xz liblzma). Decode handles raw
-//! LZMA2 chunk data as stored in `LimniFS` drop records. Encode returns
-//! `UnsupportedFeature` until the LZMA encoder port is complete.
+//! `omnizip-lzma` 0.5 ships a Phase C encoder: the match finder is
+//! wired into `Lzma1Encoder::encode` with greedy parsing + rep0
+//! tracking + matched-literal context. Real compression works;
+//! output is smaller than the input on typical source-code/text
+//! payloads. Round-trips through `xz_decompress`.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -11,7 +12,8 @@
 use crate::codec::Codec;
 use crate::error::CoreError;
 
-/// XZ/LZMA2 codec. Decode-only.
+/// XZ/LZMA2 codec. Encode and decode both via `omnizip-lzma` 0.5
+/// (Phase C — match finder + greedy parser).
 pub struct XzCodec;
 
 impl Codec for XzCodec {
@@ -23,11 +25,9 @@ impl Codec for XzCodec {
         "xz"
     }
 
-    fn compress(&self, _plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
-        Err(CoreError::UnsupportedFeature {
-            feature: "compress codec 0x03 (xz): pure-Rust LZMA encoder does not exist; \
-                      omnizip-lzma encoder port is in progress"
-                .to_string(),
+    fn compress(&self, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
+        omnizip_lzma::xz_compress(plaintext).map_err(|e| CoreError::Corrupt {
+            reason: format!("xz compress failed: {e}"),
         })
     }
 
@@ -35,16 +35,15 @@ impl Codec for XzCodec {
         let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
             reason: format!("decompress: expected_len {expected_len} exceeds usize"),
         })?;
-        let (result, _consumed) =
-            omnizip_lzma::lzma2::decode_lzma2_stream(compressed).map_err(|e| {
-                CoreError::Corrupt {
-                    reason: format!("lzma2 decompress failed: {e}"),
-                }
-            })?;
+        let result = omnizip_lzma::xz_container::xz_decompress(compressed).map_err(|e| {
+            CoreError::Corrupt {
+                reason: format!("xz decompress failed: {e}"),
+            }
+        })?;
         if result.len() != expected_us {
             return Err(CoreError::Corrupt {
                 reason: format!(
-                    "lzma2 decompress: result length {} does not match plaintext_len {expected_us}",
+                    "xz decompress: result length {} does not match plaintext_len {expected_us}",
                     result.len()
                 ),
             });

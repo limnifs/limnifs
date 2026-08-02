@@ -23,18 +23,26 @@
 pub mod chunker;
 pub mod classifier;
 pub mod compaction;
+pub mod config;
 pub mod delta_builder;
+pub mod file_categorizer;
 pub mod flatten;
 pub mod turnover;
 
-use std::collections::HashMap;
+pub use config::{
+    ChunkingConfig, CategorizerConfig, CodecRegistry, Defaults,
+    DictionaryConfig, EncryptionConfig, TournamentConfig, WriteConfig,
+};
+
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::chunker::FastCDC;
 use limnifs_core::{
     compute_merkle_root, hash_empty_section, hash_section, ManifestHeader, SectionHashes,
-    FEATURE_FLAGS_SECTION_VERSION, HISTORY_SECTION_VERSION, METADATA_REFERENCE_SECTION_VERSION,
-    SLAB_INDEX_SECTION_VERSION,
+    FEATURE_FLAGS_SECTION_VERSION, HISTORY_SECTION_VERSION,
+    INODE_FLAG_INLINE_DATA, INODE_FLAG_SHARED_INLINE,
+    METADATA_REFERENCE_SECTION_VERSION_2, SLAB_INDEX_SECTION_VERSION,
 };
 use limnifs_format::{ManifestRoot, SlabId};
 
@@ -42,13 +50,74 @@ use limnifs_format::{ManifestRoot, SlabId};
 /// in their inode. Larger files are stored as drops in a slab.
 pub const INLINE_THRESHOLD: usize = 4096;
 
+/// Maximum total length of a single slab file (header + content).
+/// Matches the reader's `DEFAULT_SLAB_MAX_BYTES` (spec §3.1) minus a
+/// safety margin so a slab that is full but not yet flushed cannot
+/// overrun the reader ceiling on the next drop.
+pub const MAX_SLAB_TOTAL_BYTES: usize = 60 * 1024 * 1024;
+
+/// Width of the slab header (magic + version + SlabId + total_length +
+/// ec_descriptor + crypto_hint). Must agree with
+/// `limnifs_core::slab::SLAB_HEADER_LEN`.
+const SLAB_HEADER_LEN: usize = 56;
+
+/// Threshold at which the writer externalises the metadata blob to a
+/// sidecar file instead of inlining it in the manifest. The reader's
+/// default inline ceiling is 1 MiB (spec §5.3); we externalise well
+/// before that to leave headroom for variance in inode encoding and
+/// to keep manifests compact for large trees.
+pub const METADATA_EXTERNALIZE_THRESHOLD: usize = 768 * 1024;
+
+/// Metadata-blob size above which the writer steps Brotli quality
+/// down to `METADATA_LARGE_BLOB_QUALITY`. Below this, q5's cost is
+/// negligible; above it, q5 starts to dominate create time on big
+/// inode trees (e.g. the 50 K-file tiny-files dataset).
+pub const METADATA_LARGE_BLOB_THRESHOLD: usize = 256 * 1024;
+
+/// Brotli quality for small metadata blobs (≤ `METADATA_LARGE_BLOB_THRESHOLD`).
+/// Best ratio; cost is in the noise on small inputs.
+pub const METADATA_SMALL_BLOB_QUALITY: i32 = 5;
+
+/// Brotli quality for large metadata blobs. q2 is much faster than q5
+/// on multi-MiB inputs; ratio on highly compressible inode data is
+/// within 5–10% of q5 (often identical) because metadata is dominated
+/// by long runs of repeated patterns.
+pub const METADATA_LARGE_BLOB_QUALITY: i32 = 2;
+
+/// One slab produced by the writer. The slab ordinal in `id` matches
+/// the slab's position in `WriteArtifact::slabs`.
+#[derive(Clone, Debug)]
+pub struct SlabArtifact {
+    pub id: SlabId,
+    pub bytes: Vec<u8>,
+    pub locator: String,
+    /// DropIds contained in this slab, in slab order. Used by callers
+    /// that need to know which slab holds which drop without re-parsing
+    /// the slab bytes.
+    pub drop_ids: Vec<[u8; 32]>,
+}
+
+/// Externalized metadata sidecar, present when the metadata blob
+/// exceeds [`METADATA_EXTERNALIZE_THRESHOLD`]. Callers must write
+/// `bytes` to `locator` next to the manifest file.
+#[derive(Clone, Debug)]
+pub struct MetadataSidecar {
+    pub bytes: Vec<u8>,
+    pub locator: String,
+}
+
 /// Result of writing a directory tree.
 #[derive(Clone, Debug)]
 pub struct WriteArtifact {
     pub bytes: Vec<u8>,
     pub merkle_root: ManifestRoot,
-    pub slab_bytes: Option<Vec<u8>>,
-    pub slab_locator: Option<String>,
+    /// All slabs produced by the writer, in slab-ordinal order. Empty
+    /// when the source tree had no files > [`INLINE_THRESHOLD`].
+    pub slabs: Vec<SlabArtifact>,
+    /// External metadata sidecar, present when the metadata blob
+    /// exceeds [`METADATA_EXTERNALIZE_THRESHOLD`]. `None` means the
+    /// metadata is inlined in the manifest.
+    pub metadata_sidecar: Option<MetadataSidecar>,
     pub inode_count: usize,
     pub file_count: usize,
     pub dir_count: usize,
@@ -58,6 +127,30 @@ pub struct WriteArtifact {
     /// Always a directory and always referenced by the inlined
     /// metadata blob's directory inode table.
     pub root_inode_number: u64,
+}
+
+impl WriteArtifact {
+    /// Convenience accessor for the single-slab case. Returns the
+    /// first slab's bytes if there is exactly one slab, else `None`.
+    /// Modern callers should iterate [`WriteArtifact::slabs`] directly.
+    #[must_use]
+    pub fn slab_bytes(&self) -> Option<&[u8]> {
+        if self.slabs.len() == 1 {
+            Some(&self.slabs[0].bytes)
+        } else {
+            None
+        }
+    }
+
+    /// Convenience accessor for the single-slab case.
+    #[must_use]
+    pub fn slab_locator(&self) -> Option<&str> {
+        if self.slabs.len() == 1 {
+            Some(&self.slabs[0].locator)
+        } else {
+            None
+        }
+    }
 }
 
 /// Error during writing.
@@ -138,8 +231,47 @@ struct ChunkedFileResult {
     slices: Vec<PendingSlice>,
 }
 
+/// Compress a whole file as a single drop using the categorizer's
+/// chosen codec. Used when a file-level categorizer claims the file
+/// (FLAC for WAV, ricepp for FITS, FSST+Brotli for CSV). The drop's
+/// slice covers the whole file; no FastCDC chunking happens.
+///
+/// Codec parameters extracted by the categorizer (e.g. PCM sample
+/// format, FITS bitpix) are NOT prepended to the compressed bytes —
+/// the codec embeds its own params in its container format. The
+/// LimniFS drop record just stores `(codec_id, compressed_bytes)`
+/// and lets the codec own its param encoding. The categorizer's
+/// `codec_params` field is reserved for future use when a codec
+/// needs params NOT embedded in its container.
+fn process_whole_file_drop(
+    pf: &PendingFile,
+    data: &[u8],
+    cat: file_categorizer::Categorization,
+) -> Result<ChunkedFileResult, WriteError> {
+    let drop_id = hash_section(data);
+    let compressed = limnifs_core::codec::compress(cat.codec_id, data)
+        .map_err(|e| WriteError::Io(std::io::Error::other(format!(
+            "codec 0x{:02X} compress failed: {e}", cat.codec_id
+        ))))?;
+    let file_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
+    Ok(ChunkedFileResult {
+        drops: vec![(drop_id, data.to_vec(), compressed, cat.codec_id)],
+        slices: vec![PendingSlice {
+            drop_id,
+            file_byte_start: 0,
+            file_byte_end: file_len,
+        }],
+    })
+}
+
 /// Process a single file's contents (CPU-heavy work that runs in a
 /// rayon worker thread). Returns the unique chunks and slice map.
+///
+/// First consults the file-level categorizer registry. If a
+/// categorizer claims the file (e.g. FLAC for WAV, ricepp for FITS,
+/// FSST+Brotli for CSV), the whole file is compressed as a single
+/// drop with the categorizer's chosen codec + parameters. Otherwise
+/// falls through to FastCDC + per-chunk classify.
 fn process_file(
     pf: &PendingFile,
     chunker: &FastCDC,
@@ -147,36 +279,70 @@ fn process_file(
 ) -> Result<ChunkedFileResult, WriteError> {
     let data = std::fs::read(&pf.path)?;
     let file_len = data.len();
+
+    // File-level categorizer path: skip FastCDC if a specialized
+    // codec claims this file. The whole file becomes one drop.
+    if let Some(cat) = file_categorizer::default_registry().categorize(&pf.path, &data) {
+        return process_whole_file_drop(pf, &data, cat);
+    }
+
     let chunks = chunker.chunk_slice(&data);
     let mut drops = Vec::with_capacity(chunks.len());
     let mut slices = Vec::with_capacity(chunks.len());
     let mut file_offset: u64 = 0;
 
+    // Per-file dedup map: drop_id → index in `drops`. Cross-file
+    // dedup happens later in `merge_chunked_file`, but compressing
+    // every duplicate chunk within a single file is a real cost on
+    // repetitive inputs (FastCDC produces many identical chunks for
+    // files with repeated content). Skip compression for chunks we
+    // have already seen in this file.
+    let mut seen_in_file: std::collections::HashSet<[u8; 32]> =
+        std::collections::HashSet::with_capacity(chunks.len());
+
     for chunk in chunks {
         let chunk_len = u64::try_from(chunk.len()).expect("chunk len fits u64");
         let drop_id = hash_section(chunk);
 
-        let class = classifier.classify(chunk);
-        let codec_id = match class {
-            classifier::Class::Binary => limnifs_core::codec::best_binary_codec(),
-            classifier::Class::Text | classifier::Class::Code => {
-                limnifs_core::codec::best_compressible_codec()
-            }
-            _ => limnifs_core::codec::CODEC_STORE,
-        };
-        let compressed = if codec_id == limnifs_core::codec::CODEC_STORE {
-            chunk.to_vec()
-        } else {
-            limnifs_core::codec::compress(codec_id, chunk).unwrap_or_else(|_| chunk.to_vec())
-        };
-
-        drops.push((drop_id, chunk.to_vec(), compressed, codec_id));
+        // Always emit a slice (the file's byte range), even when the
+        // chunk is a duplicate — the reader assembles the file from
+        // slices, and a slice can reference a drop defined earlier.
         slices.push(PendingSlice {
             drop_id,
             file_byte_start: file_offset,
             file_byte_end: file_offset + chunk_len,
         });
         file_offset += chunk_len;
+
+        if !seen_in_file.insert(drop_id) {
+            continue;
+        }
+
+        let class = classifier.classify(chunk);
+        // Sparse (zero-dominated) compresses very well with Brotli.
+        // Compressed/Media are already-encoded and don't compress further.
+        let preferred_codec = match class {
+            classifier::Class::Binary => limnifs_core::codec::best_binary_codec(),
+            classifier::Class::Text | classifier::Class::Code | classifier::Class::Sparse => {
+                limnifs_core::codec::best_compressible_codec()
+            }
+            _ => limnifs_core::codec::CODEC_STORE,
+        };
+
+        // Try the preferred codec; if it fails or doesn't beat store,
+        // fall back to STORE. The codec recorded on the drop record
+        // reflects what's actually in the slab window — the reader
+        // must not be told "XZ" if the bytes are raw.
+        let (codec_id, compressed) = if preferred_codec == limnifs_core::codec::CODEC_STORE {
+            (limnifs_core::codec::CODEC_STORE, chunk.to_vec())
+        } else {
+            match limnifs_core::codec::compress(preferred_codec, chunk) {
+                Ok(c) if c.len() < chunk.len() => (preferred_codec, c),
+                _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
+            }
+        };
+
+        drops.push((drop_id, chunk.to_vec(), compressed, codec_id));
     }
     let _ = file_len;
     Ok(ChunkedFileResult { drops, slices })
@@ -184,23 +350,33 @@ fn process_file(
 
 struct PendingDrop {
     id: [u8; 32],
-    plaintext: Vec<u8>,
+    /// Original (decompressed) byte length. Stored as a u32 rather
+    /// than keeping the plaintext Vec around, because the writer only
+    /// needs the length when emitting the slab's drop record. Holding
+    /// the full plaintext until slab assembly wastes memory
+    /// proportional to image size on top of the compressed bytes.
+    plaintext_len: u32,
     compressed: Vec<u8>,
     codec: u8,
-    offset_in_window: u32,
 }
 
 impl PendingDrop {
     /// The byte length stored in the slab's solid window. Equals
-    /// `plaintext.len()` for store codec, or the compressed size for
-    /// LZ4.
+    /// `plaintext_len` for store codec, or the compressed size for
+    /// LZ4 / Brotli / etc.
     fn len_in_window(&self) -> u32 {
         u32::try_from(self.compressed.len()).expect("compressed fits u32")
     }
 
     /// The original (decompressed) byte length.
-    fn plaintext_len(&self) -> u32 {
-        u32::try_from(self.plaintext.len()).expect("plaintext fits u32")
+    fn plaintext_len_value(&self) -> u32 {
+        self.plaintext_len
+    }
+
+    /// Contribution to the slab's total byte length: 48 bytes of drop
+    /// record (per spec §3.3) + the compressed payload.
+    fn slab_footprint(&self) -> usize {
+        48 + self.compressed.len()
     }
 }
 
@@ -250,13 +426,19 @@ struct WriteContext {
     inodes: Vec<PendingInode>,
     dir_nodes: Vec<DirNode>,
     drops: Vec<PendingDrop>,
-    drop_index: HashMap<[u8; 32], (u32, u32)>,
+    drop_index: HashSet<[u8; 32]>,
     pending_files: Vec<PendingFile>,
     file_count: usize,
     dir_count: usize,
     root_inode_number: u64,
     chunker: FastCDC,
     classifier: classifier::Classifier,
+    /// Maps BLAKE3 hash of inline data → index into shared_inline_table.
+    /// Populated by `build_shared_inline_table` in `assemble`.
+    shared_inline_map: HashMap<[u8; 32], usize>,
+    /// Unique inline data entries that appear more than once.
+    /// Stored at the end of the metadata blob for dedup.
+    shared_inline_table: Vec<Vec<u8>>,
 }
 
 impl WriteContext {
@@ -266,13 +448,15 @@ impl WriteContext {
             inodes: Vec::new(),
             dir_nodes: Vec::new(),
             drops: Vec::new(),
-            drop_index: HashMap::new(),
+            drop_index: HashSet::new(),
             pending_files: Vec::new(),
             file_count: 0,
             dir_count: 0,
             root_inode_number: 0,
             chunker: FastCDC::default(),
             classifier: classifier::Classifier,
+            shared_inline_map: HashMap::new(),
+            shared_inline_table: Vec::new(),
         }
     }
 
@@ -282,25 +466,43 @@ impl WriteContext {
         n
     }
 
+    /// Scan all inline-data inodes and build a dedup table. Only
+    /// content appearing in > 1 inode is deduplicated; unique inline
+    /// data stays inline (no overhead change).
+    fn build_shared_inline_table(&mut self) {
+        let mut counts: HashMap<[u8; 32], usize> = HashMap::new();
+        for inode in &self.inodes {
+            if let PendingContent::Inline(data) = &inode.content {
+                let h = hash_section(data);
+                *counts.entry(h).or_default() += 1;
+            }
+        }
+        // Only dedup content that appears more than once.
+        for inode in &self.inodes {
+            if let PendingContent::Inline(data) = &inode.content {
+                let h = hash_section(data);
+                if counts.get(&h).copied().unwrap_or(0) > 1
+                    && !self.shared_inline_map.contains_key(&h)
+                {
+                    let idx = self.shared_inline_table.len();
+                    self.shared_inline_table.push(data.clone());
+                    self.shared_inline_map.insert(h, idx);
+                }
+            }
+        }
+    }
+
     /// Merge a parallel-processed chunked file's results into the
     /// context. Dedup: only new `DropId`s get added to the drops list.
     fn merge_chunked_file(&mut self, pf: &PendingFile, result: ChunkedFileResult) {
         for (drop_id, plaintext, compressed, codec) in result.drops {
-            if !self.drop_index.contains_key(&drop_id) {
-                let offset = self
-                    .drops
-                    .iter()
-                    .map(PendingDrop::len_in_window)
-                    .sum::<u32>();
-                let len = u32::try_from(compressed.len()).unwrap_or(0);
+            if self.drop_index.insert(drop_id) {
                 self.drops.push(PendingDrop {
                     id: drop_id,
-                    plaintext,
+                    plaintext_len: u32::try_from(plaintext.len()).unwrap_or(u32::MAX),
                     compressed,
                     codec,
-                    offset_in_window: offset,
                 });
-                self.drop_index.insert(drop_id, (offset, len));
             }
         }
         self.inodes.push(PendingInode {
@@ -336,10 +538,9 @@ impl WriteContext {
         };
         PendingDrop {
             id: drop_id,
-            plaintext: plaintext.to_vec(),
+            plaintext_len: u32::try_from(plaintext.len()).unwrap_or(u32::MAX),
             compressed,
             codec,
-            offset_in_window: 0,
         }
     }
 
@@ -409,18 +610,22 @@ impl WriteContext {
         }
     }
 
-    fn assemble(self) -> WriteArtifact {
+    fn assemble(mut self) -> WriteArtifact {
         let inode_count = self.inodes.len();
         let dir_count = self.dir_count;
         let drop_count = self.drops.len();
 
-        let (slab_bytes, slab_id, slab_locator) = if self.drops.is_empty() {
-            (None, None, None)
-        } else {
-            let (bytes, id) = encode_slab(&self.drops);
-            let locator = "file:slab-0.bin".to_owned();
-            (Some(bytes), Some(id), Some(locator))
-        };
+        // Partition drops into slabs. Each slab's total byte length
+        // (header + drop records + solid window) must stay under
+        // MAX_SLAB_TOTAL_BYTES so the reader's 64 MiB ceiling is never
+        // exceeded. A single drop larger than the budget gets its own
+        // slab (we cannot split a drop).
+        let slabs = pack_slabs(&self.drops);
+
+        // Build the shared inline table: deduplicate inline data that
+        // appears in more than one inode. For N files with identical
+        // small content, store once and reference by index.
+        self.build_shared_inline_table();
 
         let mut metadata_blob = Vec::new();
         metadata_blob.extend_from_slice(&u32::try_from(self.inodes.len()).unwrap().to_le_bytes());
@@ -432,6 +637,60 @@ impl WriteContext {
         for node in &self.dir_nodes {
             metadata_blob.extend_from_slice(&node.bytes);
         }
+        // Shared inline table (only present if any dedup occurred).
+        // Reader checks for remaining bytes after dir_nodes.
+        if !self.shared_inline_table.is_empty() {
+            metadata_blob
+                .extend_from_slice(&u32::try_from(self.shared_inline_table.len()).unwrap().to_le_bytes());
+            for entry in &self.shared_inline_table {
+                let len = u32::try_from(entry.len()).expect("shared entry fits u32");
+                metadata_blob.extend_from_slice(&len.to_le_bytes());
+                metadata_blob.extend_from_slice(entry);
+            }
+        }
+
+        // Compress the metadata blob. Metadata is highly compressible
+        // (sequential inode numbers, repeated modes, natural-language
+        // file names) — even low Brotli quality yields 4–8× on source
+        // trees. Pick quality by size: small blobs cost nothing to
+        // compress at q5; large blobs (e.g. 50 K-inode trees) would
+        // dominate create time at q5, so step down to q2.
+        let uncompressed_len = u32::try_from(metadata_blob.len())
+            .expect("metadata blob length fits u32");
+        let metadata_hash = hash_section(&metadata_blob);
+        let metadata_codec = limnifs_core::codec::best_compressible_codec();
+        let metadata_quality = if metadata_blob.len() > METADATA_LARGE_BLOB_THRESHOLD {
+            METADATA_LARGE_BLOB_QUALITY
+        } else {
+            METADATA_SMALL_BLOB_QUALITY
+        };
+        let compressed_blob = if metadata_codec == limnifs_core::codec::CODEC_BROTLI {
+            limnifs_core::codec::compress_brotli_with_quality(&metadata_blob, metadata_quality)
+                .unwrap_or_else(|_| metadata_blob.clone())
+        } else {
+            limnifs_core::codec::compress(metadata_codec, &metadata_blob)
+                .unwrap_or_else(|_| metadata_blob.clone())
+        };
+        let (on_wire_codec, on_wire_blob) = if compressed_blob.len() < metadata_blob.len() {
+            (metadata_codec, compressed_blob)
+        } else {
+            (limnifs_core::codec::CODEC_STORE, metadata_blob.clone())
+        };
+
+        // Decide inline vs sidecar based on the COMPRESSED length. The
+        // reader's inline ceiling is 1 MiB; we externalise when the
+        // compressed form would exceed 768 KiB.
+        let (metadata_sidecar, inline_data, metadata_locator_count) =
+            if on_wire_blob.len() > METADATA_EXTERNALIZE_THRESHOLD {
+                let locator = "file:metadata.bin".to_owned();
+                let sidecar = MetadataSidecar {
+                    bytes: on_wire_blob.clone(),
+                    locator,
+                };
+                (Some(sidecar), None, 1u32)
+            } else {
+                (None, Some(on_wire_blob.clone()), 0u32)
+            };
 
         let mut manifest = Vec::new();
 
@@ -444,28 +703,42 @@ impl WriteContext {
         manifest.extend_from_slice(&0u32.to_le_bytes());
         let flags_end = manifest.len();
 
+        // metadata_reference v2: hash + uncompressed_len + codec +
+        // locator_count + locators + inline_data_len + inline_data.
         let meta_ref_start = manifest.len();
-        manifest.push(METADATA_REFERENCE_SECTION_VERSION);
-        let metadata_hash = hash_section(&metadata_blob);
+        manifest.push(METADATA_REFERENCE_SECTION_VERSION_2);
         manifest.extend_from_slice(&metadata_hash);
-        manifest.extend_from_slice(&0u32.to_le_bytes());
-        let inline_len = u32::try_from(metadata_blob.len()).expect("metadata fits u32");
-        manifest.extend_from_slice(&inline_len.to_le_bytes());
-        manifest.extend_from_slice(&metadata_blob);
+        manifest.extend_from_slice(&uncompressed_len.to_le_bytes());
+        manifest.push(on_wire_codec);
+        manifest.extend_from_slice(&metadata_locator_count.to_le_bytes());
+        if let Some(sidecar) = &metadata_sidecar {
+            let loc_bytes = sidecar.locator.as_bytes();
+            let loc_len = u32::try_from(loc_bytes.len()).expect("locator fits u32");
+            manifest.extend_from_slice(&loc_len.to_le_bytes());
+            manifest.extend_from_slice(loc_bytes);
+        }
+        match &inline_data {
+            Some(blob) => {
+                let inline_len = u32::try_from(blob.len()).expect("metadata fits u32");
+                manifest.extend_from_slice(&inline_len.to_le_bytes());
+                manifest.extend_from_slice(blob);
+            }
+            None => {
+                manifest.extend_from_slice(&0u32.to_le_bytes());
+            }
+        }
         let meta_ref_end = manifest.len();
 
         let slab_index_start = manifest.len();
         manifest.push(SLAB_INDEX_SECTION_VERSION);
-        if let (Some(id), Some(loc)) = (&slab_id, &slab_locator) {
+        manifest.extend_from_slice(&u32::try_from(slabs.len()).unwrap().to_le_bytes());
+        for slab in &slabs {
+            manifest.extend_from_slice(&slab.id.to_bytes());
             manifest.extend_from_slice(&1u32.to_le_bytes());
-            manifest.extend_from_slice(&id.to_bytes());
-            manifest.extend_from_slice(&1u32.to_le_bytes());
-            let loc_bytes = loc.as_bytes();
+            let loc_bytes = slab.locator.as_bytes();
             let loc_len = u32::try_from(loc_bytes.len()).expect("locator fits u32");
             manifest.extend_from_slice(&loc_len.to_le_bytes());
             manifest.extend_from_slice(loc_bytes);
-        } else {
-            manifest.extend_from_slice(&0u32.to_le_bytes());
         }
         let slab_index_end = manifest.len();
 
@@ -495,8 +768,8 @@ impl WriteContext {
         WriteArtifact {
             bytes: manifest,
             merkle_root,
-            slab_bytes,
-            slab_locator,
+            slabs,
+            metadata_sidecar,
             inode_count,
             file_count: self.file_count,
             dir_count,
@@ -515,10 +788,17 @@ impl WriteContext {
         out.extend_from_slice(&1u32.to_le_bytes());
         match &inode.content {
             PendingContent::Inline(data) => {
-                out.push(0x04);
-                let len = u32::try_from(data.len()).expect("data fits u32");
-                out.extend_from_slice(&len.to_le_bytes());
-                out.extend_from_slice(data);
+                let h = hash_section(data);
+                if let Some(&idx) = self.shared_inline_map.get(&h) {
+                    // Deduplicated: emit shared-inline flag + index.
+                    out.push(INODE_FLAG_INLINE_DATA | INODE_FLAG_SHARED_INLINE);
+                    out.extend_from_slice(&(idx as u32).to_le_bytes());
+                } else {
+                    out.push(INODE_FLAG_INLINE_DATA);
+                    let len = u32::try_from(data.len()).expect("data fits u32");
+                    out.extend_from_slice(&len.to_le_bytes());
+                    out.extend_from_slice(data);
+                }
             }
             PendingContent::DropBacked { file_len, slices } => {
                 out.push(0x00);
@@ -573,38 +853,91 @@ fn encode_dir_node(entries: &[(String, u64, u8)]) -> DirNode {
     }
 }
 
-fn encode_slab(drops: &[PendingDrop]) -> (Vec<u8>, SlabId) {
-    let mut drop_records = Vec::new();
-    let mut solid_window = Vec::new();
+/// Partition `drops` into one or more slabs, each fitting under
+/// [`MAX_SLAB_TOTAL_BYTES`]. Slab ordinal starts at 0 and increments.
+/// Each slab's `SlabId` hash is `BLAKE3(slab_content)` so identical
+/// content yields identical slab IDs (deterministic).
+///
+/// A single drop larger than `MAX_SLAB_TOTAL_BYTES - SLAB_HEADER_LEN`
+/// still produces one slab — we cannot split a drop, and the spec
+/// permits the reader to raise its ceiling for that case.
+fn pack_slabs(drops: &[PendingDrop]) -> Vec<SlabArtifact> {
+    if drops.is_empty() {
+        return Vec::new();
+    }
+
+    let max_content = MAX_SLAB_TOTAL_BYTES.saturating_sub(SLAB_HEADER_LEN);
+    let mut slabs: Vec<SlabArtifact> = Vec::new();
+    let mut current: Vec<&PendingDrop> = Vec::new();
+    let mut current_size: usize = 0;
 
     for drop in drops {
-        let plaintext_len = drop.plaintext_len();
+        let footprint = drop.slab_footprint();
+        if !current.is_empty() && current_size + footprint > max_content {
+            let ordinal = u64::try_from(slabs.len()).expect("slab count fits u64");
+            slabs.push(encode_slab(ordinal, &current));
+            current.clear();
+            current_size = 0;
+        }
+        current.push(drop);
+        current_size += footprint;
+    }
+    if !current.is_empty() {
+        let ordinal = u64::try_from(slabs.len()).expect("slab count fits u64");
+        slabs.push(encode_slab(ordinal, &current));
+    }
+    slabs
+}
+
+/// Encode a single slab from a non-empty slice of drops. Per-slab
+/// `offset_in_window` is computed fresh; there is no global offset
+/// state on `PendingDrop`.
+fn encode_slab(ordinal: u64, drops: &[&PendingDrop]) -> SlabArtifact {
+    let mut drop_records = Vec::new();
+    let mut solid_window = Vec::new();
+    let mut drop_ids = Vec::with_capacity(drops.len());
+    let mut offset_in_window: u32 = 0;
+
+    for drop in drops {
+        let plaintext_len = drop.plaintext_len_value();
         let window_len = drop.len_in_window();
         drop_records.extend_from_slice(&drop.id);
         drop_records.extend_from_slice(&plaintext_len.to_le_bytes());
         // representation: (codec, aead=0, ec=0)
         drop_records.extend_from_slice(&[drop.codec, 0x00, 0x00]);
         drop_records.push(0x00); // solid_window_index
-        drop_records.extend_from_slice(&drop.offset_in_window.to_le_bytes());
+        drop_records.extend_from_slice(&offset_in_window.to_le_bytes());
         drop_records.extend_from_slice(&window_len.to_le_bytes());
+        drop_records.push(limnifs_core::drop_record::NO_DICT); // dict_id: no dictionary
         solid_window.extend_from_slice(&drop.compressed);
+        drop_ids.push(drop.id);
+        offset_in_window = offset_in_window
+            .checked_add(window_len)
+            .expect("slab window size fits u32");
     }
 
     let slab_content = [&drop_records[..], &solid_window[..]].concat();
     let slab_hash = hash_section(&slab_content);
-    let slab_id = SlabId::new(0, slab_hash);
+    let slab_id = SlabId::new(ordinal, slab_hash);
 
-    let total_length = 56 + slab_content.len();
+    let total_length = SLAB_HEADER_LEN + slab_content.len();
     let mut slab_bytes = Vec::with_capacity(total_length);
     slab_bytes.extend_from_slice(b"LIM1");
     slab_bytes.extend_from_slice(&1u16.to_le_bytes());
     slab_bytes.extend_from_slice(&slab_id.to_bytes());
-    slab_bytes.extend_from_slice(&(total_length as u64).to_le_bytes());
+    slab_bytes.extend_from_slice(&u64::try_from(total_length).unwrap_or(u64::MAX).to_le_bytes());
     slab_bytes.push(0x00);
     slab_bytes.push(0x00);
     slab_bytes.extend_from_slice(&slab_content);
 
-    (slab_bytes, slab_id)
+    let locator = format!("file:slab-{ordinal}.bin");
+
+    SlabArtifact {
+        id: slab_id,
+        bytes: slab_bytes,
+        locator,
+        drop_ids,
+    }
 }
 
 #[cfg(test)]
@@ -635,7 +968,7 @@ mod tests {
         assert!(artifact.inode_count >= 1);
         assert_eq!(artifact.file_count, 0);
         assert_eq!(artifact.dir_count, 1);
-        assert!(artifact.slab_bytes.is_none());
+        assert!(artifact.slabs.is_empty());
     }
 
     #[test]
@@ -647,7 +980,7 @@ mod tests {
         let artifact = write_directory(&temp).expect("write succeeds");
         std::fs::remove_dir_all(&temp).ok();
         assert_eq!(artifact.file_count, 1);
-        assert!(artifact.slab_bytes.is_none());
+        assert!(artifact.slabs.is_empty());
         assert_eq!(artifact.drop_count, 0);
     }
 
@@ -661,8 +994,7 @@ mod tests {
         let artifact = write_directory(&temp).expect("write succeeds");
         std::fs::remove_dir_all(&temp).ok();
         assert_eq!(artifact.drop_count, 1);
-        assert!(artifact.slab_bytes.is_some());
-        assert!(artifact.slab_locator.is_some());
+        assert_eq!(artifact.slabs.len(), 1);
     }
 
     #[test]
@@ -677,7 +1009,7 @@ mod tests {
         std::fs::remove_dir_all(&temp).ok();
         assert_eq!(artifact.file_count, 2);
         assert_eq!(artifact.drop_count, 1);
-        assert!(artifact.slab_bytes.is_some());
+        assert_eq!(artifact.slabs.len(), 1);
     }
 
     #[test]
@@ -744,7 +1076,7 @@ mod tests {
         let artifact = write_directory(&temp).expect("write succeeds");
         std::fs::remove_dir_all(&temp).ok();
 
-        let slab_bytes = artifact.slab_bytes.as_ref().expect("slab exists");
+        let slab_bytes = &artifact.slabs[0].bytes;
         let mut cursor = ManifestCursor::new(slab_bytes);
         let slab_header = limnifs_core::parse_slab_header(&mut cursor).expect("slab header parses");
         assert_eq!(slab_header.format_version, 1);
@@ -824,6 +1156,49 @@ mod tests {
             "expected dedup win: both together = {} drops, sum alone = {} drops",
             artifact_both.drop_count,
             sum_alone
+        );
+    }
+
+    #[test]
+    fn slab_splits_when_content_exceeds_ceiling() {
+        // Synthesise enough incompressible drops to force at least two
+        // slabs. Each drop is 10 MiB of pseudo-random data; three drops
+        // = 30 MiB compressed (random data doesn't compress), which
+        // fits in one slab. We bump to seven drops (70 MiB) to force a
+        // split.
+        let temp = std::env::temp_dir().join(format!(
+            "limnifs-write-test-{}-split",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&temp).expect("create temp dir");
+        for i in 0..7u32 {
+            // 10 MiB of pseudo-random bytes — incompressible.
+            let data = pseudo_random_bytes(u64::from(i), 10 * 1024 * 1024);
+            std::fs::write(temp.join(format!("big-{i}.bin")), &data).expect("write big");
+        }
+        let artifact = write_directory(&temp).expect("write succeeds");
+        std::fs::remove_dir_all(&temp).ok();
+
+        // Each slab's total length must respect MAX_SLAB_TOTAL_BYTES.
+        assert!(
+            artifact.slabs.len() >= 2,
+            "expected at least 2 slabs for 70 MiB of incompressible data, got {}",
+            artifact.slabs.len()
+        );
+        for slab in &artifact.slabs {
+            assert!(
+                slab.bytes.len() <= MAX_SLAB_TOTAL_BYTES,
+                "slab {} is {} bytes (> {} ceiling)",
+                slab.id.ordinal,
+                slab.bytes.len(),
+                MAX_SLAB_TOTAL_BYTES,
+            );
+        }
+        // All seven drops must be accounted for across slabs.
+        let total_drop_ids: usize = artifact.slabs.iter().map(|s| s.drop_ids.len()).sum();
+        assert_eq!(
+            total_drop_ids, artifact.drop_count,
+            "drop_ids count across slabs must match WriteArtifact.drop_count",
         );
     }
 }

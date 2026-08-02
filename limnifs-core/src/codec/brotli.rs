@@ -1,11 +1,13 @@
 //! Brotli codec (0x04): frame format via the `brotli` crate (pure Rust,
 //! by Daniel Reiter Horn — the format's original author).
 //!
-//! The codec uses a fixed quality of **11** (Brotli's maximum), making
-//! this the highest-ratio pure-Rust codec in the registry. Encode time
-//! at quality 11 is seconds-per-MB; users who want speed should select
-//! ZSTD (0x02) or LZ4 (0x01). The future `--codec-map` flag (roadmap
-//! item 06) will allow per-class routing to different Brotli qualities.
+//! The codec defaults to **quality 5**, Brotli's standard fast mode.
+//! This is the right tradeoff for LimniFS's per-chunk pipeline: fast
+//! enough to keep create throughput competitive with SquashFS's zstd
+//! L1, while beating ZSTD L1 (ruzstd-bounded) on text/source ratio.
+//! The future `--codec-map` flag (roadmap item 06) will allow callers
+//! to opt into q11 for archival workloads where create speed doesn't
+//! matter.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -15,9 +17,11 @@ use std::io::Cursor;
 use crate::codec::Codec;
 use crate::error::CoreError;
 
-/// Brotli quality 11 (the reference encoder's maximum). Produces the
-/// smallest output at the cost of slow encoding.
-pub(crate) const DEFAULT_QUALITY: i32 = 11;
+/// Brotli quality 5 — fast mode, the right default for the per-chunk
+/// writer pipeline. Quality 11 is available via [`compress`] for
+/// archival use; the codec registry's default encoder uses this
+/// constant.
+pub(crate) const DEFAULT_QUALITY: i32 = 5;
 
 /// Brotli codec. Encode at quality 11; decode at any quality.
 pub struct BrotliCodec;
@@ -73,5 +77,39 @@ pub(crate) fn compress(plaintext: &[u8], quality: i32) -> Result<Vec<u8>, CoreEr
             reason: format!("brotli compress (quality {quality}) failed: {e}"),
         }
     })?;
+    Ok(result)
+}
+
+/// Decompress a Brotli stream. If `expected_len` is `u32::MAX`, skip
+/// the length check (used by composite codecs that don't know the
+/// intermediate length ahead of time).
+///
+/// # Errors
+///
+/// Returns [`CoreError::Corrupt`] if decompression fails or the
+/// result length does not match `expected_len` (when checked).
+pub(crate) fn decompress_at_quality(
+    compressed: &[u8],
+    expected_len: u32,
+) -> Result<Vec<u8>, CoreError> {
+    let mut result = Vec::new();
+    brotli::BrotliDecompress(&mut Cursor::new(compressed), &mut result).map_err(|e| {
+        CoreError::Corrupt {
+            reason: format!("brotli decompress failed: {e}"),
+        }
+    })?;
+    if expected_len != u32::MAX {
+        let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
+            reason: format!("brotli: expected_len {expected_len} exceeds usize"),
+        })?;
+        if result.len() != expected_us {
+            return Err(CoreError::Corrupt {
+                reason: format!(
+                    "brotli decompress: result length {} does not match plaintext_len {expected_us}",
+                    result.len()
+                ),
+            });
+        }
+    }
     Ok(result)
 }

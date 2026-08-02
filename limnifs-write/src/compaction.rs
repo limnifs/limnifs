@@ -190,6 +190,7 @@ fn encode_compacted_slab(drops: &[ExtractedDrop]) -> (Vec<u8>, SlabId) {
         drop_records.push(0x00); // solid_window_index
         drop_records.extend_from_slice(&offset.to_le_bytes());
         drop_records.extend_from_slice(&win_len.to_le_bytes());
+        drop_records.push(limnifs_core::drop_record::NO_DICT); // dict_id: no dictionary
         solid_window.extend_from_slice(&drop.compressed);
     }
 
@@ -303,7 +304,7 @@ mod tests {
         let artifact = crate::write_directory(&temp).expect("write");
         std::fs::remove_dir_all(&temp).ok();
 
-        let slab_bytes = artifact.slab_bytes.clone().unwrap_or_default();
+        let slab_bytes = artifact.slab_bytes().map(Vec::from).unwrap_or_default();
         if slab_bytes.is_empty() {
             return;
         }
@@ -329,7 +330,7 @@ mod tests {
         let artifact = crate::write_directory(&temp).expect("write");
         std::fs::remove_dir_all(&temp).ok();
 
-        let slab_bytes = artifact.slab_bytes.clone().unwrap_or_default();
+        let slab_bytes = artifact.slab_bytes().map(Vec::from).unwrap_or_default();
         if slab_bytes.is_empty() {
             return;
         }
@@ -365,7 +366,7 @@ mod tests {
         let artifact = crate::write_directory(&temp).expect("write");
         std::fs::remove_dir_all(&temp).ok();
 
-        let slab_bytes = artifact.slab_bytes.clone().unwrap_or_default();
+        let slab_bytes = artifact.slab_bytes().map(Vec::from).unwrap_or_default();
         if slab_bytes.is_empty() {
             return;
         }
