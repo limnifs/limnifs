@@ -22,6 +22,10 @@
 pub const AEAD_PLAINTEXT: u8 = 0x00;
 /// AEAD id 0x01: XChaCha20-Poly1305 (mandatory baseline).
 pub const AEAD_XCHACHA20_POLY1305: u8 = 0x01;
+/// AEAD id 0x02: AES-256-GCM.
+pub const AEAD_AES_256_GCM: u8 = 0x02;
+/// AEAD id 0x03: AES-256-OCB (RFC 7253).
+pub const AEAD_AES_256_OCB: u8 = 0x03;
 /// Sentinel for extended AEAD descriptor (post-v1).
 pub const AEAD_EXTENDED: u8 = 0xFF;
 
@@ -83,16 +87,33 @@ pub const fn lookup(id: u8) -> Option<AeadInfo> {
             nonce_size: 24,
             tag_size: 16,
         }),
+        AEAD_AES_256_GCM => Some(AeadInfo {
+            id: AEAD_AES_256_GCM,
+            name: "AES-256-GCM",
+            key_size: 32,
+            nonce_size: 12,
+            tag_size: 16,
+        }),
+        AEAD_AES_256_OCB => Some(AeadInfo {
+            id: AEAD_AES_256_OCB,
+            name: "AES-256-OCB",
+            key_size: 32,
+            nonce_size: 12,
+            tag_size: 16,
+        }),
         _ => None,
     }
 }
 
-/// Returns `true` iff `id` is a valid v0.1 AEAD id (0x00 or 0x01).
-/// Extended (0xFF) and reserved (0x02–0xFE) are NOT valid for
-/// registration in v0.1.
+/// Returns `true` iff `id` is a valid v0.2 AEAD id (0x00–0x03).
+/// Extended (0xFF) and reserved (0x04–0xFE) are NOT valid for
+/// registration in v0.2.
 #[must_use]
 pub const fn is_registered(id: u8) -> bool {
-    matches!(id, AEAD_PLAINTEXT | AEAD_XCHACHA20_POLY1305)
+    matches!(
+        id,
+        AEAD_PLAINTEXT | AEAD_XCHACHA20_POLY1305 | AEAD_AES_256_GCM | AEAD_AES_256_OCB
+    )
 }
 
 /// All registered AEADs in id order. Useful for listing available
@@ -131,8 +152,28 @@ mod tests {
     }
 
     #[test]
+    fn aes_256_gcm_metadata() {
+        let info = lookup(AEAD_AES_256_GCM).expect("AES-256-GCM registered");
+        assert_eq!(info.key_size, 32);
+        assert_eq!(info.nonce_size, 12);
+        assert_eq!(info.tag_size, 16);
+        assert_eq!(info.overhead(), 28);
+        assert!(info.is_encrypted());
+    }
+
+    #[test]
+    fn aes_256_ocb_metadata() {
+        let info = lookup(AEAD_AES_256_OCB).expect("AES-256-OCB registered");
+        assert_eq!(info.key_size, 32);
+        assert_eq!(info.nonce_size, 12);
+        assert_eq!(info.tag_size, 16);
+        assert_eq!(info.overhead(), 28);
+        assert!(info.is_encrypted());
+    }
+
+    #[test]
     fn reserved_ids_return_none() {
-        assert!(lookup(0x02).is_none());
+        assert!(lookup(0x04).is_none());
         assert!(lookup(0x7F).is_none());
         assert!(lookup(0xFE).is_none());
     }
@@ -146,15 +187,19 @@ mod tests {
     fn is_registered_for_known_ids() {
         assert!(is_registered(AEAD_PLAINTEXT));
         assert!(is_registered(AEAD_XCHACHA20_POLY1305));
-        assert!(!is_registered(0x02));
+        assert!(is_registered(AEAD_AES_256_GCM));
+        assert!(is_registered(AEAD_AES_256_OCB));
+        assert!(!is_registered(0x04));
         assert!(!is_registered(AEAD_EXTENDED));
     }
 
     #[test]
-    fn registered_lists_all_v0_1_aeads() {
+    fn registered_lists_all_v0_2_aeads() {
         let all = registered();
-        assert_eq!(all.len(), 2);
+        assert_eq!(all.len(), 4);
         assert_eq!(all[0].id, AEAD_PLAINTEXT);
         assert_eq!(all[1].id, AEAD_XCHACHA20_POLY1305);
+        assert_eq!(all[2].id, AEAD_AES_256_GCM);
+        assert_eq!(all[3].id, AEAD_AES_256_OCB);
     }
 }

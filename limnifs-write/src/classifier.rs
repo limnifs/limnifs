@@ -12,6 +12,7 @@
 //! - `Media` — image / audio / video container (JPEG, PNG, GIF, MP3, MP4)
 //! - `Sparse` — dominated by zero bytes
 //! - `Binary` — fallback when no other class fits
+//! - `Incompressible` — high entropy, no magic: random/encrypted; skip codec
 //!
 //! ## Algorithm
 //!
@@ -19,10 +20,16 @@
 //!    immediately. Magic detection is the highest-confidence signal.
 //! 2. Otherwise, compute Shannon entropy over a sample (first 4 KiB):
 //!    - < 0.5 → `Sparse` if zero-byte ratio is also high, else `Text`
-//!    - 0.5–7.5 → `Text` if mostly printable, else `Binary`
-//!    - ≥ 7.5 → `Compressed` (high entropy is the signature of
-//!      already-compressed or encrypted data)
+//!    - 0.5–6.5 → `Text` if mostly printable, else `Binary`
+//!    - 6.5–7.5 → `Incompressible` (likely random/encrypted; skip codec)
+//!    - ≥ 7.5 → `Incompressible` (very high entropy, no magic: same)
 //! 3. Fall back to `Binary`.
+//!
+//! Note: `Compressed` is only ever returned by the magic-byte path
+//! (gzip/zstd/xz streams). High-entropy data without a recognised
+//! magic is `Incompressible`, not `Compressed` — the previous label
+//! was a misnomer that caused the writer to attempt (and fail)
+//! compression on random/encrypted input.
 
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -36,12 +43,20 @@ const LOW_ENTROPY_THRESHOLD: f32 = 0.5;
 /// Shannon entropy threshold above which data is "high entropy"
 /// (typical of compressed or encrypted bytes).
 const HIGH_ENTROPY_THRESHOLD: f32 = 7.5;
+/// Shannon entropy above which mid-entropy data with no magic match
+/// is almost certainly random/encrypted and uncompressible. Below
+/// `HIGH_ENTROPY_THRESHOLD` so genuinely-compressed streams (which
+/// have very high entropy AND magic bytes) still get caught by the
+/// magic-byte check first.
+const INCOMPRESSIBLE_THRESHOLD: f32 = 6.5;
 /// Zero-byte ratio above which low-entropy data is labelled `Sparse`.
 const SPARSE_ZERO_RATIO_THRESHOLD: f32 = 0.8;
 /// Printable-ASCII ratio above which mid-entropy data is labelled `Text`.
 const TEXT_PRINTABLE_RATIO_THRESHOLD: f32 = 0.85;
 
-/// One of the six content classes the seine classifier emits.
+/// One of the content classes the seine classifier emits. Each chunk
+/// gets exactly one class; the writer's drop-packing layer routes
+/// classes to codecs.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Class {
     Text,
@@ -50,6 +65,11 @@ pub enum Class {
     Compressed,
     Media,
     Sparse,
+    /// High-entropy data with no recognised magic. Almost certainly
+    /// random bytes (CSPRNG output, encrypted payloads, /dev/urandom
+    /// samples) or already-compressed data with no header. Either way
+    /// compression won't help; route to STORE without trying.
+    Incompressible,
 }
 
 impl Class {
@@ -64,6 +84,7 @@ impl Class {
             Self::Compressed => 0x04,
             Self::Media => 0x05,
             Self::Sparse => 0x06,
+            Self::Incompressible => 0x07,
         }
     }
 
@@ -77,6 +98,7 @@ impl Class {
             Self::Compressed => "compressed",
             Self::Media => "media",
             Self::Sparse => "sparse",
+            Self::Incompressible => "incompressible",
         }
     }
 }
@@ -100,6 +122,7 @@ impl Classifier {
         } else {
             &data[..CLASSIFIER_SAMPLE_SIZE]
         };
+        // Magic bytes win first — they're the highest-confidence signal.
         if let Some(class) = detect_magic(sample) {
             return class;
         }
@@ -109,7 +132,16 @@ impl Classifier {
             return Class::Sparse;
         }
         if entropy >= HIGH_ENTROPY_THRESHOLD {
-            return Class::Compressed;
+            // Very high entropy + no magic match: either random/
+            // encrypted, or a compressed stream whose header wasn't
+            // recognised. Either way compression won't help.
+            return Class::Incompressible;
+        }
+        if entropy >= INCOMPRESSIBLE_THRESHOLD {
+            // High-but-not-very-high entropy with no magic: probably
+            // random/encrypted. Compression attempt wastes CPU for
+            // no ratio gain. Route straight to STORE.
+            return Class::Incompressible;
         }
         let printable_ratio = printable_ascii_ratio(sample);
         if printable_ratio > TEXT_PRINTABLE_RATIO_THRESHOLD {
@@ -340,9 +372,15 @@ mod tests {
             data.push(u8::try_from(state >> 56).expect("fits u8"));
         }
         let class = Classifier.classify(&data);
-        assert!(
-            class == Class::Compressed || class == Class::Binary,
-            "expected compressed or binary for high-entropy random, got {class:?}"
+        // High-entropy random with no magic match must route to
+        // Incompressible so the writer skips the (futile) compression
+        // attempt. Previously this returned Compressed/Binary, both of
+        // which caused LZ4/Brotli to be tried on random bytes — wasted
+        // CPU for zero ratio gain.
+        assert_eq!(
+            class,
+            Class::Incompressible,
+            "expected Incompressible for high-entropy random, got {class:?}"
         );
     }
 

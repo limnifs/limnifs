@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Category {
     Source,
@@ -99,6 +99,41 @@ pub const DATASETS: &[Dataset] = &[
         url: None,
         approx_size_mb: 100,
         description: "100 MB of repetitive text (pattern compression stress)",
+    },
+    // --- CSV / structured text (FSST baseline) ---
+    Dataset {
+        name: "taxi-csv",
+        category: Category::Source,
+        url: Some(
+            "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.csv",
+        ),
+        approx_size_mb: 100,
+        description: "NYC Taxi & Limousine Commission trip data (CSV, repetitive column headers \
+                      + structured numeric data — FSST preprocessor baseline)",
+    },
+    Dataset {
+        name: "csv-synthetic",
+        category: Category::Synthetic,
+        url: None,
+        approx_size_mb: 50,
+        description: "50 MB synthetic CSV with repeated column values (FSST target workload)",
+    },
+    // --- FITS / scientific images (Rice++ baseline) ---
+    Dataset {
+        name: "fits-synthetic",
+        category: Category::Synthetic,
+        url: None,
+        approx_size_mb: 50,
+        description: "50 MB synthetic FITS-like 16-bit pixel data with smooth gradients \
+                      (Rice++ target workload)",
+    },
+    // --- PCM audio (FLAC baseline) ---
+    Dataset {
+        name: "wav-synthetic",
+        category: Category::Synthetic,
+        url: None,
+        approx_size_mb: 50,
+        description: "50 MB synthetic 16-bit PCM WAV with sine-wave audio (FLAC target workload)",
     },
 ];
 
@@ -197,10 +232,18 @@ fn generate_synthetic(name: &str, dir: &Path) -> std::io::Result<()> {
         "random" => {
             use std::io::Write;
             let mut f = std::fs::File::create(dir.join("random.bin"))?;
-            let chunk = [0xABu8; 4096];
+            let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+            let mut buf = [0u8; 4096];
             for _ in 0..25_600 {
-                // ~100 MB
-                f.write_all(&chunk)?;
+                // xorshift64* — fast, statistically decent, no std dep
+                for chunk in buf.chunks_mut(8) {
+                    state ^= state >> 12;
+                    state ^= state << 25;
+                    state ^= state >> 27;
+                    let out = state.wrapping_mul(0x2545_F491_4F6C_DD1D);
+                    chunk.copy_from_slice(&out.to_le_bytes()[..chunk.len()]);
+                }
+                f.write_all(&buf)?;
             }
         }
         "tiny-files" => {
@@ -217,6 +260,118 @@ fn generate_synthetic(name: &str, dir: &Path) -> std::io::Result<()> {
                 content.push_str(&text);
             }
             std::fs::write(dir.join("repetitive.txt"), content)?;
+        }
+        "csv-synthetic" => {
+            // Structured CSV with strong column redundancy — the
+            // workload FSST is designed for. Five columns of
+            // repeated category labels + numeric values.
+            use std::io::Write;
+            let mut f = std::fs::File::create(dir.join("data.csv"))?;
+            writeln!(f, "id,region,product,quantity,price")?;
+            let regions = ["north", "south", "east", "west", "central"];
+            let products = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"];
+            // ~50 MB target. Each row is ~70 bytes; need ~750k rows.
+            for i in 0..750_000u64 {
+                let region = regions[(i as usize) % regions.len()];
+                let product = products[(i as usize) % products.len()];
+                let qty = (i % 1000) + 1;
+                let price = ((i as f64) * 0.07).fract() * 100.0;
+                writeln!(f, "{i},{region},{product},{qty},{price:.2}")?;
+            }
+        }
+        "fits-synthetic" => {
+            // Synthetic astronomical-image-like data: 16-bit pixels
+            // with smooth local gradients + sparse high-noise regions.
+            // 50 MB = 25 M pixels × 2 bytes each. Stored as a raw
+            // .bin (the categorizer detects by .fits extension OR by
+            // the file_categorizer when wired with content sniffing).
+            use std::io::Write;
+            let mut f = std::fs::File::create(dir.join("image.fits"))?;
+            // Minimal FITS header (2880 bytes).
+            let mut header = vec![b' '; 2880];
+            let copy = |buf: &mut [u8], off: usize, rec: &str| {
+                let bytes = rec.as_bytes();
+                let n = bytes.len().min(80);
+                buf[off..off + n].copy_from_slice(&bytes[..n]);
+            };
+            copy(&mut header, 0,    "SIMPLE  = T");
+            copy(&mut header, 80,   "BITPIX  = 16");
+            copy(&mut header, 160,  "NAXIS   = 2");
+            copy(&mut header, 240,  "NAXIS1  = 5000");
+            copy(&mut header, 320,  "NAXIS2  = 5000");
+            copy(&mut header, 400,  "END");
+            f.write_all(&header)?;
+            // 25 M pixels of smooth-gradient 16-bit data.
+            let mut state: u64 = 0x1234_5678_9ABC_DEF0;
+            let mut buf = vec![0u8; 1 << 16]; // 64 KiB write buffer
+            let total_pixels = 25_000_000usize;
+            let mut written = 0usize;
+            let mut idx = 0u64;
+            while written < total_pixels * 2 {
+                let chunk_pixels = (buf.len() / 2).min(total_pixels - written / 2);
+                for i in 0..chunk_pixels {
+                    // Smooth gradient: pixel = base + small variation.
+                    let base = ((idx + i as u64) / 8) & 0xFFFF;
+                    let noise = (state >> 56) & 0x0F; // small jitter
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    let pixel = (base ^ noise) & 0xFFFF;
+                    let off = i * 2;
+                    buf[off] = (pixel >> 8) as u8;
+                    buf[off + 1] = pixel as u8;
+                }
+                let n = chunk_pixels * 2;
+                f.write_all(&buf[..n])?;
+                written += n;
+                idx += chunk_pixels as u64;
+            }
+        }
+        "wav-synthetic" => {
+            // Clean PCM audio: 50 MB WAV at 44.1 kHz, 16-bit mono.
+            // Pure 440 Hz sine wave — highly predictable, which is
+            // exactly what FLAC's LPC predictor is designed for.
+            use std::io::Write;
+            let sample_rate = 44_100u32;
+            let channels = 1u8;
+            let bits = 16u8;
+            let total_samples = 25_000_000usize / (channels as usize * bits as usize / 8);
+            let data_size = total_samples * 2;
+            let mut f = std::fs::File::create(dir.join("audio.wav"))?;
+            // RIFF/WAVE header.
+            f.write_all(b"RIFF")?;
+            f.write_all(&(36 + data_size as u32).to_le_bytes())?;
+            f.write_all(b"WAVE")?;
+            f.write_all(b"fmt ")?;
+            f.write_all(&16u32.to_le_bytes())?;
+            f.write_all(&1u16.to_le_bytes())?; // PCM
+            f.write_all(&[channels, 0])?;
+            f.write_all(&sample_rate.to_le_bytes())?;
+            f.write_all(&(sample_rate * channels as u32 * bits as u32 / 8).to_le_bytes())?;
+            f.write_all(&[(channels * bits / 8), 0])?;
+            f.write_all(&[bits, 0])?;
+            f.write_all(b"data")?;
+            f.write_all(&(data_size as u32).to_le_bytes())?;
+            // Clean 440 Hz sine at 0.8 amplitude. LPC predictor should
+            // model this near-perfectly (residuals near zero).
+            let mut buf = vec![0u8; 1 << 16];
+            let mut written = 0usize;
+            let mut idx = 0u64;
+            while written < data_size {
+                let chunk_samples = (buf.len() / 2).min(total_samples - written / 2);
+                for i in 0..chunk_samples {
+                    let t = (idx + i as u64) as f64 / sample_rate as f64;
+                    let val = (t * 2.0 * std::f64::consts::PI * 440.0).sin() * 0.8 * 26000.0;
+                    let sample = val as i16;
+                    let off = i * 2;
+                    buf[off] = (sample & 0xFF) as u8;
+                    buf[off + 1] = ((sample >> 8) & 0xFF) as u8;
+                }
+                let n = chunk_samples * 2;
+                f.write_all(&buf[..n])?;
+                written += n;
+                idx += chunk_samples as u64;
+            }
         }
         _ => {}
     }

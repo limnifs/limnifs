@@ -7,3 +7,7 @@
 .idea/
 .vscode/
 *.swp
+
+# Local scratch directory (test data, temp files)
+.scratch/
+*.bak

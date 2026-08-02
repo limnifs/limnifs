@@ -15,8 +15,12 @@ path = "src/main.rs"
 limnifs-core = { path = "../limnifs-core" }
 limnifs-write = { path = "../limnifs-write" }
 clap.workspace = true
+libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+pedantic = "warn"

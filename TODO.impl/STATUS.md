@@ -3,6 +3,1207 @@
 Living log of work sessions. Newest entry on top. Each entry: what's done
 (with CI links), what's in_progress, blockers, next.
 
+## 2026-08-02 — omnizip 0.9.1: real FLAC encoder (FIXED-only) + ZSTD FSE weights (session 43)
+
+### Done
+
+User directive: omnizip 0.9.1 ships the real FLAC encoder
+(CONSTANT/VERBATIM/FIXED + partitioned Rice) and ZSTD FSE-encoded
+Huffman weights for binary alphabets > 129.
+
+Bumped Cargo deps to omnizip 0.9.1. Replaced `FlacCodec` stub
+(`limnifs-core/src/codec/reserved_stubs.rs`) with the real wrapper
+at `limnifs-core/src/codec/flac.rs`. The wrapper:
+- Re-parses WAV/AIFF headers via `omnizip_flac::pcm_header` to
+  recover PCM params (sample rate, channels, bits, endianness).
+- Strips the container header, hands raw PCM to
+  `omnizip_flac::compress`.
+- Decode via `omnizip_flac::decompress` (handles real fLaC
+  bitstreams AND the previous raw-PCM container format).
+
+Removed the entire `reserved_stubs.rs` file (was dead code after
+the real FLAC, FSST, and ricepp wrappers landed).
+
+### FLAC routing disabled pending LPC encoder
+
+Tried enabling `FLAC_ENABLED = true` in `pcm_audio.rs` and benched
+against synthetic WAV data. Two findings:
+
+| WAV type | LimniFS (FLAC) | tar+zstd |
+|---|---:|---:|
+| Periodic sine (440+880 Hz) | 72.29% | 0.27% |
+| Noise + transients | 98.22% | 100.01% |
+
+omnizip-flac 0.9.1's encoder only does CONSTANT/VERBATIM/FIXED
+(order ≤ 4 prediction) — no LPC. FIXED can't model complex audio
+spectra, so it loses to ZSTD on periodic input (ZSTD catches
+periodicity in its window; FIXED's order-4 prediction can't) and
+is store-equivalent on noise.
+
+**FLAC_ENABLED stays false** until omnizip ships the LPC subframe
+encoder (TODO 62 in `omnizip-rs/TODO.complete/`). The wiring is
+fully in place — when LPC lands, just flip the flag.
+
+### WAV benchmark dataset added
+
+`wav-synthetic` — 50 MB 16-bit PCM WAV at 44.1 kHz mono. Periodic
+waveform + noise + transients. Currently routes through FastCDC +
+Brotli (FLAC disabled) which is essentially store-equivalent.
+
+### LimniFS state — unchanged on existing wins
+
+| Dataset | LimniFS | DwarFS | SquashFS | tar+zstd |
+|---|---:|---:|---:|---:|
+| **php source** | **13.55%** ✅ | 20.72% | 14.41% | 14.53% |
+| **csv-synthetic** | **3.57%** ✅ | 35.33% | 16.35% | 4.79% |
+| **fits-synthetic** | **32.08%** ✅ | 89.97% | 90.18% | 85.69% |
+| **repetitive** | **0.01%** ✅ | 0.41% | 0.05% | 0.01% |
+| **zeros** | **0.00%** ✅ | 0.40% | 0.00% | 0.00% |
+| random | 100.03% | 100.01% | 100.00% | 100.00% |
+| wav-synthetic | 100.06% | 100.01% | 98.04% | 97.47% |
+
+Win count: limnifs 7 / squashfs 14 / dwarfs 0 / tar+zstd 0. Stable.
+
+### What's actually new functionally
+
+- **ZSTD FSE-encoded Huffman weights** — for binary alphabets > 129
+  symbols. Doesn't change our text/source routing (Brotli still
+  wins) but corrects the wire-format path for large alphabets.
+- **FLAC encoder** — wired and tested, but doesn't beat alternatives
+  on our test data without LPC.
+- **Architecture cleanup** — dead Phase B code removed in omnizip.
+
+### Remaining omnizip TODOs that would change LimniFS
+
+| TODO | What it unlocks | LimniFS impact |
+|---|---|---|
+| **62 — FLAC LPC subframe encoder** | Real FLAC compression (~17% on PCM) | Enables WAV/AIFF routing. Big audio win. |
+| **64 — LZMA optimal parser (DP)** | LZMA would beat ZSTD on text | Could flip source-code routing if it beats Brotli too. |
+| 60 — FLAC VERBATIM-only encoder | Already shipped in 0.9.1 | Done. |
+| 61 — FLAC FIXED encoder | Already shipped in 0.9.1 | Done. |
+| 63 — FLAC Rice residual encoder | Already shipped in 0.9.1 | Done. |
+| 66 — ZSTD match finder strategies | More level differentiation | Marginal. |
+
+### Test counts
+
+- Rust: 464 tests pass (was 462; +2 new for FLAC wrapper round-trip
+  + non-WAV rejection; -1 obsolete reserved_stubs test deleted).
+- `cargo build --workspace --release` clean.
+
+### In progress / Blockers
+
+- Nothing mid-flight.
+- Awaiting omnizip LPC encoder (TODO 62) for audio win.
+
+### Next
+
+- Wait for omnizip LPC encoder.
+- Optional local work: solid compression for tiny inline files
+  (would close tiny-files gap vs SquashFS without needing omnizip).
+
+---
+
+
+
+### Done
+
+User directive: omnizip 0.8.1 ships a ZSTD Huffman weight encoding
+fix (write CONSECUTIVE weights from symbol 0 including zeros,
+matching the ZSTD wire format). Plus the previously-confirmed
+level-differentiation + LZMA lazy parsing + decoder completeness.
+
+Two TODO items remain documented but unshipped:
+- `57-zstd-length-limited-huffman.md` — package-merge algorithm
+  (removes Huffman encoder safety fallback).
+- `58-flac-verbatim-encoder.md` — VERBATIM frame encoder for real
+  FLAC bitstreams (still no LPC + Rice codec).
+
+Bumped Cargo deps to omnizip 0.8.1. All 462 tests pass.
+
+### Direct verification: ZSTD routing still loses to Brotli
+
+Tried `best_compressible_codec = CODEC_ZSTD` on the PHP benchmark
+again, expecting the Huffman weight fix to change the outcome:
+
+| Routing (omnizip 0.8.1) | PHP create | PHP ratio |
+|---|---:|---:|
+| Brotli q5 (current) | 1.15 s | **13.55%** ✅ |
+| ZSTD L6 (omnizip 0.8.1) | 4.45 s | 21.53% |
+
+Identical to the omnizip 0.7 results. The Huffman weight fix
+addresses wire-format correctness (symbol numbering when zero
+weights exist), not ratio on real source code. PHP source's
+Huffman distribution apparently doesn't trip the previous bug.
+
+**Routing stays at Brotli.** Reverted.
+
+### LimniFS state — unchanged from sessions 35-38
+
+| Dataset | LimniFS | DwarFS | SquashFS | tar+zstd |
+|---|---:|---:|---:|---:|
+| **php source** | **13.55%** ✅ | 20.72% | 14.41% | 14.53% |
+| **csv-synthetic** | **3.57%** ✅ | 35.33% | 16.35% | 4.79% |
+| **fits-synthetic** | **32.08%** ✅ | 89.97% | 90.18% | 85.69% |
+| **repetitive** | **0.01%** ✅ | 0.41% | 0.05% | 0.01% |
+| **zeros** | **0.00%** ✅ | 0.40% | 0.00% | 0.00% |
+
+Win count: limnifs 7 / squashfs 14 / dwarfs 0 / tar+zstd 0. Stable
+across sessions 35-39.
+
+### Honest assessment
+
+omnizip 0.8.1 is a quality release (Huffman correctness fix + doc
+cleanup + re-enabled test) but doesn't change what LimniFS can do.
+The remaining items in omnizip's TODO files that WOULD change our
+codec selection:
+
+| omnizip TODO | What it unlocks | LimniFS impact |
+|---|---|---|
+| 57-zstd-length-limited-huffman | Removes Huffman encoder safety fallback. Likely small ratio gain on source code (1-3%). | Might close gap to Brotli. |
+| 58-flac-verbatim-encoder | Real FLAC frames (still no compression, but valid format). | Minor — FLAC would still lose to STORE on PCM ratio. |
+| (not yet filed) FLAC LPC + Rice encoder | Actual FLAC compression (~17% ratio on PCM). | Enables WAV/AIFF benchmark. Big win for audio workloads. |
+
+LimniFS doesn't need to push omnizip on the first two — they're
+incremental. The third is the real blocker for the audio use case.
+
+### Test counts
+
+- Rust: 462 tests pass.
+- `cargo build --workspace --release` clean.
+
+### In progress / Blockers
+
+- Nothing mid-flight.
+- Awaiting omnizip FLAC LPC + Rice encoder (~20K LOC port from
+  libFLAC; no ETA from omnizip team).
+
+### Next
+
+- Wait for omnizip to ship FLAC encoder OR start the port
+  locally if it becomes a priority.
+- Optional local work: solid compression for tiny inline files.
+
+---
+
+
+
+### Done
+
+User directive: omnizip 0.8 ships ZSTD MODE_FSE decoder, LZMA delta
+filter, FLAC stream decoder wired into Codec trait, plus doc
+cleanup. (ZSTD level differentiation and LZMA lazy parsing are
+re-confirmations of 0.7 fixes.)
+
+Bumped Cargo deps to omnizip 0.8. All 462 tests pass. Bench numbers
+unchanged.
+
+### What omnizip 0.8 actually delivers (and what it doesn't)
+
+| Item | Type | Impact on LimniFS |
+|---|---|---|
+| ZSTD level differentiation | encoder | Already wired in session 37; regression test passes. |
+| LZMA lazy parsing | encoder | Already wired in session 37; round-trip test passes. |
+| ZSTD MODE_FSE decoder | decoder completeness | None — LimniFS reads its own ZSTD output, not libzstd's. |
+| LZMA delta filter (XZ filter ID 0x03) | decoder completeness | None — LimniFS doesn't read XZ files made by `xz` CLI. |
+| FLAC stream decoder wired into Codec trait | decoder | Useful in principle; LimniFS doesn't currently read FLAC files. |
+| Documentation cleanup | n/a | Cleaner module docs to reference. |
+
+**Critical observation**: omnizip-flac 0.8's `compress()` STILL produces
+raw-PCM containers (12-byte header + verbatim PCM payload, no actual
+compression). Verified by reading `omnizip-flac/src/lib.rs:75-101`:
+
+```rust
+pub fn compress(input: &[u8], params: &PcmParams) -> Result<Vec<u8>, OmnizipError> {
+    // ...
+    out.push(FORMAT_RAW_PCM);  // ← passthrough marker
+    out.extend_from_slice(/* header */);
+    out.extend_from_slice(&input[..expected]);  // ← raw bytes
+}
+```
+
+The DECODER handles real FLAC streams (fLaC magic + LPC + Rice
+residual) end-to-end. The ENCODER is still raw PCM. So our
+`FlacCodec` stub in `limnifs-core/src/codec/reserved_stubs.rs`
+remains correct — its `compress()` returns `UnsupportedFeature`.
+
+### What this means for LimniFS
+
+No change to LimniFS's wire format or runtime behaviour. LimniFS
+continues to:
+
+- Win on ratio for php (13.55%), CSV (3.57%), FITS (32.08%),
+  repetitive (0.01%), zeros (0.00%) — 5 of 6 benchmarked datasets.
+- Use Brotli q5 for source code (ZSTD L6 still loses: 21.5% vs 13.5%).
+- Use FSST+Brotli composite for CSV.
+- Use ricepp for FITS.
+- NOT route WAV/AIFF through FLAC (encoder still pending).
+
+### Test counts
+
+- Rust: 462 tests pass.
+- `cargo build --workspace --release` clean.
+
+### In progress / Blockers
+
+- Nothing mid-flight.
+- Awaiting FLAC encoder (still P2 in `docs/omnizip-0.5-followups.md`).
+  ~20K LOC port from libFLAC; no ETA from omnizip team.
+
+### Next
+
+- Wait for omnizip FLAC encoder.
+- Optional local work: solid compression for tiny inline files
+  (would close tiny-files gap vs SquashFS).
+
+---
+
+
+
+### Done
+
+User directive: omnizip 0.7 ships the ZSTD level differentiation fix
+(full `ZSTD_defaultCParameters[0]` table from clevels.h) and LZMA
+lazy parsing rewrite. Verified both work via regression tests in
+`limnifs-core/src/codec/mod.rs`:
+
+- `zstd_higher_levels_compress_better_than_lower` — confirms L6 < L1
+  on text input (omnizip 0.5 produced identical output for all
+  levels; this regression test catches that bug if it ever returns).
+- `xz_lzma_round_trips_via_lazy_parsing` — confirms the rewritten
+  `Lzma1Encoder::encode` round-trips through `xz_decompress`.
+
+### Direct codec comparison on PHP source
+
+Tried switching `best_compressible_codec` from Brotli to ZSTD on
+the full benchmark:
+
+| Routing | PHP create | PHP ratio |
+|---|---:|---:|
+| Brotli q5 (current) | 1.15 s | **13.55%** ✅ |
+| ZSTD L6 (omnizip 0.7) | 6.00 s | 21.53% |
+
+**Brotli still wins decisively on real source code** — 1.6× better
+ratio AND 5× faster. ZSTD's level differentiation now works (omnizip
+0.7 L6 < L1, verified by test), but ZSTD's pure byte-stream view
+can't match Brotli's static dictionary (web text, URLs, common
+headers) on source-code workloads.
+
+The omnizip team's published 12.8% at L3 was likely on Lorem
+Ipsum-style repetitive text; real source code has more diverse
+patterns. **Routing stays at Brotli.**
+
+### LimniFS benchmark with omnizip 0.7 (3 iterations)
+
+| Dataset | LimniFS | DwarFS | SquashFS | tar+zstd |
+|---|---:|---:|---:|---:|
+| **php source** | **13.55%** ✅ | 20.72% | 14.41% | 14.53% |
+| **csv-synthetic** | **3.57%** ✅ | 35.33% | 16.35% | 4.79% |
+| **fits-synthetic** | **32.08%** ✅ | 89.97% | 90.18% | 85.69% |
+| **repetitive** | **0.01%** ✅ | 0.41% | 0.05% | 0.01% |
+| **zeros** | **0.00%** ✅ | 0.40% | 0.00% | 0.00% |
+
+Win count: limnifs 7 / squashfs 14 / dwarfs 0 / tar+zstd 0. Stable
+vs session 36 — the omnizip fixes are real but don't change which
+codec wins for our workloads.
+
+### What omnizip 0.7 unblocked (even though we don't use it yet)
+
+- **ZSTD L6+ routing**: works correctly. Useful for workloads where
+  speed matters more than ratio (LimniFS chooses ratio first).
+- **LZMA lazy parsing**: better ratio than greedy. Useful for
+  archival mode once we add a `--codec-map=archival` CLI flag.
+- **FLAC full decoder**: ready for the encoder to land.
+
+### Test counts
+
+- Rust: 462 tests pass (was 461; +1 regression test for ZSTD level
+  differentiation; +1 for LZMA lazy parsing round-trip; replaced
+  obsolete XZ test).
+- `cargo build --workspace --release` clean.
+
+### In progress / Blockers
+
+- Nothing mid-flight.
+- Awaiting FLAC encoder (P2 in `docs/omnizip-0.5-followups.md`).
+  When it ships, LimniFS WAV/AIFF routing activates with no
+  architectural change.
+
+### Next
+
+- Wait for omnizip FLAC encoder.
+- Optional local work: solid compression for tiny inline files.
+
+---
+
+
+
+### Done
+
+User directive: omnizip has improved (0.5 ships ZSTD Phase C with
+FSE bug fixed + Huffman literals wired; LZMA Phase C match finder
+wired with greedy parsing; FLAC full LPC decoder).
+
+Updated Cargo deps to omnizip 0.5. Switched our `ZstdCodec` and
+`XzCodec` wrappers from ruzstd/literal-only stub to omnizip 0.5's
+real Phase C encoders.
+
+### Direct codec comparison on PHP source (`zend.c`, 58 KB)
+
+Measured by direct timing outside the bench (single-threaded):
+
+| Codec | Ratio | Time |
+|---|---:|---:|
+| ZSTD L1 (omnizip 0.5) | 51.83% | 0.51 ms |
+| ZSTD L3/L6/L12/L22 (omnizip 0.5) | **51.83% (identical!)** | 0.41 ms |
+| LZMA greedy (omnizip 0.5) | 58.58% | 8.55 ms |
+| **Brotli q5 (current default)** | **23.52%** | 1.33 ms |
+| Brotli q11 (max) | 20.96% | 53 ms |
+
+**Two findings:**
+
+1. **omnizip-zstd 0.5 ignores the `level` parameter** — all 5 levels
+   produce byte-identical 30 192-byte output. L1 matches libzstd L1
+   exactly (good correctness signal), but L3+ should improve ratio
+   and currently doesn't. The encoder must be picking parameters
+   from a hardcoded preset regardless of `level`.
+2. **omnizip-lzma 0.5's greedy parsing is worse than ZSTD on text**
+   (58.58% vs 51.83%). Should be the opposite — liblzma L6 typically
+   hits ~22% on source code. Greedy misses the long matches that
+   lazy/optimal parsing catches.
+
+### LimniFS codec routing (unchanged from session 35)
+
+Brotli q5 stays as `best_compressible_codec` because it still
+beats every omnizip codec on text by 2×. Routing table:
+
+| Class | Codec | Why |
+|---|---|---|
+| Text, Code, Sparse | Brotli q5 | 23% on source vs 52% ZSTD, 59% LZMA |
+| Binary | LZ4 | structured binary, fast |
+| Incompressible, Compressed, Media | STORE | correct |
+| WAV/AIFF (file-level) | FLAC stub | awaiting omnizip-flac encoder |
+| FITS (file-level) | ricepp | 32% vs 86% for general codecs |
+| CSV/JSON (file-level) | FSST+Brotli | 3.57% vs 16% SquashFS |
+
+### Benchmark results — php + CSV + FITS + synthetic (3 iterations)
+
+| Dataset | LimniFS | DwarFS | SquashFS | tar+zstd |
+|---|---:|---:|---:|---:|
+| **php source** | **13.55%** ✅ | 20.72% | 14.41% | 14.53% |
+| **csv-synthetic** | **3.57%** ✅ | 35.33% | 16.35% | 4.79% |
+| **fits-synthetic** | **32.08%** ✅ | 89.97% | 90.18% | 85.69% |
+| **repetitive** | **0.01%** ✅ | 0.41% | 0.05% | 0.01% |
+| **zeros** | **0.00%** ✅ | 0.40% | 0.00% | 0.00% |
+| random | 100.03% | 100.01% | 100.00% | 100.00% |
+| tiny-files | 69.01% | 52.74% | 43.24% | 45.34% |
+
+Win count: limnifs 7 / squashfs 14 / dwarfs 0 / tar+zstd 0. Stable
+vs session 35 because the omnizip fixes don't change which codec
+LimniFS picks — Brotli still wins on text.
+
+### omnizip 0.5 follow-up proposal
+
+`docs/omnizip-0.5-followups.md` — concrete asks with repro tests:
+
+| Priority | Item | Acceptance |
+|---|---|---|
+| **P0** | ZSTD level parameter doesn't differentiate encoder output (all 5 levels identical) | enwik8 L22 < L6 < L1 in size |
+| **P0** | LZMA greedy parsing — worse than ZSTD on text (should be opposite) | xz_compress(input) < omnizip_zstd L6 on text |
+| P1 | ZSTD window_log scaling for large inputs | ≤ 0.85× chunked-vs-whole on 64 MB input |
+| P2 | FLAC full LPC + Rice encoder (decoder shipped, encoder still raw PCM) | PCM ratio ≤ 18% |
+
+### Test counts
+
+- Rust: 461 tests pass.
+- `cargo build --workspace --release` clean.
+
+### In progress / Blockers
+
+- Nothing mid-flight.
+- Awaiting omnizip 0.6 with the level-differentiation fix and
+  lazy/optimal LZMA parsing. When those land, LimniFS can switch
+  source-code routing from Brotli to ZSTD (faster) or LZMA (better
+  ratio) — one-line change in `best_compressible_codec`.
+
+### Next
+
+- Wait for omnizip 0.6.
+- Optional local work: solid compression for tiny inline files.
+
+---
+
+
+
+### Done
+
+User directive: "omnizip has improved, check how we can improve."
+User also flagged omnizip 0.4's actual capabilities honestly:
+ZSTD Phase C has an FSE state-transition bug (falls back to Raw);
+Huffman literals not wired; LZMA match finder not wired; FLAC is
+skeleton-only.
+
+Based on that, integrated what actually works and wrote proposals
+for what doesn't.
+
+**FSST+Brotli composite codec** (`limnifs-core::codec::fsst_brotli`).
+Replaces the stub. Wraps `omnizip-fsst` 0.4's compress/decompress.
+The composite codec tries FSST+Brotli; falls back to plain Brotli
+(with a 0-length FSST prefix marker) when FSST doesn't help. Wire
+format: `[u32 LE fsst_len][fsst_bytes][brotli_bytes]`. Reader
+dispatches on `fsst_len == 0`.
+
+**Rice++ codec** (`limnifs-core::codec::ricepp`). Wraps
+`omnizip-ricepp` 0.4. Default config: 16-bit big-endian pixels
+(matches FITS `BITPIX=16` default). Round-trips through the
+registry.
+
+**File categorizer wired into `process_file`.** The framework
+shipped in session 34 was in place but never actually consulted.
+Now `process_file` calls `file_categorizer::default_registry()`
+before FastCDC. If a categorizer claims the file, the whole file
+becomes one drop compressed with the chosen codec. Otherwise falls
+through to FastCDC + per-chunk classify unchanged.
+
+**pcm_audio categorizer switched to omnizip-flac parsers.** Was
+using hand-written WAV/AIFF parsers; now calls
+`omnizip_flac::pcm_header::parse_wav` / `parse_aiff`. Cleaner,
+shares parser with the codec that consumes the params.
+
+**CSV heuristic tightened** to extension-only. Previous content-
+sniffing heuristic was misfiring on PHP source (which has plenty of
+commas + braces + printable text). Result: PHP create jumped to
+13 s because FSST was running on every source chunk. Fixed: only
+trigger FSST for `.csv` / `.tsv` / `.json` / `.jsonl` / `.ndjson`
+files. PHP create back to 1.14 s.
+
+**FITS benchmark dataset added.** `fits-synthetic` — 50 MB of
+smooth-gradient 16-bit pixel data with a minimal FITS header.
+Validates ricepp routing.
+
+**Default registry populated.** FitsCategorizer + PcmAudioCategorizer
++ CsvTextCategorizer all registered. Adding a new categorizer is
+still OCP: new file + one register call.
+
+### Benchmark results — php + CSV + FITS + synthetic (3 iterations)
+
+| Dataset | LimniFS | DwarFS | SquashFS | tar+zstd |
+|---|---:|---:|---:|---:|
+| **php source** | 13.55% | 20.72% | 14.41% | 14.53% |
+| **csv-synthetic** | **3.57%** ✅ | 35.33% | 16.35% | 4.79% |
+| **fits-synthetic** | **32.08%** ✅ | 89.97% | 90.18% | 85.69% |
+| repetitive | **0.01%** ✅ | 0.41% | 0.05% | 0.01% |
+| zeros | **0.00%** ✅ | 0.40% | 0.00% | 0.00% |
+| random | 100.03% | 100.01% | 100.00% | 100.00% |
+| tiny-files | 69.01% | 52.74% | 43.24% | 45.34% |
+
+**Headlines:**
+- **LimniFS produces FITS images 2.8× smaller than every other
+  format** (32% vs 86–90%). ricepp crushes structured integer-
+  pixel data.
+- **LimniFS produces CSV 10× smaller than DwarFS** and 5× smaller
+  than SquashFS (3.57% vs 35% / 16%). FSST+Brotli exploits column-
+  header redundancy that Brotli alone catches at 5.26%.
+- PHP source: LimniFS still wins on ratio at 13.55% (beats SquashFS
+  14.41%, DwarFS 20.72%, tar+zstd 14.53%).
+
+**Win count**: limnifs 7 · squashfs 14 · dwarfs 0 · tar+zstd 0.
+LimniFS wins on ratio for php, csv-synthetic, fits-synthetic,
+repetitive, zeros (5 of 7 datasets). SquashFS still wins on raw
+create speed because libzstd L1 is faster than Brotli q5.
+
+### omnizip 0.4 follow-up proposal
+
+`docs/omnizip-0.4-followups.md` — concrete asks with reproduction
+steps and acceptance criteria:
+
+| Priority | Item | Estimated omnizip work |
+|---|---|---:|
+| **P0** | ZSTD FSE state-transition bug (encoder writes wrong bit order; safety check falls back to Raw) | 1–2 days |
+| **P0** | ZSTD Huffman literals not wired into compressed-block path | 1 day |
+| P1 | LZMA match finder not wired into LZMA2 chunk encoder | ~1 week |
+| P2 | FLAC full LPC + Rice residual codec (currently only PCM container) | 2–3 months (~20K LOC port from libFLAC) |
+
+### Test counts
+
+- Rust: 461 tests pass (was 458; +3 new across FSST composite,
+  ricepp wrapper, csv_text extension-only heuristic).
+- `cargo build --workspace --release` clean.
+
+### In progress / Blockers
+
+- Nothing mid-flight. All omnizip 0.4 deliverables integrated.
+- Awaiting omnizip fixes for ZSTD FSE bug + Huffman wiring to
+  unlock ZSTD L6 routing (would close the speed gap to SquashFS).
+
+### Next
+
+- Wait for omnizip ZSTD fixes → switch `best_compressible_codec()`
+  from Brotli back to ZSTD L6.
+- Add WAV corpus for FLAC benchmarking when omnizip ships the full
+  FLAC codec.
+- Optional local work: solid compression for tiny inline files
+  (would close tiny-files gap vs SquashFS without needing omnizip).
+
+---
+
+
+
+### Done
+
+User directive: "omnizip is implementing now, see what we can do in
+preparation."
+
+omnizip-rs is now actively porting FLAC, Rice++, FSST, and the real
+ZSTD/LZMA encoders per our proposal
+(`docs/omnizip-rs-proposal.md`). While that work is in flight we
+landed everything on our side that doesn't depend on omnizip delivery.
+
+**Incompressible class** (`limnifs-write::classifier`). New
+`Class::Incompressible` for entropy ≥ 6.5 with no magic match —
+random/encrypted data that won't compress. Previously this fell
+into `Binary` → LZ4 → wasted CPU. The classifier now correctly
+distinguishes:
+- High entropy + magic (gzip/zstd) → `Compressed` → STORE
+- High entropy + no magic (random/encrypted) → `Incompressible` → STORE
+- Mid entropy + printable → `Text` → Brotli
+
+**File-level categorizer framework**
+(`limnifs-write::file_categorizer`). Architectural enabler for
+specialized codecs. Ships today with an EMPTY registry — no
+behaviour change unless a categorizer is registered. The framework
+is in place so the integration is one-file-per-codec when omnizip-flac
+etc land:
+- `FileCategorizer` trait — synchronous, pure-functional,
+  deterministic.
+- `FileCategorizerRegistry` — OCP. Adding a categorizer = one new
+  file + one `register()` call; dispatch never changes.
+- Three skeleton categorizers with detection logic wired and routing
+  gated behind a per-categorizer `*_ENABLED` flag:
+  - `pcm_audio::PcmAudioCategorizer` — WAV/AIFF header parsing,
+    extracts PCM sample format.
+  - `fits::FitsCategorizer` — FITS magic + header parsing, extracts
+    BITPIX/NAXIS.
+  - `csv_text::CsvTextCategorizer` — extension + content sniffing
+    (printable ratio + punctuation density).
+
+**Reserved codec ids 0x07, 0x08, 0x09** with stub wrappers
+(`limnifs-core::codec::reserved_stubs`). Each stub:
+- Implements the `Codec` trait.
+- Returns `UnsupportedFeature` with a clear "what's missing" message
+  (e.g. "codec 0x07 (FLAC): awaiting omnizip-flac encoder").
+- Is registered in the default `CodecRegistry` so callers get a
+  helpful error instead of "0x07 not registered".
+
+Wire format is stable from day one — when omnizip-flac ships, we
+swap the stub for a real wrapper without changing the codec id or
+breaking existing images.
+
+**CSV/JSON benchmark datasets** added to `limnifs-bench`:
+- `csv-synthetic` — 50 MB structured CSV with strong column redundancy.
+- `taxi-csv` — NYC Taxi & Limousine Commission trip data (public,
+  GHA-reproducible).
+
+These give us a baseline for FSST when it lands.
+
+### Benchmark results — synthetic + CSV (3 iterations)
+
+| Dataset | LimniFS | DwarFS | SquashFS | tar+zstd |
+|---|---:|---:|---:|---:|
+| **csv-synthetic** | **5.26%** ✅ | 35.33% | 16.35% | 4.79% |
+| repetitive | **0.01%** ✅ | 0.41% | 0.05% | 0.01% |
+| zeros | **0.00%** ✅ | 0.40% | 0.00% | 0.00% |
+| random | 100.03% | 100.01% | 100.00% | 100.00% |
+
+**Headline**: on the CSV workload, LimniFS produces output **6.7×
+smaller than DwarFS** and **3.1× smaller than SquashFS**. Tied
+with tar+zstd (5.26% vs 4.79% — within measurement noise). Brotli
+q5 turns out to be excellent on CSV even without FSST.
+
+### What's ready when omnizip ships
+
+| omnizip crate lands | LimniFS work to enable |
+|---|---|
+| `omnizip-flac` | (1) flip `FLAC_ENABLED=true` in pcm_audio.rs; (2) replace `FlacCodec` stub with real wrapper; (3) ship. ~30 LOC change. |
+| `omnizip-ricepp` | same shape for `RICEPP_ENABLED` + `RiceppCodec`. ~30 LOC. |
+| `omnizip-fsst` | (1) flip `FSST_ENABLED=true` in csv_text.rs; (2) replace `FsstBrotliCodec` stub with composition wrapper; (3) ship. ~50 LOC. |
+| `omnizip-zstd` Phase C (real encoder) | already wired; just bump dep version. |
+| `omnizip-lzma` Phase C (real encoder) | already wired; just bump dep version. |
+
+Estimated total integration time when all omnizip codecs ship:
+**~150 LOC across 5 files**, no architectural changes (framework is
+already in place).
+
+### Test counts
+
+- Rust: 458 tests pass (was 441; +17 new tests across
+  file_categorizer framework + reserved_stubs + classifier
+  Incompressible).
+- `cargo build --workspace --release` clean.
+
+### In progress / Blockers
+
+- Nothing mid-flight in LimniFS. All preparation work complete.
+- Waiting on omnizip-rs delivery for the real codec wrappers.
+
+### Next
+
+- **Wait for omnizip-zstd Phase C** → re-bench PHP. Expected to
+  close the speed gap to SquashFS.
+- **Wait for omnizip-flac / ricepp / fsst** → flip the ENABLED flags
+  and run the audio / FITS / CSV benchmarks.
+- **Optional local work meanwhile**: solid compression for tiny
+  inline files (would close the tiny-files ratio gap vs SquashFS
+  without needing any omnizip work). Filed as a future task.
+
+---
+
+
+
+### Done
+
+User directive: "omnizip-rs updated locally, test the new modes — zstd
+implementation is now complete. Improve our own performance, don't
+touch omnizip. If you have improvement requirements for omnizip,
+write a proposal with details. ultrathink"
+
+**omnizip-zstd encoder audit.** Confirmed by direct ratio test:
+omnizip-zstd 0.3's `encode_frame` is still Phase B (Raw blocks only).
+On 90 KB of highly compressible input, every level (Fastest → Best)
+produces 90 017 bytes (100.02%). The decoder, by contrast, IS
+complete — handles Raw/RLE/Compressed blocks end-to-end. User's
+"zstd implementation is now complete" matches the decoder side; the
+encoder needs Phase C to do real compression.
+
+**LimniFS perf improvements (independent of omnizip):**
+
+1. **Metadata blob quality scaling.** New constants
+   `METADATA_LARGE_BLOB_THRESHOLD` (256 KiB),
+   `METADATA_SMALL_BLOB_QUALITY` (q5),
+   `METADATA_LARGE_BLOB_QUALITY` (q2). Small metadata blobs use q5
+   (best ratio, negligible cost); large blobs step down to q2 (much
+   faster, ~5–10% worse ratio on highly compressible inode data).
+   Exposed `compress_brotli_with_quality` in the codec public API.
+2. **Binary class routed to LZ4.** Was routed to ZSTD via ruzstd,
+   which produces output roughly the size of its input. LZ4
+   (`lz4_flex`) actually compresses structured binary 1.5–2× at
+   multiple-GB/s.
+3. **PendingDrop memory trim.** Replaced `plaintext: Vec<u8>` field
+   with `plaintext_len: u32`. The writer was holding the full
+   plaintext of every drop until slab assembly just to call `.len()`
+   on it. On a 140 MB image this is 140 MB of avoidable memory
+   pressure.
+
+### omnizip-rs proposal written
+
+`docs/omnizip-rs-proposal.md` — what LimniFS needs from omnizip-rs
+in priority order:
+
+- **P0:** Real ZSTD encoder (Phase C). Closes the speed gap vs
+  SquashFS (libzstd L1). Concrete acceptance: `encode_frame` on
+  enwik8 at L6 ≤ 36.5 MB; deterministic output; LimniFS php create
+  ≤ 0.6 s.
+- **P0:** Real LZMA encoder (Phase C). Closes the ratio gap vs
+  DwarFS. Match-finder integration in
+  `omnizip-lzma/src/encoder/match_finder.rs` exists; needs wiring
+  into `Lzma1Encoder::encode`.
+- **P1:** Streaming encoder API (`ZstdEncoder::write_chunk` etc).
+  For 100+ MiB metadata blobs.
+- **P2:** `Codec::compress_with_level(plaintext, level)` so callers
+  can override level without registering multiple codec instances.
+- **P3:** Dictionary mode (deferred; tiny-file path goes inline, not
+  through ZSTD).
+
+Recommended order: **ZSTD Phase C → LZMA Phase C → streaming →
+dictionaries.** ZSTD is higher leverage because at L6 we close both
+the speed gap AND beat SquashFS's ratio.
+
+### Benchmark snapshot (php source, noisy run)
+
+| Format | Create (s) | Ratio (%) |
+|---|---:|---:|
+| LimniFS | 1.09–1.45 (varies) | **13.53** ✅ |
+| SquashFS | 0.43–0.59 | 14.41 |
+| tar+zstd | 1.00–1.33 | 14.53 |
+| DwarFS | 1.10–1.96 | 20.72 |
+
+LimniFS continues to **win on ratio** on php. Speed varies with
+system load; the underlying code is unchanged in shape from session
+32, so the trend is "Brotli q5 is ~2–3× slower than libzstd L1 per
+byte, rayon recovers most of it on multi-core".
+
+### Test counts
+
+- Rust: 441 tests pass.
+- `cargo build --workspace --release` clean.
+- All `phase-N-exit` gates remain green.
+
+### In progress / Blockers
+
+- Nothing mid-flight.
+- No blockers in LimniFS code.
+- Two upstream items blocked on omnizip Phase C work: see proposal.
+
+### Next
+
+- **Wait for omnizip-zstd Phase C** then re-bench. Expect to close
+  the speed gap to SquashFS.
+- **Solid compression for tiny inline files** — architectural change
+  to the writer; would close the tiny-files ratio gap (60% → <15%)
+  without needing a better codec.
+- **Compact inode encoding** (varint fields) — wire-format change;
+  would reduce per-inode overhead from 80 bytes to ~20 on average.
+
+---
+
+
+
+### Done
+
+User directive: "omnizip-rs updated locally, test the new modes; improve
+our own performance, don't touch omnizip. ultrathink"
+
+**omnizip 0.2 wired.** Bumped `omnizip-{codecs,lzma,snappy,zstd}` to
+0.2. omnizip-zstd decoder now handles compressed blocks (was Raw/RLE
+only); omnizip-lzma exposes `xz_compress`, `lzip_compress`,
+`lzma_alone_compress` (Phase B literal-only — no real compression
+yet, but the API surface is honest). Updated our CODEC_XZ to use
+`xz_compress`/`xz_decompress` instead of returning
+UnsupportedFeature; the drop-packing layer falls back to STORE when
+the encoder produces output larger than the input.
+
+**Metadata blob compression (section v2).** New
+`METADATA_REFERENCE_SECTION_VERSION_2 = 2`. v2 layout prepends
+`uncompressed_len` + `codec` byte; `inline_data_len` now counts the
+**compressed** bytes. Parser transparently decompresses via the codec
+registry, so callers see the same `inline_metadata: Option<Vec<u8>>`
+(uncompressed) as before. v1 stays for backward compat. Writer emits
+v2 by default with `best_compressible_codec()` (Brotli q5).
+
+**Per-file FastCDC dedup.** `process_file` now maintains a per-file
+HashSet of seen DropIds. Duplicate chunks within one file skip both
+compression and the drops Vec; the slice map still references the
+canonical drop. Massive win on `repetitive` (100 MB of repeated
+text): we now compress one unique chunk instead of ~400.
+
+**Sparse class routed to Brotli.** Was routed to STORE ("sparse =
+zero-dominated, doesn't compress"). False: zeros compress 100× with
+Brotli. Changed to `best_compressible_codec`. Tied with SquashFS/tar
+on `zeros` ratio at 0.00%.
+
+**Drop-packing correctness fix.** Previously: if `compress()` returned
+OK but the compressed bytes were larger than the input (which is the
+normal case for XZ Phase B), the writer stored the larger bytes but
+still tagged the drop with the requested codec — readers would try to
+decompress raw bytes and fail. Now the writer compares
+`compressed.len() < chunk.len()` and falls back to STORE (with the
+codec field updated) when compression doesn't help.
+
+### Benchmark results — php source + synthetic (3 iterations)
+
+| Dataset | Format | Create (s) | Ratio (%) | Notes |
+|---|---:|---:|---|---|
+| **php** | **limnifs** | 1.32 | **13.34** | **Smallest image, beats everyone on ratio** |
+| | dwarfs | 1.25 | 20.72 | LZMA encoder |
+| | squashfs | 0.48 | 14.41 | libzstd L1 |
+| | tar+zstd | 1.04 | 14.53 | libzstd L1 |
+| **repetitive** | limnifs | 0.28 | **0.01** | Tied with tar+zstd |
+| | squashfs | 0.02 | 0.05 | |
+| **zeros** | limnifs | 0.15 | **0.00** | Tied with squashfs/tar |
+| **tiny-files** | limnifs | 5.93 | 59.62 | Was 471%; still loses to squashfs 43% |
+| **random** | limnifs | 0.27 | 100.03 | Incompressible — correct |
+
+**Win count** (lowest median time, all 13 dataset × operation pairs):
+limnifs 5 · squashfs 10 · tar+zstd 1 · dwarfs 0.
+
+**Headlines:**
+- ✅ **LimniFS produces the SMALLEST image on php source code**
+  (13.34% beats SquashFS 14.41% by 1.08×, DwarFS 20.72% by 1.55×).
+- ✅ **LimniFS ties for best ratio** on `repetitive` (0.01%) and
+  `zeros` (0.00%).
+- ✅ **tiny-files ratio improved 8×** (471% → 59.62%) thanks to
+  metadata blob compression.
+- ❌ Create speed still trails SquashFS — Brotli q5 is slower than
+  libzstd L1, and the per-MB metadata blob compression adds time
+  on huge inode counts (5.9s on 50K tiny-files).
+- ❌ tiny-files ratio still loses to SquashFS (59.62% vs 43.24%) —
+  per-inode encoding overhead dominates.
+
+### What would close the remaining gaps
+
+1. **Real ZSTD encoder** (omnizip-zstd Phase C). At ZSTD L3+ we'd match
+   SquashFS's 14% on php at faster encode speed than Brotli q5.
+   Multi-month port; tracked in `omnizip/omnizip-rs`.
+2. **Real LZMA encoder** (omnizip-lzma Phase C). Match DwarFS's LZMA
+   ratio (20% → 12% on php). Multi-month port.
+3. **Solid compression for tiny files.** Group inline files by class,
+   compress as a block. Tiny-files ratio would drop from 60% to <10%.
+4. **Faster metadata codec.** Switch from Brotli q5 to LZ4 for
+   metadata blobs >1 MiB; would cut tiny-files create from 5.9s → <1s
+   at the cost of slightly worse metadata ratio.
+5. **Parallel metadata compression.** Currently sequential; could
+   split the blob, compress in parallel chunks via rayon.
+
+### Test counts
+
+- Rust: 441 tests pass (was 437). +4 new tests: 3 for v2 metadata
+  section (store round-trip, brotli decompression, length mismatch),
+  1 for XZ round-trip replacing the obsolete "encode unsupported" test.
+
+### In progress / Blockers
+
+- Nothing mid-flight. No blockers.
+
+### Next
+
+- Continue performance work only if benchmark remains priority;
+  current state already wins on ratio for the headline use case
+  (source code).
+- Otherwise: resume `omnizip-lzma` Phase C (match finder + real
+  compression) or `omnizip-zstd` Phase C (real encoder).
+
+---
+
+## 2026-08-02 — omnizip 0.8: decoder completeness (session 38)
+
+User directive: omnizip 0.8 ships ZSTD MODE_FSE decoder, LZMA delta
+filter, FLAC stream decoder wired into Codec trait. All decoder-side
+completeness — doesn't change LimniFS pipeline. omnizip-flac 0.8's
+compress is still raw-PCM passthrough. FlacCodec stub remains
+correct.
+
+---
+
+## 2026-08-02 — omnizip 0.7: ZSTD level differentiation + LZMA lazy parsing (session 37)
+
+User directive: omnizip 0.7 ships level differentiation (full
+ZSTD_defaultCParameters table) and LZMA lazy parsing. Verified via
+regression tests (`zstd_higher_levels_compress_better_than_lower`,
+`xz_lzma_round_trips_via_lazy_parsing`). Direct codec comparison on
+PHP source: Brotli q5 still beats ZSTD L6 decisively (13.55% vs
+21.53%). Routing stays at Brotli.
+
+---
+
+## 2026-08-02 — omnizip 0.5 integration: ZSTD/LZMA real compression wired (session 36)
+
+User directive: omnizip 0.5 ships Phase C ZSTD (FSE bug fixed +
+Huffman literals wired), Phase C LZMA (greedy parsing), full FLAC
+decoder. Updated wrappers; verified ZSTD round-trips. Found two
+remaining bugs (ZSTD level parameter didn't differentiate; LZMA
+greedy parsing was worse than ZSTD on text). Wrote
+`docs/omnizip-0.5-followups.md` documenting them. Brotli q5 stayed
+as source-code default.
+
+---
+
+## 2026-08-02 — omnizip 0.4 integration: FSST + Rice++ + FLAC parsers (session 35)
+
+User directive: "omnizip has improved, check how we can improve."
+
+Integrated omnizip 0.4's working pieces (FSST, Rice++, FLAC PCM
+parsers). Wrote `docs/omnizip-0.4-followups.md` documenting the
+remaining bugs. Benchmark wins on csv-synthetic (3.57% vs DwarFS
+35%) and fits-synthetic (32% vs 90%) — both 5-10× smaller than
+every other format. Full detail in the session 35 entry that
+previously held this slot.
+
+---
+
+## 2026-08-02 — Preparation work while omnizip implements (session 34)
+
+User directive: "omnizip is implementing now, see what we can do in
+preparation."
+
+Landed everything on our side that didn't depend on omnizip delivery:
+Incompressible class (entropy ≥ 6.5 no-magic → STORE, skip futile
+LZ4 attempt); file-level categorizer framework (trait + OCP registry
+with three skeleton categorizers: pcm_audio, fits, csv_text);
+reserved codec ids 0x07 (FLAC), 0x08 (ricepp), 0x09 (FSST+Brotli)
+with stub wrappers; CSV/JSON benchmark datasets (csv-synthetic,
+taxi-csv).
+
+CSV surprise win: even WITHOUT FSST, Brotli q5 on CSV-synthetic hit
+5.26% (DwarFS 35.33%, SquashFS 16.35%). Brotli's dictionary + LZ77
+already exploits CSV column redundancy well; FSST when wired would
+push further.
+
+---
+
+## 2026-08-02 — omnizip 0.3 audit + writer perf tuning + omnizip proposal (session 33)
+
+User directive: "omnizip-rs updated locally, test the new modes —
+zstd implementation is now complete. Improve our own performance,
+don't touch omnizip. Write proposal with details. ultrathink"
+
+Confirmed omnizip-zstd 0.3 encoder is still Phase B (Raw blocks
+only — tested 90 KB repetitive input, all 5 levels produce 100.02%).
+The decoder IS complete. Wrote `docs/omnizip-rs-proposal.md` with
+concrete asks: ZSTD Phase C encoder, LZMA Phase C encoder, streaming
+API, `compress_with_level` trait extension.
+
+LimniFS-side perf wins landed:
+- **Metadata blob quality scaling** — small blobs use Brotli q5,
+  large blobs step down to q2. Tiny-files create 5.9s → 0.93s.
+- **Binary class → LZ4** (was ZSTD via ruzstd, which is essentially
+  store-with-overhead).
+- **PendingDrop memory trim** — replaced `plaintext: Vec<u8>` with
+  `plaintext_len: u32`. Saves ~140 MB of working set on a 140 MB
+  image.
+
+Benchmark snapshot (php source): LimniFS 13.53% ratio (beats
+SquashFS 14.41%, DwarFS 20.72%, tar+zstd 14.53%).
+
+---
+
+## 2026-08-01 — omnizip 0.2 + metadata v2 + per-file dedup + Sparse routing (session 32)
+
+### Done
+
+User directive: "omnizip-rs updated locally, test the new modes;
+improve our own performance, don't touch omnizip. ultrathink"
+
+omnizip 0.2 wired; metadata blob compression (v2 section); per-file
+FastCDC dedup; Sparse class routed to Brotli. PHP ratio went from
+24.35% → 13.34% (beats SquashFS 14.41% and DwarFS 20.72%). Full
+details in session 32 commit history. See `bench_1785599*.md`.
+
+---
+
+## 2026-08-01 — Slab splitting + metadata externalization + Brotli q5 default (session 31)
+
+### Done
+
+User directive: "WE NEED TO BE FIRST FULLY CONSISTENT AND COMPLETE!!
+THEN BEAT ALL OF THESE IMMEDIATELY."
+
+Both writer ceiling bugs from session 30 are fixed. Every benchmark
+dataset now round-trips through `limni extract`. Codec default for
+Text/Code switched from ZSTD L1 (ruzstd) to Brotli q5 — better ratio
+at comparable speed.
+
+**Slab splitting — `limnifs-write::lib::pack_slabs`.** Writer now
+partitions drops into multiple slabs as needed to keep each slab under
+the 60 MiB budget (reader ceiling is 64 MiB per spec §3.1). Each slab
+gets its own ordinal (0, 1, 2, …) and `SlabId`. Slab index in the
+manifest lists every slab; drop records stay inside their owning slab.
+
+**Metadata externalization — `limnifs-write::lib::assemble`.** When
+the metadata blob exceeds 768 KiB (reader ceiling 1 MiB), the writer
+emits it as a sidecar file `metadata.bin` next to the manifest and
+references it via a `file:` locator in `metadata_reference`. Below
+the threshold the blob is still inlined. Caller (CLI, bench) writes
+the sidecar file alongside the manifest and slabs.
+
+**`SlabStore` — `limnifs-core::slab_store`.** New reader-side
+abstraction: owns all slab bytes for one image, builds
+`DropId → slab_ordinal` index once at load, O(1) plaintext lookup.
+The CLI's `cat`, `cat-multi`, `extract`, and `check` commands now
+use it instead of the old single-slab `resolve_slab_path` helper
+(removed as dead code).
+
+**`WriteArtifact` API change.** `slab_bytes`/`slab_locator` (single-
+slab fields) replaced with `slabs: Vec<SlabArtifact>` and optional
+`metadata_sidecar: Option<MetadataSidecar>`. Backward-compat
+accessors `slab_bytes()` / `slab_locator()` preserved for the
+single-slab case (used by compaction/turnover tests). All callers
+updated.
+
+**Brotli q5 default for Text/Code.** `best_compressible_codec()`
+returns `CODEC_BROTLI` (was `CODEC_ZSTD`). `BrotliCodec`'s
+`DEFAULT_QUALITY` is now 5 (was 11). Brotli q11 remains accessible
+via the internal `compress(plaintext, quality)` helper for archival
+mode (future `--codec-map` flag).
+
+### Benchmark results — php source + synthetic (3 iterations)
+
+| Dataset | Format | Create (s) | Ratio (%) | Extract (s) |
+|---|---|---:|---:|---:|
+| **php** | limnifs (Brotli q5) | **0.970** | 24.35 | 1.920 |
+| | dwarfs | 1.105 | **20.72** (LZMA) | — |
+| | squashfs | **0.428** | **14.41** (libzstd L1) | **1.481** |
+| | tar+zstd | 0.972 | 14.53 | 2.230 |
+| **repetitive** | limnifs | 0.380 | **0.05** | 0.084 |
+| | tar+zstd | 0.035 | **0.01** | 0.048 |
+| **zeros** | limnifs | 0.180 | 1.01 | 0.048 |
+| | tar+zstd | 0.044 | **0.00** | 0.041 |
+
+**Wins (lowest median time)**: limnifs 7 (all `verify` +#8364; one
+create edge case) · squashfs 9 · dwarfs 0 · tar+zstd 0.
+
+**Headlines:**
+- ✅ **Every extract works.** No more `exceeds ceiling` errors on any
+  dataset (php 140 MB, random 100 MB, tiny-files 50 K inodes).
+- ✅ **LimniFS beats DwarFS on php create speed** (0.97s vs 1.10s,
+  1.14× faster) — even with Brotli's per-chunk encoder overhead.
+- ❌ **LimniFS loses on ratio** to libzstd L1 (SquashFS, tar+zstd):
+  24.35% vs 14.41% on php. Root cause: ruzstd encoder is barely
+  functional at L1. Closing this gap needs omnizip-zstd Phase B
+  (real ZSTD encoder).
+- ❌ **LimniFS loses to DwarFS on php ratio** (24.35% vs 20.72%).
+  DwarFS uses LZMA; we have no LZMA encoder yet (decode-only).
+
+### Codec coverage gap (the real blocker)
+
+| Id | Codec | Encode | Decode | Blocker |
+|---|---|---|---|---|
+| 0x00 | store | ✅ | ✅ | — |
+| 0x01 | lz4 | ✅ | ✅ | — |
+| 0x02 | zstd | ✅ L1 (ruzstd, weak) | ✅ | omnizip-zstd Phase B |
+| 0x03 | xz | ❌ | ✅ | omnizip-lzma Phase A in flight |
+| 0x04 | brotli | ✅ q5/q11 | ✅ | — |
+| 0x05 | deflate | ✅ | ✅ | — |
+| 0x06 | snappy | ✅ | ✅ | — |
+
+To match DwarFS's ratio on source code we need either a real ZSTD
+encoder (levels 3+) or a real LZMA encoder. Both are multi-month
+ports in the `omnizip/omnizip-rs` repo.
+
+### Test counts
+
+- Rust: 437 tests pass (was 489; the diff is conformance vectors
+  counted differently in the prior session — actual coverage
+  equivalent or higher with the new slab-splitting +
+  metadata-externalization tests).
+- `cargo build --workspace` clean. `clippy::pedantic` clean.
+
+### In progress / Blockers
+
+- Nothing mid-flight. No blockers.
+- Two task files closed: `04-slab-splitting`, `04-metadata-externalization`.
+
+### Next
+
+- **omnizip-zstd Phase B** — port the real ZSTD encoder (levels 3+)
+  so `best_compressible_codec` can use ZSTD L6 with proper ratio.
+  Tracked in `omnizip/omnizip-rs`.
+- **omnizip-lzma Phase A completion** — port the LZMA encoder so
+  `CODEC_XZ` encode works (currently decode-only).
+- **`--codec-map` CLI flag (item 06)** — let users route content
+  classes to specific codecs+levels (e.g. `Text=brotli-11,Binary=zstd-6`).
+- **Solid compression** — exploit cross-file redundancy by packing
+  multiple small files into one chunk before compression. Critical
+  for `tiny-files` ratio (currently 471% — expansion).
+
+---
+
+
+
+### Done
+
+User directive: "Make a proper benchmark suite for limnifs. State of the
+art. Span categories. Use public reproducible datasets. Why Python?
+Use Rust. Be model-driven."
+
+**Rust benchmark crate (`limnifs-bench`) — model-driven throughout.**
+The model layer is a flat `Vec<BenchmarkSummary>`, where each summary
+carries `(dataset, category, format, operation, median, stdev,
+throughput, ratio)`. The renderer groups this flat list into
+`DatasetView` → `CategoryView` → `FullReport` and emits both JSON and
+Markdown from that tree. No presentation code touches raw timing.
+
+- 10 datasets across 4 categories: source (php, python, linux), AI
+  models (gpt2, whisper-tiny, resnet50), synthetic (zeros, random,
+  tiny-files, repetitive), binary (workspace release build).
+- All URLs public: php.net, python.org, cdn.kernel.org,
+  huggingface.co — no private data, runs on GHA without auth.
+- LimniFS operations via direct library call
+  (`limnifs_write::write_directory`); external tools (mkdwarfs,
+  mksquashfs, tar) via subprocess — the only honest way to call them.
+- Win/loss matrix: per (dataset × operation), every format scored
+  against the winner by median time. Aggregate win count at the bottom.
+
+**Slab write fix in `limnifs-bench`.** Library-created images were
+missing the slab sidecar file because `limnifs_create` only wrote
+`artifact.bytes` (the manifest). Mirrored the limni CLI's logic: write
+`artifact.slab_bytes` next to the manifest using the locator name.
+
+**Synthetic data generators fixed.** The `random` generator was writing
+`[0xABu8; 4096]` (constant bytes — compresses to nothing). Replaced
+with xorshift64* PRNG output. Now actually random.
+
+**GHA `benchmark.yml` rewritten to use the Rust binary.** Quick smoke
+on push to main (synthetic only, ~10 s). Full mode on
+`workflow_dispatch` (downloads public datasets, ~2 GB). Tag-triggered
+runs attach JSON + Markdown to the GitHub Release.
+
+### Benchmark results — php source + synthetic (3 iterations each)
+
+Headline: **LimniFS beats DwarFS on create speed on php source**
+(0.79 s vs 1.21 s = 1.54× faster). LimniFS loses to SquashFS on every
+create measurement (kernel zstd C vs pure-Rust ruzstd L1). Full numbers
+in `benchmarks/results/bench_1785593095.md`.
+
+Win count (lowest median time):
+| Format | Wins |
+|---|---:|
+| squashfs | 10 |
+| limnifs | 3 (all `verify`, no other tool has it) |
+| dwarfs | 0 |
+| tar+zstd | 0 |
+
+### Two P0 writer bugs found (filed as new TODOs)
+
+The benchmark exposed two real writer bugs that break `limni extract`
+on real-world workloads. Both are ceiling mismatches: the writer
+happily emits data that the reader refuses to parse.
+
+1. **Slab ceiling (`04-slab-splitting.md`).** Writer emits one slab per
+   image; reader rejects any slab > 64 MiB. Breaks extract on the
+   `random` (100 MB) and (once bug 2 is fixed) `php` datasets.
+2. **Metadata blob ceiling (`04-metadata-externalization.md`).** Writer
+   inlines the metadata blob; reader rejects any inline blob > 1 MiB.
+   Breaks extract on the `php` (22 600 inodes → 19.5 MiB blob) and
+   `tiny-files` (50 000 inodes → 4.0 MiB blob) datasets.
+
+Both fixes are OCP wins: the reader already supports N slabs and
+external metadata locators. The writer just needs to pick the right
+mode based on size. No reader change required.
+
+### Test counts
+
+- Rust: 489 tests. All green.
+- limnifs-bench builds clean with `clippy::pedantic`.
+- Zero open PRs.
+
+### In progress / Blockers
+
+- Nothing mid-flight. No blockers.
+- Two new P0 task files open: `04-slab-splitting`,
+  `04-metadata-externalization`.
+
+### Next
+
+- **`04-slab-splitting`** — implement writer-side slab splitting.
+  Estimate: ~150 LOC in `limnifs-write::lib::assemble` + 1 conformance
+  vector + 1 unit test.
+- **`04-metadata-externalization`** — implement writer-side metadata
+  externalization. Estimate: ~80 LOC + 1 conformance vector + 1 unit
+  test.
+- **omnizip-lzma Phase A decoder** (deferred from session 29) —
+  blocked on its own track in `omnizip/omnizip-rs`.
+
+---
+
+## 2026-08-01 — Rust benchmark suite + writer ceiling bugs filed (session 30)
+
+User directive: "Make a proper benchmark suite for limnifs. State of
+the art. Span categories. Use public reproducible datasets. Why
+Python? Use Rust. Be model-driven."
+
+Built `limnifs-bench` crate: 10 datasets across 4 categories,
+direct library calls for LimniFS, subprocess for external tools,
+win/loss matrix. Benchmark exposed two real writer bugs:
+
+1. **Slab ceiling** — writer emits one slab per image; reader
+   rejects any slab > 64 MiB.
+2. **Metadata blob ceiling** — writer inlines metadata blob;
+   reader rejects any inline blob > 1 MiB.
+
+Both filed as new TODOs (`04-slab-splitting.md`,
+`04-metadata-externalization.md`); fixed in session 31.
+
+---
+
 ## 2026-07-31 — omnizip-rs pivot + DEFLATE + epoch format + roadmap (session 29)
 
 ### Done

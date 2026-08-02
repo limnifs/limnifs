@@ -9,17 +9,30 @@ description = "LimniFS core reader — manifest parse, drop store, overlay resol
 
 [dependencies]
 limnifs-format = { path = "../limnifs-format", version = "0.1.0" }
+limnifs-ocb3 = { path = "../limnifs-ocb3", version = "0.1.0" }
+aes-gcm.workspace = true
 blake3.workspace = true
 brotli.workspace = true
 chacha20poly1305.workspace = true
+memmap2.workspace = true
 ed25519-dalek = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
 lz4_flex.workspace = true
 miniz_oxide.workspace = true
-omnizip-codecs = "0.1"
-omnizip-lzma = "0.1"
-omnizip-snappy = "0.1"
-omnizip-zstd = "0.1"
+omnizip-blosc = "0.11"
+omnizip-bzip2 = "0.11"
+omnizip-codecs = "0.11"
+omnizip-deflate64 = "0.11"
+omnizip-filters = "0.11"
+omnizip-flac = "0.11"
+omnizip-fsst = "0.11"
+omnizip-glza = "0.11"
+omnizip-lzma = "0.11"
+omnizip-ppmd = "0.11"
+omnizip-ricepp = "0.11"
+omnizip-snappy = "0.11"
+omnizip-zpaq = "0.11"
+omnizip-zstd = "0.11"
 rand_core = { workspace = true, optional = true }
 rayon.workspace = true
 ruzstd.workspace = true

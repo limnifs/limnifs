@@ -75,7 +75,7 @@ mod tests {
         std::fs::remove_dir_all(&temp1).ok();
         std::fs::remove_dir_all(&temp2).ok();
 
-        let slab_bytes = before.slab_bytes.as_deref().expect("slab exists");
+        let slab_bytes = before.slab_bytes().expect("slab exists");
         let turnover_result = run(&after.bytes, slab_bytes).expect("turnover");
         assert_eq!(
             turnover_result.original_drop_count - turnover_result.compacted_drop_count,
@@ -99,7 +99,7 @@ mod tests {
         std::fs::write(temp.join("keep.bin"), &payload).unwrap();
         let artifact = write_directory(&temp).expect("write");
         std::fs::remove_dir_all(&temp).ok();
-        let slab_bytes = artifact.slab_bytes.as_deref().expect("slab exists");
+        let slab_bytes = artifact.slab_bytes().expect("slab exists");
 
         let turnover_result = run(&artifact.bytes, slab_bytes).expect("turnover");
         assert_eq!(turnover_result.compacted_drop_count, 1);
@@ -128,7 +128,7 @@ mod tests {
         std::fs::write(temp.join("x.bin"), vec![0x11u8; 8192]).unwrap();
         let artifact = write_directory(&temp).expect("write");
         std::fs::remove_dir_all(&temp).ok();
-        let slab_bytes = artifact.slab_bytes.as_deref().expect("slab exists");
+        let slab_bytes = artifact.slab_bytes().expect("slab exists");
 
         let turnover_result = run(&artifact.bytes, slab_bytes).expect("turnover");
         let mut cursor = limnifs_core::ManifestCursor::new(&turnover_result.manifest_bytes);

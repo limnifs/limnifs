@@ -12,7 +12,14 @@ use crate::slab::SlabHeader;
 use limnifs_format::{DropId, Representation};
 
 /// Width of a single drop record on the wire.
-pub const DROP_RECORD_LEN: usize = 48;
+///
+/// v0.2: extended from 48 to 49 bytes by adding `dict_id` (1 byte)
+/// at the end. dict_id = 0xFF means "no dictionary"; 0..254
+/// references an entry in the `dictionary_section` manifest section.
+pub const DROP_RECORD_LEN: usize = 49;
+
+/// Sentinel dict_id meaning "no dictionary used for this drop".
+pub const NO_DICT: u8 = 0xFF;
 
 /// Default per-drop plaintext-size ceiling. The spec's writer pipeline
 /// typically produces drops in the 4–64 MiB range via `FastCDC`; larger
@@ -28,6 +35,9 @@ pub struct DropRecord {
     pub solid_window_index: u8,
     pub offset_in_window: u32,
     pub len_in_window: u32,
+    /// Dictionary id for dict-aided decompression.
+    /// 0xFF = no dictionary; 0..254 = index into `dictionary_section`.
+    pub dict_id: u8,
 }
 
 /// Parse a single drop record from the cursor's current position.
@@ -106,6 +116,7 @@ pub fn parse_drop_record_with_ceiling(
             ),
         });
     }
+    let dict_id = cursor.read_u8()?;
     Ok(DropRecord {
         drop_id,
         plaintext_len,
@@ -113,6 +124,7 @@ pub fn parse_drop_record_with_ceiling(
         solid_window_index,
         offset_in_window,
         len_in_window,
+        dict_id,
     })
 }
 
@@ -150,6 +162,7 @@ mod tests {
         bytes[39] = record.solid_window_index;
         bytes[40..44].copy_from_slice(&record.offset_in_window.to_le_bytes());
         bytes[44..48].copy_from_slice(&record.len_in_window.to_le_bytes());
+        bytes[48] = record.dict_id;
         bytes
     }
 
@@ -161,6 +174,7 @@ mod tests {
             solid_window_index: 0,
             offset_in_window: 0,
             len_in_window: 1024,
+            dict_id: NO_DICT,
         }
     }
 
@@ -185,6 +199,7 @@ mod tests {
             solid_window_index: 1,
             offset_in_window: 2048,
             len_in_window: 1024,
+            dict_id: NO_DICT,
         };
         let bytes = make_drop_record_bytes(&record);
         let mut cursor = ManifestCursor::new(&bytes);
