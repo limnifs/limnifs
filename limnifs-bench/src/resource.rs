@@ -56,7 +56,7 @@ impl ResourceSnapshot {
         if rc != 0 {
             return Self::default();
         }
-        let to_secs = |tv: libc::timeval| tv.tv_sec as f64 + f64::from(tv.tv_usec) / 1_000_000.0;
+        let to_secs = |tv: libc::timeval| tv.tv_sec as f64 + tv.tv_usec as f64 / 1_000_000.0;
 
         #[cfg(target_os = "linux")]
         let rss_bytes = (usage.ru_maxrss as u64).saturating_mul(1024);
