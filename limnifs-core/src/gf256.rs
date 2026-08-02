@@ -19,9 +19,6 @@
 //! weaknesses for secret-sharing or erasure applications, and is the
 //! conventional choice across the `RustCrypto` and `reed-solomon` crates.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 /// Reduction polynomial for the field: x^8 + x^4 + x^3 + x + 1.
 pub const REDUCTION_POLYNOMIAL: u16 = 0x011B;
 

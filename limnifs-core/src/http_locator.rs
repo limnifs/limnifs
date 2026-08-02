@@ -23,8 +23,6 @@
 //! See [`HttpLocator`] and task `08-http-range-streaming.md`.
 
 #![cfg(feature = "http")]
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;

@@ -27,9 +27,6 @@
 //! record's `(offset_in_window, len_in_window)` is an absolute byte
 //! range inside it.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::drop_record::{parse_drop_record, DropRecord, DROP_RECORD_LEN};
 use crate::error::CoreError;

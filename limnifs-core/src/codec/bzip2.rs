@@ -1,11 +1,8 @@
-//! BZip2 codec (id 0x10): Burrows-Wheeler Transform + Huffman.
+//! `BZip2` codec (id 0x10): Burrows-Wheeler Transform + Huffman.
 //!
 //! Wraps `omnizip-bzip2` 0.11. The omnizip codec handles BWT, MTF,
 //! RLE, and Huffman coding internally. Default level is 9 (900 KB
 //! block size).
-
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use omnizip_codecs::{Codec as OmnizipCodec, CompressionLevel};
 
@@ -13,7 +10,7 @@ use crate::codec::Codec;
 use crate::codec::CODEC_BZIP2;
 use crate::error::CoreError;
 
-/// Default BZip2 compression level (1..=9, higher = better ratio).
+/// Default `BZip2` compression level (1..=9, higher = better ratio).
 const DEFAULT_BZIP2_LEVEL: u8 = 9;
 
 pub struct Bzip2Codec {
@@ -29,6 +26,7 @@ impl Bzip2Codec {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub fn with_level(level: u8) -> Self {
         Self {
             level: CompressionLevel::from(level.clamp(1, 9)),

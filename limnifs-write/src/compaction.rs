@@ -13,9 +13,6 @@
 //! 5. Re-encode the slab index + history.
 //! 6. Recompute the Merkle root.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use std::collections::HashSet;
 
 use limnifs_core::{

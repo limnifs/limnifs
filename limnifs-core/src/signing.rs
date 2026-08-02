@@ -27,8 +27,6 @@
 //! See task `05-signing-sigstore.md`.
 
 #![cfg(feature = "signing")]
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 

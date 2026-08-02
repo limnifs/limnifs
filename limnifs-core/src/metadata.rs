@@ -25,9 +25,6 @@
 //! rely on a particular ordering; instead, they look up entries by
 //! `inode_number` or by `btree_node_hash`.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::directory_node::{parse_directory_node, DirEntry, DirectoryNode};
 use crate::error::CoreError;

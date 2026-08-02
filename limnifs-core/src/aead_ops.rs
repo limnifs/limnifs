@@ -6,9 +6,6 @@
 //! | 0x02 | AES-256-GCM | `aes-gcm` | 12-byte nonce, hardware-accelerated |
 //! | 0x03 | AES-256-OCB | `ocb3` + `aes` | 12-byte nonce, RFC 7253 |
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::aead::{AEAD_AES_256_GCM, AEAD_AES_256_OCB, AEAD_XCHACHA20_POLY1305};
 use crate::error::CoreError;
 
@@ -233,7 +230,7 @@ impl Aead for Aes256OcbAead {
         let mut tag = [0u8; 16];
         tag.copy_from_slice(&ciphertext[tag_start..]);
         ocb.decrypt_in_place_detached(nonce_arr, aad, &mut buf, &tag)
-            .map_err(|_| CoreError::Corrupt {
+            .map_err(|()| CoreError::Corrupt {
                 reason: "aes-ocb: decrypt failed (tag mismatch?)".into(),
             })?;
         Ok(buf)
@@ -267,7 +264,10 @@ impl AeadRegistry {
 
     #[must_use]
     pub fn get(&self, id: u8) -> Option<&dyn Aead> {
-        self.by_id.iter().find(|a| a.id() == id).map(|a| a.as_ref())
+        self.by_id
+            .iter()
+            .find(|a| a.id() == id)
+            .map(std::convert::AsRef::as_ref)
     }
 }
 

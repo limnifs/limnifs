@@ -54,7 +54,7 @@ pub fn delimited_text() -> CategorizerConfig {
     }
 }
 
-/// BZip2 for `.bz2` archives.
+/// `BZip2` for `.bz2` archives.
 #[must_use]
 pub fn bzip2() -> CategorizerConfig {
     CategorizerConfig {

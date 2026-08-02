@@ -14,9 +14,6 @@
 //! for the rationale (FLAC saves 83% on PCM audio vs ~30% for
 //! general codecs).
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use std::path::Path;
 
 use super::{Categorization, FileCategorizer};
@@ -98,7 +95,7 @@ impl FileCategorizer for PcmAudioCategorizer {
 }
 
 /// Encode omnizip-flac's `PcmParams` into the compact 6-byte prefix
-/// the LimniFS drop record expects.
+/// the `LimniFS` drop record expects.
 fn encode_pcm_params(p: omnizip_flac::PcmParams) -> [u8; 6] {
     let mut out = [0u8; 6];
     out[0..4].copy_from_slice(&p.sample_rate.to_le_bytes());
@@ -112,8 +109,9 @@ fn encode_pcm_params(p: omnizip_flac::PcmParams) -> [u8; 6] {
 }
 
 /// Parse a WAV (RIFF/WAVE) header. Returns the PCM parameters if
-/// the file is a vanilla PCM WAV (format tag 1 = WAVE_FORMAT_PCM).
+/// the file is a vanilla PCM WAV (format tag 1 = `WAVE_FORMAT_PCM`).
 #[must_use]
+#[allow(dead_code)]
 fn parse_wav(data: &[u8]) -> Option<PcmParams> {
     // RIFF header: "RIFF" + u32 LE size + "WAVE"
     if data.len() < 12 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
@@ -158,6 +156,7 @@ fn parse_wav(data: &[u8]) -> Option<PcmParams> {
 
 /// Parse an AIFF (FORM/AIFF) header. Returns the PCM parameters.
 #[must_use]
+#[allow(dead_code)]
 fn parse_aiff(data: &[u8]) -> Option<PcmParams> {
     // AIFF header: "FORM" + u32 BE size + "AIFF"
     if data.len() < 12 || &data[0..4] != b"FORM" || &data[8..12] != b"AIFF" {
@@ -251,7 +250,9 @@ mod tests {
         wav.extend_from_slice(&1u16.to_le_bytes()); // tag = PCM
         wav.extend_from_slice(&[channels, 0]);
         wav.extend_from_slice(&sample_rate.to_le_bytes());
-        wav.extend_from_slice(&(sample_rate * channels as u32 * bits as u32 / 8).to_le_bytes());
+        wav.extend_from_slice(
+            &(sample_rate * u32::from(channels) * u32::from(bits) / 8).to_le_bytes(),
+        );
         wav.extend_from_slice(&[(channels * bits / 8), 0]); // block align
         wav.extend_from_slice(&[bits, 0]);
         // data chunk (empty)

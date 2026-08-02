@@ -1,4 +1,4 @@
-//! PPMd codec (id 0x0C): Prediction by Partial Matching.
+//! `PPMd` codec (id 0x0C): Prediction by Partial Matching.
 //!
 //! Wraps `omnizip-ppmd` 0.11. Uses an adaptive context model with
 //! the ZPAQ arithmetic coder. Validated ratios: 2.28% on repetitive
@@ -6,9 +6,6 @@
 //!
 //! Clean-room implementation from Shkarin's DCC 2001 paper.
 //! No LGPL code in the source tree.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use crate::codec::Codec;
 use crate::codec::CODEC_PPMD;

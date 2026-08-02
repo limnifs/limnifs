@@ -1,9 +1,6 @@
 //! Chunking config manifest section.
 //!
-//! Records the FastCDC parameters used at write time.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
+//! Records the `FastCDC` parameters used at write time.
 
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;

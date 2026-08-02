@@ -5,9 +5,6 @@
 //! the parent's filesystem tree into this image's tree. Absent for
 //! non-delta images.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 use limnifs_format::ManifestRoot;

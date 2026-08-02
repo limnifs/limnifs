@@ -26,9 +26,6 @@
 //! Two inodes with the same content but different inode numbers are
 //! NOT considered different (they map to the same bytes on disk).
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use std::collections::BTreeMap;
 use std::path::Path;
 

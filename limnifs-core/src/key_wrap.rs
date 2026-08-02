@@ -41,8 +41,6 @@
 //! See task `05-key-wrap-hpke.md`.
 
 #![cfg(feature = "key-wrap")]
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use hkdf::Hkdf;
 use sha2::Sha256;

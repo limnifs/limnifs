@@ -32,9 +32,6 @@
 //!
 //! See task `07-ec-repair.md`.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::reed_solomon::{self, RsError};
 
 /// A slab with some shards possibly missing.

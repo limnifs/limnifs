@@ -13,8 +13,6 @@
 //! allocation does not change; the wire format is stable from day
 //! one.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use crate::codec::Codec;
 use crate::error::CoreError;

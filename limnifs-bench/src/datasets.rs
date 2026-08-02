@@ -345,7 +345,7 @@ fn generate_synthetic(name: &str, dir: &Path) -> std::io::Result<()> {
             f.write_all(&1u16.to_le_bytes())?; // PCM
             f.write_all(&[channels, 0])?;
             f.write_all(&sample_rate.to_le_bytes())?;
-            f.write_all(&(sample_rate * channels as u32 * bits as u32 / 8).to_le_bytes())?;
+            f.write_all(&(sample_rate * u32::from(channels) * u32::from(bits) / 8).to_le_bytes())?;
             f.write_all(&[(channels * bits / 8), 0])?;
             f.write_all(&[bits, 0])?;
             f.write_all(b"data")?;
@@ -358,7 +358,7 @@ fn generate_synthetic(name: &str, dir: &Path) -> std::io::Result<()> {
             while written < data_size {
                 let chunk_samples = (buf.len() / 2).min(total_samples - written / 2);
                 for i in 0..chunk_samples {
-                    let t = (idx + i as u64) as f64 / sample_rate as f64;
+                    let t = (idx + i as u64) as f64 / f64::from(sample_rate);
                     let val = (t * 2.0 * std::f64::consts::PI * 440.0).sin() * 0.8 * 26000.0;
                     let sample = val as i16;
                     let off = i * 2;

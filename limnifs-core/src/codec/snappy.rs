@@ -9,9 +9,6 @@
 //! workspace — the integration pattern for future codecs (LZMA, ZSTD)
 //! once their omnizip-rs ports are complete.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::Codec;
 use crate::error::CoreError;
 use omnizip_codecs::Codec as OmnizipCodec;

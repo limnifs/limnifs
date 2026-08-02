@@ -16,9 +16,6 @@
 //! | Tag | 16 bytes (appended to ciphertext) |
 //! | AAD | optional, authenticated but not encrypted |
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::aead::{lookup, AEAD_PLAINTEXT, AEAD_XCHACHA20_POLY1305};
 use crate::error::CoreError;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};

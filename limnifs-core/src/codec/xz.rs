@@ -6,9 +6,6 @@
 //! output is smaller than the input on typical source-code/text
 //! payloads. Round-trips through `xz_decompress`.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::Codec;
 use crate::error::CoreError;
 

@@ -1,18 +1,16 @@
 //! ZSTD dictionary codec operations.
 //!
-//! Wraps `omnizip-zstd`'s dictionary APIs for LimniFS's two-pass
+//! Wraps `omnizip-zstd`'s dictionary APIs for `LimniFS`'s two-pass
 //! writer pipeline and dict-aware reader.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use crate::error::CoreError;
 
 /// Train a ZSTD dictionary from plaintext samples.
 ///
 /// Returns the trained dictionary content bytes (the raw dict data,
-/// not the serialized ZstdDictionary container).
+/// not the serialized `ZstdDictionary` container).
 #[must_use]
+#[allow(dead_code)]
 pub fn train_dictionary(samples: &[&[u8]], target_size: usize) -> Vec<u8> {
     omnizip_zstd::train_dictionary(samples, target_size)
 }
@@ -21,6 +19,7 @@ pub fn train_dictionary(samples: &[&[u8]], target_size: usize) -> Vec<u8> {
 ///
 /// # Errors
 /// Returns [`CoreError::Corrupt`] on compression failure.
+#[allow(dead_code)]
 pub fn compress_with_dict(plaintext: &[u8], dict_bytes: &[u8]) -> Result<Vec<u8>, CoreError> {
     let dict = omnizip_zstd::ZstdDictionary::from_raw(0, dict_bytes);
     omnizip_zstd::compress_with_dict(plaintext, omnizip_zstd::ZstdLevel::Default, &dict).map_err(
@@ -34,6 +33,7 @@ pub fn compress_with_dict(plaintext: &[u8], dict_bytes: &[u8]) -> Result<Vec<u8>
 ///
 /// # Errors
 /// Returns [`CoreError::Corrupt`] on decompression failure.
+#[allow(dead_code)]
 pub fn decompress_with_dict(
     compressed: &[u8],
     expected_len: u32,

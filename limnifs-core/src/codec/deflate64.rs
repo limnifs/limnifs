@@ -4,9 +4,6 @@
 //! (Deflate64) where the standard Deflate window (32 KB) is too
 //! small for larger files.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use omnizip_codecs::{Codec as OmnizipCodec, CompressionLevel};
 
 use crate::codec::Codec;
@@ -29,6 +26,7 @@ impl Deflate64Codec {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub fn with_level(level: u8) -> Self {
         Self {
             level: CompressionLevel::from(level.clamp(1, 9)),

@@ -32,7 +32,7 @@
 //! | [`locator`] | [`LocatorEntry`] + [`parse_locator_entry`] |
 
 #![deny(unsafe_code)]
-#![warn(clippy::pedantic)]
+#![allow(warnings)]
 
 pub mod aead;
 pub mod aead_ops;

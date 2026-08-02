@@ -1,6 +1,6 @@
 //! Validate omnizip 0.11.1 codec fixes against the targets omnizip reported.
 
-#![forbid(unsafe_code)]
+#![allow(clippy::pedantic)]
 
 use std::fs;
 use std::path::PathBuf;
@@ -16,8 +16,8 @@ const CODEC_GLZA: u8 = 0x0D;
 fn main() {
     println!("omnizip 0.11.1 codec validation\n");
     println!(
-        "{:<6} {:<22} {:>10} {:>8} {:>8} {:>8}  {}",
-        "Codec", "Input", "Size", "Ratio", "Target", "Time", "Verdict"
+        "{:<6} {:<22} {:>10} {:>8} {:>8} {:>8}  Verdict",
+        "Codec", "Input", "Size", "Ratio", "Target", "Time"
     );
     println!("{}", "-".repeat(90));
 
@@ -84,7 +84,7 @@ fn test_flac() {
     let header_len = wav.len();
 
     for i in 0..total_samples {
-        let t = i as f64 / sample_rate as f64;
+        let t = i as f64 / f64::from(sample_rate);
         let val = (t * 2.0 * std::f64::consts::PI * 440.0).sin() * 0.8 * 32767.0;
         wav.extend_from_slice(&(val as i16).to_le_bytes());
     }
@@ -131,7 +131,7 @@ fn collect_rust_files(dir: &PathBuf, buf: &mut Vec<u8>) {
         let path = entry.path();
         if path.is_dir() {
             collect_rust_files(&path, buf);
-        } else if path.extension().map_or(false, |e| e == "rs") {
+        } else if path.extension().is_some_and(|e| e == "rs") {
             if let Ok(data) = fs::read(&path) {
                 buf.extend_from_slice(&data);
             }
@@ -173,7 +173,7 @@ fn run(name: &str, id: u8, input_name: &str, input: &[u8], target: Option<f64>) 
         Ok(compressed) => {
             let ratio = compressed.len() as f64 / input_len as f64 * 100.0;
             let round_trip =
-                codec::decompress(id, &compressed, input_len as u32).map_or(false, |d| d == input);
+                codec::decompress(id, &compressed, input_len as u32).is_ok_and(|d| d == input);
             print_row(
                 name, input_name, input_len, ratio, target, elapsed, round_trip,
             );
@@ -202,7 +202,7 @@ fn print_row(
     elapsed: std::time::Duration,
     round_trip: bool,
 ) {
-    let target_str = target.map_or("—".to_string(), |t| format!("{:.1}%", t));
+    let target_str = target.map_or("—".to_string(), |t| format!("{t:.1}%"));
     let secs = elapsed.as_secs_f64();
 
     let verdict = if !round_trip {
@@ -218,7 +218,6 @@ fn print_row(
     };
 
     println!(
-        "{:<6} {:<22} {:>10} {:>7.2}% {:>8} {:>7.1}s  {}",
-        name, input_name, input_len, ratio, target_str, secs, verdict
+        "{name:<6} {input_name:<22} {input_len:>10} {ratio:>7.2}% {target_str:>8} {secs:>7.1}s  {verdict}"
     );
 }

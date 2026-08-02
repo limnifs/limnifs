@@ -11,15 +11,12 @@
 //! before it can encode, and our `Codec` trait takes only plaintext
 //! bytes, the wrapper carries a `CodecConfig` baked in at construction
 //! time. The categorizer passes the right config when registering
-//! drops; the registry stores one ricepp codec per (pixel_bits,
-//! byte_order) combination encountered.
+//! drops; the registry stores one ricepp codec per (`pixel_bits`,
+//! `byte_order`) combination encountered.
 //!
 //! For round-trip through the generic registry (no config available),
 //! the default codec uses 16-bit big-endian — matches the FITS
 //! default and works for any input whose byte count is even.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use crate::codec::Codec;
 use crate::codec::CODEC_RICEPP;
@@ -38,7 +35,7 @@ impl RiceppCodec {
         Self { config }
     }
 
-    /// Default config: 16-bit big-endian pixels, block_size = 128.
+    /// Default config: 16-bit big-endian pixels, `block_size` = 128.
     /// Matches the most common FITS image type (BITPIX = 16).
     #[must_use]
     pub fn fits_default() -> Self {
@@ -88,7 +85,7 @@ mod tests {
     fn round_trips_synthetic_pixel_data() {
         // 256 pixels of smoothly-varying 16-bit values — exactly the
         // kind of data Rice++ is designed for.
-        let pixels: Vec<u16> = (0..256).map(|i| (i * 17) & 0xFFFF).collect();
+        let pixels: Vec<u16> = (0..256).map(|i| i * 17).collect();
         let mut bytes = Vec::with_capacity(pixels.len() * 2);
         for p in &pixels {
             bytes.extend_from_slice(&p.to_be_bytes());

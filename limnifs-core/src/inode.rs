@@ -5,9 +5,6 @@
 //! carries POSIX attributes, optional xattrs, and a type-dependent
 //! content handle.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 use limnifs_format::DropId;
@@ -22,7 +19,7 @@ pub const INODE_FLAG_HAS_XATTRS: u8 = 0x02;
 /// Flag: inline data is present (regular files only).
 pub const INODE_FLAG_INLINE_DATA: u8 = 0x04;
 /// Flag bit indicating the inode's inline data is a shared-table
-/// reference (deduplicated). When set alongside INODE_FLAG_INLINE_DATA,
+/// reference (deduplicated). When set alongside `INODE_FLAG_INLINE_DATA`,
 /// the content handle body is a u32 index into the shared inline
 /// table at the end of the metadata blob, not inline bytes.
 pub const INODE_FLAG_SHARED_INLINE: u8 = 0x08;
@@ -56,7 +53,7 @@ pub enum ContentHandle {
     /// Regular file with inline data.
     InlineData(Vec<u8>),
     /// Regular file whose inline data is in the shared inline table
-    /// (deduplicated). The index is resolved to InlineData after
+    /// (deduplicated). The index is resolved to `InlineData` after
     /// the full metadata blob is parsed.
     SharedInline(usize),
     /// Regular file with a slice map.

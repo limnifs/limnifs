@@ -5,9 +5,6 @@
 //! REQUIRED flag fails the read; an unknown optional flag is silently
 //! ignored.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 

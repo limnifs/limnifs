@@ -5,9 +5,6 @@
 //! its own root. The computation is a flat BLAKE3 over a 10-byte
 //! domain separator followed by 10 section hashes (330 bytes total).
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use limnifs_format::ManifestRoot;
 
 /// 10-byte ASCII domain separator prepended to every Merkle root

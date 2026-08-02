@@ -27,9 +27,6 @@
 //!
 //! **100% pure Rust.** No C libraries. Air-gapped safe.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 mod bitshuffle_lz4;
 mod brotli;
 mod bzip2;
@@ -86,7 +83,7 @@ pub const CODEC_FSST_BROTLI: u8 = 0x09;
 pub const CODEC_BLOSC2_SHUFFLE_LZ4: u8 = 0x0A;
 /// Codec id 0x0B: ZPAQ context-mixing archiver.
 pub const CODEC_ZPAQ: u8 = 0x0B;
-/// Codec id 0x0C: PPMd (dormant — raw fallback).
+/// Codec id 0x0C: `PPMd` (dormant — raw fallback).
 pub const CODEC_PPMD: u8 = 0x0C;
 /// Codec id 0x0D: GLZA grammar-based LZ.
 pub const CODEC_GLZA: u8 = 0x0D;
@@ -94,7 +91,7 @@ pub const CODEC_GLZA: u8 = 0x0D;
 pub const CODEC_SHUFFLE_ZSTD: u8 = 0x0E;
 /// Codec id 0x0F: Bitshuffle+LZ4 (BLOSC2 bit-shuffle + LZ4 back-end).
 pub const CODEC_BITSHUFFLE_LZ4: u8 = 0x0F;
-/// Codec id 0x10: BZip2.
+/// Codec id 0x10: `BZip2`.
 pub const CODEC_BZIP2: u8 = 0x10;
 /// Codec id 0x11: Deflate64 (ZIP method 9, 64 KB window).
 pub const CODEC_DEFLATE64: u8 = 0x11;

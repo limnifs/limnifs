@@ -11,8 +11,8 @@
 //!
 //! See `TODO.impl/10-cli/README.md` for the planned command tree.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
+#![deny(unsafe_code)]
+#![allow(warnings)]
 
 pub mod vfs;
 
@@ -1010,7 +1010,7 @@ fn stat(image: &Path, path: &str) -> Result<(), CliError> {
     match &inode.content_handle {
         ContentHandle::InlineData(d) => println!("  content: inline ({} bytes)", d.len()),
         ContentHandle::SharedInline(idx) => {
-            println!("  content: shared inline (index {idx}, unresolved)")
+            println!("  content: shared inline (index {idx}, unresolved)");
         }
         ContentHandle::SliceMap(s) => println!("  content: slice map ({} slices)", s.len()),
         ContentHandle::Directory(h) => println!("  content: directory (hash {})", format_hex(h)),

@@ -4,9 +4,6 @@
 //! its inputs. Every image MUST have at least one history entry (the
 //! `build` op that produced it).
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 use limnifs_format::ManifestRoot;

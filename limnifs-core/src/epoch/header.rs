@@ -1,8 +1,5 @@
 //! Epoch header — the fixed-size prefix of every epoch file.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::epoch::{EpochId, EPOCH_FORMAT_VERSION};
 use crate::error::CoreError;

@@ -3,9 +3,6 @@
 //! Records the file categorizer rules used at write time so the
 //! reader can reconstruct the writer's codec routing decisions.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 
@@ -230,7 +227,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_version() {
-        let mut encoded = vec![0xFF, 0x00, 0x00, 0x00, 0x00];
+        let encoded = vec![0xFF, 0x00, 0x00, 0x00, 0x00];
         let mut cursor = ManifestCursor::new(&encoded);
         assert!(parse_categorization_policy(&mut cursor).is_err());
     }

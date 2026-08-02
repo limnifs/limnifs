@@ -1,6 +1,6 @@
 //! Shuffle+LZ4 composite codec (id 0x0A): for scientific float data.
 //!
-//! Applies byte-shuffle (transpose N items × item_size bytes) before
+//! Applies byte-shuffle (transpose N items × `item_size` bytes) before
 //! LZ4 compression. The shuffle exposes mantissa/exponent correlation
 //! in float arrays that LZ4's match finder can then exploit.
 //!
@@ -10,7 +10,7 @@
 //! ## Wire format
 //!
 //! The shuffle filter is self-describing: its output starts with
-//! `[tag: u8][item_size: u8]` so the decoder recovers the item_size
+//! `[tag: u8][item_size: u8]` so the decoder recovers the `item_size`
 //! without external config. The codec wrapper LZ4-compresses the
 //! shuffled bytes:
 //!
@@ -23,15 +23,12 @@
 //! 1. LZ4 decompress → shuffled bytes (with self-describing prefix).
 //! 2. `ByteShuffle::decode` reads the prefix and unshuffles → original data.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::Codec;
-use crate::codec::{CODEC_BLOSC2_SHUFFLE_LZ4, CODEC_LZ4};
+use crate::codec::CODEC_BLOSC2_SHUFFLE_LZ4;
 use crate::error::CoreError;
 use omnizip_filters::Filter;
 
-/// Shuffle+LZ4 codec. Default item_size = 4 (float32).
+/// Shuffle+LZ4 codec. Default `item_size` = 4 (float32).
 pub struct ShuffleLz4Codec {
     item_size: usize,
 }
@@ -47,14 +44,15 @@ impl ShuffleLz4Codec {
         Self { item_size }
     }
 
-    /// Default: float32 (item_size = 4). Covers most scientific data.
+    /// Default: float32 (`item_size` = 4). Covers most scientific data.
     #[must_use]
     pub fn float32() -> Self {
         Self::new(4)
     }
 
-    /// float64 (item_size = 8). For double-precision scientific data.
+    /// float64 (`item_size` = 8). For double-precision scientific data.
     #[must_use]
+    #[allow(dead_code)]
     pub fn float64() -> Self {
         Self::new(8)
     }

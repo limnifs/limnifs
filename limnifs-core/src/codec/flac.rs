@@ -7,8 +7,8 @@
 //!
 //! ## Parameter passing
 //!
-//! FLAC requires the PCM parameters (sample_rate, channels,
-//! bits_per_sample, endianness) before encoding. Our generic
+//! FLAC requires the PCM parameters (`sample_rate`, channels,
+//! `bits_per_sample`, endianness) before encoding. Our generic
 //! `Codec::compress(plaintext)` trait has no slot for them, so this
 //! wrapper **extracts params from the first bytes of `plaintext`**.
 //! Categorizer-side: when routing a WAV/AIFF file through this codec,
@@ -20,11 +20,8 @@
 //!
 //! Round-trips: this codec's compress output is a self-contained
 //! fLaC stream. `decompress` returns the original PCM samples
-//! (without the WAV/AIFF container). For LimniFS drop records that's
+//! (without the WAV/AIFF container). For `LimniFS` drop records that's
 //! fine — the slice covers the whole file including header.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use crate::codec::Codec;
 use crate::codec::CODEC_FLAC;
@@ -142,7 +139,9 @@ mod tests {
         wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
         wav.extend_from_slice(&[channels, 0]);
         wav.extend_from_slice(&sample_rate.to_le_bytes());
-        wav.extend_from_slice(&(sample_rate * channels as u32 * bits as u32 / 8).to_le_bytes());
+        wav.extend_from_slice(
+            &(sample_rate * u32::from(channels) * u32::from(bits) / 8).to_le_bytes(),
+        );
         wav.extend_from_slice(&[(channels * bits / 8), 0]);
         wav.extend_from_slice(&[bits, 0]);
         wav.extend_from_slice(b"data");
