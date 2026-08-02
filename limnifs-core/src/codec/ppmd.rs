@@ -11,16 +11,22 @@
 #![warn(clippy::pedantic)]
 
 use crate::codec::Codec;
-use crate::error::CoreError;
 use crate::codec::CODEC_PPMD;
+use crate::error::CoreError;
 
 pub struct PpmdCodec;
 
 impl Codec for PpmdCodec {
-    fn id(&self) -> u8 { CODEC_PPMD }
-    fn name(&self) -> &'static str { "ppmd" }
+    fn id(&self) -> u8 {
+        CODEC_PPMD
+    }
+    fn name(&self) -> &'static str {
+        "ppmd"
+    }
 
-    fn min_compress_size(&self) -> usize { 4096 }
+    fn min_compress_size(&self) -> usize {
+        4096
+    }
 
     fn compress(&self, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
         omnizip_ppmd::compress_default(plaintext).map_err(|e| CoreError::Corrupt {

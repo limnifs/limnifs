@@ -30,7 +30,11 @@ impl ShuffleZstdCodec {
     #[must_use]
     pub fn with_item_size(item_size: usize) -> Self {
         Self {
-            item_size: if item_size == 0 { DEFAULT_ITEM_SIZE } else { item_size },
+            item_size: if item_size == 0 {
+                DEFAULT_ITEM_SIZE
+            } else {
+                item_size
+            },
         }
     }
 }
@@ -71,9 +75,9 @@ impl Codec for ShuffleZstdCodec {
                 reason: "shuffle+zstd: input too short for length prefix".into(),
             });
         }
-        let shuffled_len = u32::from_le_bytes([
-            compressed[0], compressed[1], compressed[2], compressed[3],
-        ]) as usize;
+        let shuffled_len =
+            u32::from_le_bytes([compressed[0], compressed[1], compressed[2], compressed[3]])
+                as usize;
         let zstd_bytes = &compressed[4..];
         let shuffled = decompress(CODEC_ZSTD, zstd_bytes, shuffled_len as u32)?;
         let filter = omnizip_filters::shuffle::ByteShuffle::new(self.item_size);

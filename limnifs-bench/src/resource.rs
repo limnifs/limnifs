@@ -56,9 +56,7 @@ impl ResourceSnapshot {
         if rc != 0 {
             return Self::default();
         }
-        let to_secs = |tv: libc::timeval| {
-            tv.tv_sec as f64 + (tv.tv_usec as f64) / 1_000_000.0
-        };
+        let to_secs = |tv: libc::timeval| tv.tv_sec as f64 + (tv.tv_usec as f64) / 1_000_000.0;
 
         #[cfg(target_os = "linux")]
         let rss_bytes = (usage.ru_maxrss as u64).saturating_mul(1024);
@@ -104,9 +102,7 @@ mod tests {
 
     #[test]
     fn capture_around_returns_reasonable_delta() {
-        let (result, before, after) = capture_around(|| {
-            (0..10_000u64).sum::<u64>()
-        });
+        let (result, before, after) = capture_around(|| (0..10_000u64).sum::<u64>());
         assert_eq!(result, 49_995_000);
         assert!(after.user_secs >= before.user_secs);
     }

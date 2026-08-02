@@ -129,20 +129,14 @@ pub fn parse_metadata_reference_with_ceilings(
 ) -> Result<MetadataReference, CoreError> {
     let section_version = cursor.read_u8()?;
     match section_version {
-        METADATA_REFERENCE_SECTION_VERSION => parse_v1(
-            cursor,
-            max_locator_uri_bytes,
-            max_inline_metadata_bytes,
-        ),
-        METADATA_REFERENCE_SECTION_VERSION_2 => parse_v2(
-            cursor,
-            max_locator_uri_bytes,
-            max_inline_metadata_bytes,
-        ),
+        METADATA_REFERENCE_SECTION_VERSION => {
+            parse_v1(cursor, max_locator_uri_bytes, max_inline_metadata_bytes)
+        }
+        METADATA_REFERENCE_SECTION_VERSION_2 => {
+            parse_v2(cursor, max_locator_uri_bytes, max_inline_metadata_bytes)
+        }
         other => Err(CoreError::UnsupportedFeature {
-            feature: format!(
-                "metadata_reference section version {other} (supported: 1, 2)"
-            ),
+            feature: format!("metadata_reference section version {other} (supported: 1, 2)"),
         }),
     }
 }
@@ -243,13 +237,12 @@ fn read_inline_blob(
         return Ok(Some(wire_bytes));
     }
     // Compressed: dispatch to the codec registry.
-    let uncompressed = crate::codec::decompress(codec, &wire_bytes, uncompressed_len).map_err(
-        |e| CoreError::Corrupt {
-            reason: format!(
-                "metadata_reference: codec 0x{codec:02X} decompress failed: {e}"
-            ),
-        },
-    )?;
+    let uncompressed =
+        crate::codec::decompress(codec, &wire_bytes, uncompressed_len).map_err(|e| {
+            CoreError::Corrupt {
+                reason: format!("metadata_reference: codec 0x{codec:02X} decompress failed: {e}"),
+            }
+        })?;
     let got = u32::try_from(uncompressed.len()).unwrap_or(u32::MAX);
     if got != uncompressed_len {
         return Err(CoreError::Corrupt {
@@ -476,9 +469,8 @@ mod tests {
         for uri in locator_uris {
             bytes.extend(make_locator_bytes(uri));
         }
-        let inline_len = inline_data.map_or(0u32, |b| {
-            u32::try_from(b.len()).expect("len fits u32")
-        });
+        let inline_len =
+            inline_data.map_or(0u32, |b| u32::try_from(b.len()).expect("len fits u32"));
         bytes.extend_from_slice(&inline_len.to_le_bytes());
         if let Some(blob) = inline_data {
             bytes.extend(blob);
@@ -547,12 +539,7 @@ mod tests {
 
     #[test]
     fn unknown_section_version_above_2_rejected() {
-        let bytes = make_metadata_reference_bytes(
-            99,
-            [0u8; 32],
-            &[],
-            Some(b"inline blob"),
-        );
+        let bytes = make_metadata_reference_bytes(99, [0u8; 32], &[], Some(b"inline blob"));
         let mut cursor = ManifestCursor::new(&bytes);
         match parse_metadata_reference(&mut cursor) {
             Err(CoreError::UnsupportedFeature { feature }) => {

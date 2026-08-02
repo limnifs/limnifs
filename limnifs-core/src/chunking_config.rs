@@ -18,9 +18,7 @@ pub struct ChunkingConfig {
     pub max_chunk_size: u32,
 }
 
-pub fn parse_chunking_config(
-    cursor: &mut ManifestCursor<'_>,
-) -> Result<ChunkingConfig, CoreError> {
+pub fn parse_chunking_config(cursor: &mut ManifestCursor<'_>) -> Result<ChunkingConfig, CoreError> {
     let section_version = cursor.read_u8()?;
     if section_version != CHUNKING_CONFIG_SECTION_VERSION {
         return Err(CoreError::UnsupportedFeature {

@@ -66,7 +66,9 @@ pub fn parse_dictionary_section(
                 reason: format!("dictionary len {dict_len} exceeds cap {MAX_DICT_SIZE}"),
             });
         }
-        let data = cursor.read_n(usize::try_from(dict_len).unwrap_or(0))?.to_vec();
+        let data = cursor
+            .read_n(usize::try_from(dict_len).unwrap_or(0))?
+            .to_vec();
         dicts.push(Dictionary {
             codec_id,
             class_id,

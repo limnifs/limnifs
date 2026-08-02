@@ -104,9 +104,7 @@ pub const DATASETS: &[Dataset] = &[
     Dataset {
         name: "taxi-csv",
         category: Category::Source,
-        url: Some(
-            "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.csv",
-        ),
+        url: Some("https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.csv"),
         approx_size_mb: 100,
         description: "NYC Taxi & Limousine Commission trip data (CSV, repetitive column headers \
                       + structured numeric data — FSST preprocessor baseline)",
@@ -294,12 +292,12 @@ fn generate_synthetic(name: &str, dir: &Path) -> std::io::Result<()> {
                 let n = bytes.len().min(80);
                 buf[off..off + n].copy_from_slice(&bytes[..n]);
             };
-            copy(&mut header, 0,    "SIMPLE  = T");
-            copy(&mut header, 80,   "BITPIX  = 16");
-            copy(&mut header, 160,  "NAXIS   = 2");
-            copy(&mut header, 240,  "NAXIS1  = 5000");
-            copy(&mut header, 320,  "NAXIS2  = 5000");
-            copy(&mut header, 400,  "END");
+            copy(&mut header, 0, "SIMPLE  = T");
+            copy(&mut header, 80, "BITPIX  = 16");
+            copy(&mut header, 160, "NAXIS   = 2");
+            copy(&mut header, 240, "NAXIS1  = 5000");
+            copy(&mut header, 320, "NAXIS2  = 5000");
+            copy(&mut header, 400, "END");
             f.write_all(&header)?;
             // 25 M pixels of smooth-gradient 16-bit data.
             let mut state: u64 = 0x1234_5678_9ABC_DEF0;

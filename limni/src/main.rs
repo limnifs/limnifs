@@ -501,9 +501,7 @@ fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
         source,
     })?;
 
-    let parent = output
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
+    let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
     let total_slab_bytes: u64 = artifact
         .slabs
         .iter()
@@ -528,7 +526,10 @@ fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
         .sum();
 
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar.locator.strip_prefix("file:").unwrap_or(&sidecar.locator);
+        let name = sidecar
+            .locator
+            .strip_prefix("file:")
+            .unwrap_or(&sidecar.locator);
         let sidecar_path = parent.join(name);
         std::fs::write(&sidecar_path, &sidecar.bytes).map_err(|source| CliError::ReadFailed {
             path: sidecar_path.clone(),
@@ -550,7 +551,11 @@ fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
     );
     println!(
         "  inodes: {}  files: {}  dirs: {}  drops: {}  slabs: {} ({total_slab_bytes} bytes)",
-        artifact.inode_count, artifact.file_count, artifact.dir_count, artifact.drop_count, slab_count,
+        artifact.inode_count,
+        artifact.file_count,
+        artifact.dir_count,
+        artifact.drop_count,
+        slab_count,
     );
     Ok(())
 }
@@ -650,7 +655,10 @@ fn cat(image: &Path, path: &str, offset: Option<u64>, length: Option<u64>) -> Re
             let store = if slab_index.is_empty() {
                 None
             } else {
-                Some(limnifs_core::slab_store::SlabStore::load(image, &slab_index).map_err(map_err)?)
+                Some(
+                    limnifs_core::slab_store::SlabStore::load(image, &slab_index)
+                        .map_err(map_err)?,
+                )
             };
             for slice in slices {
                 let plaintext = store
@@ -1001,7 +1009,9 @@ fn stat(image: &Path, path: &str) -> Result<(), CliError> {
     println!("  nlink:   {}", inode.nlink);
     match &inode.content_handle {
         ContentHandle::InlineData(d) => println!("  content: inline ({} bytes)", d.len()),
-        ContentHandle::SharedInline(idx) => println!("  content: shared inline (index {idx}, unresolved)"),
+        ContentHandle::SharedInline(idx) => {
+            println!("  content: shared inline (index {idx}, unresolved)")
+        }
         ContentHandle::SliceMap(s) => println!("  content: slice map ({} slices)", s.len()),
         ContentHandle::Directory(h) => println!("  content: directory (hash {})", format_hex(h)),
         ContentHandle::Symlink(t) => println!("  content: symlink -> {t:?}"),
@@ -1493,7 +1503,10 @@ fn compact(source: &Path, output: &Path) -> Result<(), CliError> {
         slab_size += slab.bytes.len() as u64;
     }
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar.locator.strip_prefix("file:").unwrap_or(&sidecar.locator);
+        let name = sidecar
+            .locator
+            .strip_prefix("file:")
+            .unwrap_or(&sidecar.locator);
         let sidecar_path = parent.join(name);
         std::fs::write(&sidecar_path, &sidecar.bytes).map_err(|e| CliError::ReadFailed {
             path: sidecar_path.clone(),
@@ -1536,7 +1549,8 @@ fn check_cmd(image: &Path) -> Result<(), CliError> {
         return Ok(());
     }
 
-    let slab_store = limnifs_core::slab_store::SlabStore::load(image, &slab_index).map_err(map_err)?;
+    let slab_store =
+        limnifs_core::slab_store::SlabStore::load(image, &slab_index).map_err(map_err)?;
 
     let mut checked = 0usize;
     let mut passed = 0usize;
@@ -1545,7 +1559,9 @@ fn check_cmd(image: &Path) -> Result<(), CliError> {
     // Iterate every slab in the store, hashing every drop record's
     // plaintext against its declared DropId.
     for ordinal in 0..slab_store.slab_count() {
-        let Some(slab_bytes) = slab_store.slab(ordinal) else { continue };
+        let Some(slab_bytes) = slab_store.slab(ordinal) else {
+            continue;
+        };
         let view = match limnifs_core::parse_slab(slab_bytes) {
             Ok(v) => v,
             Err(e) => {
@@ -1634,11 +1650,11 @@ fn benchmark() -> Result<(), CliError> {
         std::fs::write(&slab_path, &slab.bytes).expect("write slab");
     }
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar.locator.strip_prefix("file:").unwrap_or(&sidecar.locator);
-        let sidecar_path = img
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .join(name);
+        let name = sidecar
+            .locator
+            .strip_prefix("file:")
+            .unwrap_or(&sidecar.locator);
+        let sidecar_path = img.parent().unwrap_or(std::path::Path::new(".")).join(name);
         std::fs::write(&sidecar_path, &sidecar.bytes).expect("write metadata sidecar");
     }
 
@@ -1684,7 +1700,10 @@ fn benchmark() -> Result<(), CliError> {
         let _ = std::fs::remove_file(&slab_path);
     }
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar.locator.strip_prefix("file:").unwrap_or(&sidecar.locator);
+        let name = sidecar
+            .locator
+            .strip_prefix("file:")
+            .unwrap_or(&sidecar.locator);
         let sidecar_path = std::env::temp_dir().join(name);
         let _ = std::fs::remove_file(&sidecar_path);
     }
@@ -1921,12 +1940,15 @@ fn load_image(
     } else {
         // External metadata blob: follow the first file: locator,
         // then decompress if codec != 0.
-        let entry = meta_ref.locators.first().ok_or_else(|| CliError::FormatFailed {
-            path: image.to_path_buf(),
-            source: CoreError::Corrupt {
-                reason: "metadata_reference has neither inline data nor locators".into(),
-            },
-        })?;
+        let entry = meta_ref
+            .locators
+            .first()
+            .ok_or_else(|| CliError::FormatFailed {
+                path: image.to_path_buf(),
+                source: CoreError::Corrupt {
+                    reason: "metadata_reference has neither inline data nor locators".into(),
+                },
+            })?;
         let name = entry.uri.strip_prefix("file:").unwrap_or(&entry.uri);
         let sidecar_path = image.parent().unwrap_or_else(|| Path::new(".")).join(name);
         let wire_bytes = std::fs::read(&sidecar_path).map_err(|source| CliError::ReadFailed {

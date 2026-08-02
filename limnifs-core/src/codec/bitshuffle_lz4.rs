@@ -29,7 +29,11 @@ impl BitshuffleLz4Codec {
     #[must_use]
     pub fn with_item_size(item_size: usize) -> Self {
         Self {
-            item_size: if item_size == 0 { DEFAULT_ITEM_SIZE } else { item_size },
+            item_size: if item_size == 0 {
+                DEFAULT_ITEM_SIZE
+            } else {
+                item_size
+            },
         }
     }
 }
@@ -70,9 +74,9 @@ impl Codec for BitshuffleLz4Codec {
                 reason: "bitshuffle+lz4: input too short for length prefix".into(),
             });
         }
-        let shuffled_len = u32::from_le_bytes([
-            compressed[0], compressed[1], compressed[2], compressed[3],
-        ]) as usize;
+        let shuffled_len =
+            u32::from_le_bytes([compressed[0], compressed[1], compressed[2], compressed[3]])
+                as usize;
         let lz4_bytes = &compressed[4..];
         let shuffled = decompress(CODEC_LZ4, lz4_bytes, shuffled_len as u32)?;
         let filter = omnizip_filters::shuffle::BitShuffle::new(self.item_size);

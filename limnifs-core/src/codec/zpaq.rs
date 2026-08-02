@@ -11,16 +11,22 @@
 #![warn(clippy::pedantic)]
 
 use crate::codec::Codec;
-use crate::error::CoreError;
 use crate::codec::CODEC_ZPAQ;
+use crate::error::CoreError;
 
 pub struct ZpaqCodec;
 
 impl Codec for ZpaqCodec {
-    fn id(&self) -> u8 { CODEC_ZPAQ }
-    fn name(&self) -> &'static str { "zpaq" }
+    fn id(&self) -> u8 {
+        CODEC_ZPAQ
+    }
+    fn name(&self) -> &'static str {
+        "zpaq"
+    }
 
-    fn min_compress_size(&self) -> usize { 4096 }
+    fn min_compress_size(&self) -> usize {
+        4096
+    }
 
     fn compress(&self, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
         Ok(omnizip_zpaq::compress(plaintext))

@@ -24,7 +24,10 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "limnifs-bench", about = "State-of-the-art benchmark suite for LimniFS")]
+#[command(
+    name = "limnifs-bench",
+    about = "State-of-the-art benchmark suite for LimniFS"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -60,7 +63,10 @@ fn main() {
     match cli.command {
         Command::Download { all, datasets } => {
             let names: Vec<String> = if all {
-                datasets::DATASETS.iter().map(|d| d.name.to_string()).collect()
+                datasets::DATASETS
+                    .iter()
+                    .map(|d| d.name.to_string())
+                    .collect()
             } else if let Some(ds) = datasets {
                 ds
             } else {
@@ -72,7 +78,10 @@ fn main() {
             for name in &names {
                 if let Some(ds) = datasets::find(name) {
                     let cat = category_str(ds.category);
-                    println!("[{cat}] {} (~{} MB) — {}", ds.name, ds.approx_size_mb, ds.description);
+                    println!(
+                        "[{cat}] {} (~{} MB) — {}",
+                        ds.name, ds.approx_size_mb, ds.description
+                    );
                     match datasets::ensure(ds, &paths.cache_dir) {
                         Ok(path) => println!("  Ready at {}", path.display()),
                         Err(e) => eprintln!("  Failed: {e}"),
@@ -82,8 +91,16 @@ fn main() {
                 }
             }
         }
-        Command::Run { all, quick, category, datasets: ds_names, iterations } => {
-            run_benchmarks(&workspace, &paths, all, quick, category, ds_names, iterations);
+        Command::Run {
+            all,
+            quick,
+            category,
+            datasets: ds_names,
+            iterations,
+        } => {
+            run_benchmarks(
+                &workspace, &paths, all, quick, category, ds_names, iterations,
+            );
         }
     }
 }
@@ -100,7 +117,10 @@ fn run_benchmarks(
     let iters = if quick { 1 } else { iterations };
 
     let selected: Vec<&datasets::Dataset> = if quick {
-        datasets::DATASETS.iter().filter(|d| d.category == datasets::Category::Synthetic).collect()
+        datasets::DATASETS
+            .iter()
+            .filter(|d| d.category == datasets::Category::Synthetic)
+            .collect()
     } else if all {
         datasets::DATASETS.iter().collect()
     } else if let Some(cat) = &category {
@@ -109,9 +129,15 @@ fn run_benchmarks(
             "ai-model" => datasets::Category::AiModel,
             "binary" => datasets::Category::Binary,
             "synthetic" => datasets::Category::Synthetic,
-            other => { eprintln!("Unknown category: {other}"); std::process::exit(1); }
+            other => {
+                eprintln!("Unknown category: {other}");
+                std::process::exit(1);
+            }
         };
-        datasets::DATASETS.iter().filter(|d| d.category == cat).collect()
+        datasets::DATASETS
+            .iter()
+            .filter(|d| d.category == cat)
+            .collect()
     } else if let Some(names) = ds_names {
         names.iter().filter_map(|n| datasets::find(n)).collect()
     } else {
@@ -147,7 +173,11 @@ fn run_benchmarks(
         let source_dir = find_source_dir(&source);
         let input_size = datasets::dir_size(&source_dir);
         let file_count = datasets::file_count(&source_dir);
-        println!("  Input: {:.1} MB, {} files", input_size as f64 / 1_048_576.0, file_count);
+        println!(
+            "  Input: {:.1} MB, {} files",
+            input_size as f64 / 1_048_576.0,
+            file_count
+        );
 
         let ds_work = paths.work_dir.join(ds.name);
         std::fs::create_dir_all(&ds_work).expect("create work dir");
@@ -155,8 +185,13 @@ fn run_benchmarks(
         // LimniFS create (library call)
         print!("  [LimniFS] create… ");
         let results = runners::limnifs_create(&source_dir, &ds_work, iters);
-        if let Some(s) = metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size) {
-            println!("{:.3}s, {:.1} MB, {:.1}%", s.median_seconds, s.output_size_mb, s.ratio_percent);
+        if let Some(s) =
+            metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size)
+        {
+            println!(
+                "{:.3}s, {:.1} MB, {:.1}%",
+                s.median_seconds, s.output_size_mb, s.ratio_percent
+            );
             all_summaries.push(s);
         } else {
             println!("FAILED");
@@ -167,14 +202,18 @@ fn run_benchmarks(
         if limni_image.exists() {
             print!("  [LimniFS] verify… ");
             let results = runners::limnifs_verify(&limni_image, iters);
-            if let Some(s) = metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size) {
+            if let Some(s) =
+                metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size)
+            {
                 println!("{:.3}s", s.median_seconds);
                 all_summaries.push(s);
             }
 
             print!("  [LimniFS] extract… ");
             let results = runners::limnifs_extract(&limni_image, &ds_work, iters, input_size);
-            if let Some(s) = metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size) {
+            if let Some(s) =
+                metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size)
+            {
                 println!("{:.3}s ({:.0} MB/s)", s.median_seconds, s.throughput_mbps);
                 all_summaries.push(s);
             }
@@ -184,20 +223,30 @@ fn run_benchmarks(
         if which("mkdwarfs") {
             print!("  [DwarFS] create… ");
             let results = runners::dwarfs_create(&source_dir, &ds_work, iters);
-            if let Some(s) = metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size) {
+            if let Some(s) =
+                metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size)
+            {
                 println!("{:.3}s, {:.1} MB", s.median_seconds, s.output_size_mb);
                 all_summaries.push(s);
 
                 let dwarfs_image = ds_work.join("test.dwarfs");
                 if dwarfs_image.exists() && which("dwarfsextract") {
                     print!("  [DwarFS] extract… ");
-                    let results = runners::dwarfs_extract(&dwarfs_image, &ds_work, iters, input_size);
-                    if let Some(s) = metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size) {
+                    let results =
+                        runners::dwarfs_extract(&dwarfs_image, &ds_work, iters, input_size);
+                    if let Some(s) = metrics::BenchmarkSummary::from_results(
+                        ds.name,
+                        ds.category,
+                        &results,
+                        input_size,
+                    ) {
                         println!("{:.3}s", s.median_seconds);
                         all_summaries.push(s);
                     }
                 }
-            } else { println!("FAILED"); }
+            } else {
+                println!("FAILED");
+            }
         } else {
             println!("  [DwarFS] not installed — skipping");
         }
@@ -206,20 +255,30 @@ fn run_benchmarks(
         if which("mksquashfs") {
             print!("  [SquashFS] create… ");
             let results = runners::squashfs_create(&source_dir, &ds_work, iters);
-            if let Some(s) = metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size) {
+            if let Some(s) =
+                metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size)
+            {
                 println!("{:.3}s, {:.1} MB", s.median_seconds, s.output_size_mb);
                 all_summaries.push(s);
 
                 let sqfs_image = ds_work.join("squashfs.squashfs");
                 if sqfs_image.exists() && which("unsquashfs") {
                     print!("  [SquashFS] extract… ");
-                    let results = runners::squashfs_extract(&sqfs_image, &ds_work, iters, input_size);
-                    if let Some(s) = metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size) {
+                    let results =
+                        runners::squashfs_extract(&sqfs_image, &ds_work, iters, input_size);
+                    if let Some(s) = metrics::BenchmarkSummary::from_results(
+                        ds.name,
+                        ds.category,
+                        &results,
+                        input_size,
+                    ) {
                         println!("{:.3}s", s.median_seconds);
                         all_summaries.push(s);
                     }
                 }
-            } else { println!("FAILED"); }
+            } else {
+                println!("FAILED");
+            }
         } else {
             println!("  [SquashFS] not installed — skipping");
         }
@@ -228,20 +287,30 @@ fn run_benchmarks(
         if which("tar") {
             print!("  [tar+zstd] create… ");
             let results = runners::tar_zstd_create(&source_dir, &ds_work, iters);
-            if let Some(s) = metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size) {
+            if let Some(s) =
+                metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size)
+            {
                 println!("{:.3}s, {:.1} MB", s.median_seconds, s.output_size_mb);
                 all_summaries.push(s);
 
                 let tar_archive = ds_work.join("test.tar.zst");
                 if tar_archive.exists() {
                     print!("  [tar+zstd] extract… ");
-                    let results = runners::tar_zstd_extract(&tar_archive, &ds_work, iters, input_size);
-                    if let Some(s) = metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size) {
+                    let results =
+                        runners::tar_zstd_extract(&tar_archive, &ds_work, iters, input_size);
+                    if let Some(s) = metrics::BenchmarkSummary::from_results(
+                        ds.name,
+                        ds.category,
+                        &results,
+                        input_size,
+                    ) {
                         println!("{:.3}s", s.median_seconds);
                         all_summaries.push(s);
                     }
                 }
-            } else { println!("FAILED"); }
+            } else {
+                println!("FAILED");
+            }
         }
 
         // Single-file operations: extract_one, locate_one, read_random.
@@ -262,18 +331,26 @@ fn run_benchmarks(
             let dwarfs_img = ds_work.join("test.dwarfs");
             let squashfs_img = ds_work.join("squashfs.squashfs");
             let tar_img = ds_work.join("test.tar.zst");
-            if limnifs_img.exists() { images.insert("limnifs", limnifs_img.clone()); }
-            if dwarfs_img.exists() { images.insert("dwarfs", dwarfs_img); }
-            if squashfs_img.exists() { images.insert("squashfs", squashfs_img); }
-            if tar_img.exists() { images.insert("tar+zstd", tar_img); }
+            if limnifs_img.exists() {
+                images.insert("limnifs", limnifs_img.clone());
+            }
+            if dwarfs_img.exists() {
+                images.insert("dwarfs", dwarfs_img);
+            }
+            if squashfs_img.exists() {
+                images.insert("squashfs", squashfs_img);
+            }
+            if tar_img.exists() {
+                images.insert("tar+zstd", tar_img);
+            }
 
             let formats_present: Vec<&str> = images.keys().copied().collect();
             if !formats_present.is_empty() {
                 print!("  [all] extract_one ({target_str})… ");
-                let results = runners::extract_one(
-                    &images, &target_str, &ds_work, iters, &formats_present,
-                );
-                let limnifs_med = results.iter()
+                let results =
+                    runners::extract_one(&images, &target_str, &ds_work, iters, &formats_present);
+                let limnifs_med = results
+                    .iter()
                     .filter(|r| r.success && r.format == "limnifs")
                     .map(|r| r.elapsed_secs)
                     .collect::<Vec<_>>();
@@ -285,7 +362,10 @@ fn run_benchmarks(
                 for r in &results {
                     if r.success {
                         let summary = metrics::BenchmarkSummary::from_results(
-                            ds.name, ds.category, std::slice::from_ref(r), 0,
+                            ds.name,
+                            ds.category,
+                            std::slice::from_ref(r),
+                            0,
                         );
                         if let Some(s) = summary {
                             all_summaries.push(s);
@@ -304,10 +384,9 @@ fn run_benchmarks(
             }
             if !locate_formats.is_empty() {
                 print!("  [limnifs,tar] locate_one ({target_str})… ");
-                let results = runners::locate_one(
-                    &images, &target_str, iters, &locate_formats,
-                );
-                let limnifs_med = results.iter()
+                let results = runners::locate_one(&images, &target_str, iters, &locate_formats);
+                let limnifs_med = results
+                    .iter()
                     .filter(|r| r.success && r.format == "limnifs")
                     .map(|r| r.elapsed_secs)
                     .collect::<Vec<_>>();
@@ -319,7 +398,10 @@ fn run_benchmarks(
                 for r in &results {
                     if r.success {
                         let summary = metrics::BenchmarkSummary::from_results(
-                            ds.name, ds.category, std::slice::from_ref(r), 0,
+                            ds.name,
+                            ds.category,
+                            std::slice::from_ref(r),
+                            0,
                         );
                         if let Some(s) = summary {
                             all_summaries.push(s);
@@ -333,10 +415,13 @@ fn run_benchmarks(
             // latency measurement without taking minutes.
             if images.contains_key("limnifs") {
                 print!("  [limnifs] read_random (100 × 4 KiB)… ");
-                let results = runners::read_random(
-                    &limnifs_img, &target_str, file_size, 4096, 100, iters,
-                );
-                let med = results.iter().filter(|r| r.success).map(|r| r.elapsed_secs).collect::<Vec<_>>();
+                let results =
+                    runners::read_random(&limnifs_img, &target_str, file_size, 4096, 100, iters);
+                let med = results
+                    .iter()
+                    .filter(|r| r.success)
+                    .map(|r| r.elapsed_secs)
+                    .collect::<Vec<_>>();
                 if let Some(m) = median_of(&med) {
                     let per_call_ms = m * 1000.0 / 100.0;
                     println!("{:.3} ms/call ({:.3}s total)", per_call_ms, m);
@@ -344,7 +429,10 @@ fn run_benchmarks(
                     println!("FAILED");
                 }
                 if let Some(s) = metrics::BenchmarkSummary::from_results(
-                    ds.name, ds.category, &results, 4096 * 100,
+                    ds.name,
+                    ds.category,
+                    &results,
+                    4096 * 100,
                 ) {
                     all_summaries.push(s);
                 }

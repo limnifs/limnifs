@@ -55,10 +55,11 @@ impl PcmParams {
         let mut out = [0u8; 6];
         out[0..4].copy_from_slice(&self.sample_rate.to_le_bytes());
         out[4] = self.channels;
-        out[5] = (self.bits_per_sample << 1) | match self.endianness {
-            Endianness::Little => 0,
-            Endianness::Big => 1,
-        };
+        out[5] = (self.bits_per_sample << 1)
+            | match self.endianness {
+                Endianness::Little => 0,
+                Endianness::Big => 1,
+            };
         out
     }
 }
@@ -102,10 +103,11 @@ fn encode_pcm_params(p: omnizip_flac::PcmParams) -> [u8; 6] {
     let mut out = [0u8; 6];
     out[0..4].copy_from_slice(&p.sample_rate.to_le_bytes());
     out[4] = p.channels;
-    out[5] = (p.bits_per_sample << 1) | match p.endianness {
-        omnizip_flac::Endianness::LittleEndian => 0,
-        omnizip_flac::Endianness::BigEndian => 1,
-    };
+    out[5] = (p.bits_per_sample << 1)
+        | match p.endianness {
+            omnizip_flac::Endianness::LittleEndian => 0,
+            omnizip_flac::Endianness::BigEndian => 1,
+        };
     out
 }
 
@@ -121,12 +123,9 @@ fn parse_wav(data: &[u8]) -> Option<PcmParams> {
     let mut off = 12;
     while off + 8 <= data.len() {
         let chunk_id = &data[off..off + 4];
-        let chunk_size = u32::from_le_bytes([
-            data[off + 4],
-            data[off + 5],
-            data[off + 6],
-            data[off + 7],
-        ]) as usize;
+        let chunk_size =
+            u32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]])
+                as usize;
         let body_off = off + 8;
         if body_off + chunk_size > data.len() {
             return None;
@@ -167,12 +166,9 @@ fn parse_aiff(data: &[u8]) -> Option<PcmParams> {
     let mut off = 12;
     while off + 8 <= data.len() {
         let chunk_id = &data[off..off + 4];
-        let chunk_size = u32::from_be_bytes([
-            data[off + 4],
-            data[off + 5],
-            data[off + 6],
-            data[off + 7],
-        ]) as usize;
+        let chunk_size =
+            u32::from_be_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]])
+                as usize;
         let body_off = off + 8;
         if body_off + chunk_size > data.len() {
             return None;

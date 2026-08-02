@@ -16,16 +16,22 @@
 #![warn(clippy::pedantic)]
 
 use crate::codec::Codec;
-use crate::error::CoreError;
 use crate::codec::CODEC_GLZA;
+use crate::error::CoreError;
 
 pub struct GlzaCodec;
 
 impl Codec for GlzaCodec {
-    fn id(&self) -> u8 { CODEC_GLZA }
-    fn name(&self) -> &'static str { "glza" }
+    fn id(&self) -> u8 {
+        CODEC_GLZA
+    }
+    fn name(&self) -> &'static str {
+        "glza"
+    }
 
-    fn min_compress_size(&self) -> usize { 4096 }
+    fn min_compress_size(&self) -> usize {
+        4096
+    }
 
     fn compress(&self, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
         omnizip_glza::compress(plaintext).map_err(|e| CoreError::Corrupt {

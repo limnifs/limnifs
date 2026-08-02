@@ -28,17 +28,35 @@ fn main() {
     let dna = make_dna_sequence();
 
     // PPMd: 4.2% repetitive, 19% diverse source
-    run("PPMd", CODEC_PPMD, "repetitive text", &repetitive, Some(4.2));
+    run(
+        "PPMd",
+        CODEC_PPMD,
+        "repetitive text",
+        &repetitive,
+        Some(4.2),
+    );
     run("PPMd", CODEC_PPMD, "source code", &source, Some(19.0));
 
     // ZPAQ Phase 2: 3.6% repetitive, 38% source code
-    run("ZPAQ", CODEC_ZPAQ, "repetitive text", &repetitive, Some(3.6));
+    run(
+        "ZPAQ",
+        CODEC_ZPAQ,
+        "repetitive text",
+        &repetitive,
+        Some(3.6),
+    );
     run("ZPAQ", CODEC_ZPAQ, "source code", &source, Some(38.0));
 
     // GLZA Phase 2: 8.4% repetitive, DNA 7.5%
     // GLZA is O(n²) on non-repetitive data — only test target workloads.
     let glza_rep: Vec<u8> = repetitive.iter().take(500_000).copied().collect();
-    run("GLZA", CODEC_GLZA, "repetitive (500K)", &glza_rep, Some(8.4));
+    run(
+        "GLZA",
+        CODEC_GLZA,
+        "repetitive (500K)",
+        &glza_rep,
+        Some(8.4),
+    );
     run("GLZA", CODEC_GLZA, "DNA (2M)", &dna, Some(7.5));
 
     println!("\nDone.");
@@ -82,7 +100,15 @@ fn test_flac() {
     let decompressed = codec::decompress(CODEC_FLAC, &compressed, 0).expect("flac decompress");
     let rt_ok = decompressed == pcm_payload;
 
-    print_row("FLAC", "12.5M sine WAV", wav.len(), ratio, Some(29.0), elapsed, rt_ok);
+    print_row(
+        "FLAC",
+        "12.5M sine WAV",
+        wav.len(),
+        ratio,
+        Some(29.0),
+        elapsed,
+        rt_ok,
+    );
 }
 
 fn make_repetitive_text() -> Vec<u8> {
@@ -123,7 +149,15 @@ fn make_dna_sequence() -> Vec<u8> {
         state ^= state >> 7;
         state ^= state << 17;
         let idx = (state % 100) as usize;
-        let base = if idx < 40 { 0 } else if idx < 70 { 3 } else if idx < 90 { 1 } else { 2 };
+        let base = if idx < 40 {
+            0
+        } else if idx < 70 {
+            3
+        } else if idx < 90 {
+            1
+        } else {
+            2
+        };
         dna.push(bases[base]);
     }
     dna
@@ -138,14 +172,22 @@ fn run(name: &str, id: u8, input_name: &str, input: &[u8], target: Option<f64>) 
     match result {
         Ok(compressed) => {
             let ratio = compressed.len() as f64 / input_len as f64 * 100.0;
-            let round_trip = codec::decompress(id, &compressed, input_len as u32)
-                .map_or(false, |d| d == input);
-            print_row(name, input_name, input_len, ratio, target, elapsed, round_trip);
+            let round_trip =
+                codec::decompress(id, &compressed, input_len as u32).map_or(false, |d| d == input);
+            print_row(
+                name, input_name, input_len, ratio, target, elapsed, round_trip,
+            );
         }
         Err(e) => {
             println!(
                 "{:<6} {:<22} {:>10} {:>8} {:>8} {:>7.1}s  ERROR: {:?}",
-                name, input_name, input_len, "ERR", "", elapsed.as_secs_f64(), e
+                name,
+                input_name,
+                input_len,
+                "ERR",
+                "",
+                elapsed.as_secs_f64(),
+                e
             );
         }
     }
@@ -166,7 +208,11 @@ fn print_row(
     let verdict = if !round_trip {
         "RT-FAIL"
     } else if let Some(t) = target {
-        if ratio <= t * 1.5 { "PASS" } else { "MISS" }
+        if ratio <= t * 1.5 {
+            "PASS"
+        } else {
+            "MISS"
+        }
     } else {
         "OK"
     };

@@ -30,9 +30,9 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::pedantic)]
 
+mod bitshuffle_lz4;
 mod brotli;
 mod bzip2;
-mod bitshuffle_lz4;
 mod deflate;
 mod deflate64;
 mod flac;
@@ -354,10 +354,7 @@ pub fn compress_brotli(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
 /// # Errors
 ///
 /// Returns [`CoreError::Corrupt`] if the Brotli encoder fails.
-pub fn compress_brotli_with_quality(
-    plaintext: &[u8],
-    quality: i32,
-) -> Result<Vec<u8>, CoreError> {
+pub fn compress_brotli_with_quality(plaintext: &[u8], quality: i32) -> Result<Vec<u8>, CoreError> {
     brotli::compress(plaintext, quality)
 }
 
@@ -396,14 +393,13 @@ mod tests {
         // fix. omnizip 0.5 produced identical output for all 5 levels;
         // 0.7 must differentiate.
         let input: Vec<u8> = b"The quick brown fox jumps over the lazy dog. ".repeat(2000);
-        let l1 = omnizip_zstd::compress(&input, omnizip_zstd::ZstdLevel::Fastest)
-            .expect("zstd L1");
-        let l6 = omnizip_zstd::compress(&input, omnizip_zstd::ZstdLevel::Default)
-            .expect("zstd L6");
+        let l1 = omnizip_zstd::compress(&input, omnizip_zstd::ZstdLevel::Fastest).expect("zstd L1");
+        let l6 = omnizip_zstd::compress(&input, omnizip_zstd::ZstdLevel::Default).expect("zstd L6");
         assert!(
             l6.len() < l1.len(),
             "ZSTD L6 ({}) should beat L1 ({}); level differentiation broken",
-            l6.len(), l1.len()
+            l6.len(),
+            l1.len()
         );
     }
 
@@ -415,14 +411,16 @@ mod tests {
         // real-world text round-trips through the new encoder.
         let input: Vec<u8> = b"The quick brown fox jumps over the lazy dog. \
                                Lorem ipsum dolor sit amet. \
-                               SVG is a vector image format.".repeat(500);
+                               SVG is a vector image format."
+            .repeat(500);
         let xz = omnizip_lzma::xz_compress(&input).expect("xz encode");
         let recovered = omnizip_lzma::xz_container::xz_decompress(&xz).expect("xz decode");
         assert_eq!(recovered, input);
         assert!(
             xz.len() < input.len(),
             "LZMA should compress real-world text; got {} vs {}",
-            xz.len(), input.len()
+            xz.len(),
+            input.len()
         );
     }
 
@@ -524,8 +522,8 @@ mod tests {
         // through the LZMA2 decoder.
         let plaintext = b"xz round-trip data";
         let compressed = compress(CODEC_XZ, plaintext).expect("xz encode succeeds");
-        let decompressed = decompress(CODEC_XZ, &compressed, plaintext.len() as u32)
-            .expect("xz decode succeeds");
+        let decompressed =
+            decompress(CODEC_XZ, &compressed, plaintext.len() as u32).expect("xz decode succeeds");
         assert_eq!(decompressed.as_slice(), plaintext);
     }
 

@@ -110,7 +110,10 @@ impl Ocb3Aes256 {
         for i in 0..full_blocks {
             let block_start = i * BLOCK_SIZE;
             xor_block(&mut offset, &self.ll[ntz(i + 1)]);
-            xor_block_slice(&mut checksum, &buffer[block_start..block_start + BLOCK_SIZE]);
+            xor_block_slice(
+                &mut checksum,
+                &buffer[block_start..block_start + BLOCK_SIZE],
+            );
             xor_block_slice(&mut buffer[block_start..block_start + BLOCK_SIZE], &offset);
             self.encrypt_block(&mut buffer[block_start..block_start + BLOCK_SIZE]);
             xor_block_slice(&mut buffer[block_start..block_start + BLOCK_SIZE], &offset);
@@ -167,7 +170,10 @@ impl Ocb3Aes256 {
             xor_block_slice(&mut buffer[block_start..block_start + BLOCK_SIZE], &offset);
             self.decrypt_block(&mut buffer[block_start..block_start + BLOCK_SIZE]);
             xor_block_slice(&mut buffer[block_start..block_start + BLOCK_SIZE], &offset);
-            xor_block_slice(&mut checksum, &buffer[block_start..block_start + BLOCK_SIZE]);
+            xor_block_slice(
+                &mut checksum,
+                &buffer[block_start..block_start + BLOCK_SIZE],
+            );
         }
 
         // Decrypt final partial block.
@@ -430,7 +436,9 @@ mod tests {
         let mut buffer = b"sensitive data here".to_vec();
         let tag = ocb.encrypt_in_place_detached(&NONCE, b"", &mut buffer);
         buffer[0] ^= 0xFF;
-        assert!(ocb.decrypt_in_place_detached(&NONCE, b"", &mut buffer, &tag).is_err());
+        assert!(ocb
+            .decrypt_in_place_detached(&NONCE, b"", &mut buffer, &tag)
+            .is_err());
     }
 
     #[test]
@@ -439,7 +447,9 @@ mod tests {
         let mut buffer = b"sensitive data here".to_vec();
         let mut tag = ocb.encrypt_in_place_detached(&NONCE, b"", &mut buffer);
         tag[0] ^= 0xFF;
-        assert!(ocb.decrypt_in_place_detached(&NONCE, b"", &mut buffer, &tag).is_err());
+        assert!(ocb
+            .decrypt_in_place_detached(&NONCE, b"", &mut buffer, &tag)
+            .is_err());
     }
 
     #[test]

@@ -28,9 +28,9 @@
 #![warn(clippy::pedantic)]
 
 use crate::codec::brotli::DEFAULT_QUALITY;
+use crate::codec::CODEC_FSST_BROTLI;
 use crate::codec::{brotli, Codec};
 use crate::error::CoreError;
-use crate::codec::CODEC_FSST_BROTLI;
 
 /// Codec 0x09 — FSST preprocessor + Brotli.
 pub struct FsstBrotliCodec;
@@ -147,7 +147,9 @@ mod tests {
             compressed.len(),
             plain.len()
         );
-        let recovered = c.decompress(&compressed, input.len() as u32).expect("decompress");
+        let recovered = c
+            .decompress(&compressed, input.len() as u32)
+            .expect("decompress");
         assert_eq!(recovered, input);
     }
 
@@ -160,7 +162,9 @@ mod tests {
         let mut len_bytes = [0u8; 4];
         len_bytes.copy_from_slice(&compressed[..4]);
         assert_eq!(u32::from_le_bytes(len_bytes), 0);
-        let recovered = c.decompress(&compressed, input.len() as u32).expect("decompress");
+        let recovered = c
+            .decompress(&compressed, input.len() as u32)
+            .expect("decompress");
         assert_eq!(recovered.as_slice(), input);
     }
 }

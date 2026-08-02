@@ -230,13 +230,19 @@ impl WriteConfig {
         if self.defaults.metadata_quality < 1 || self.defaults.metadata_quality > 11 {
             return Err(ConfigError::InvalidValue {
                 field: "defaults.metadata_quality".into(),
-                reason: format!("metadata_quality ({}) out of range 1..=11", self.defaults.metadata_quality),
+                reason: format!(
+                    "metadata_quality ({}) out of range 1..=11",
+                    self.defaults.metadata_quality
+                ),
             });
         }
         // Validate unique categorizer names.
         let mut names_seen: BTreeMap<&str, ()> = BTreeMap::new();
         for rule in &self.categorizers {
-            if !names_seen.insert(rule.name.as_str(), ()).map_or(true, |_| false) {
+            if !names_seen
+                .insert(rule.name.as_str(), ())
+                .map_or(true, |_| false)
+            {
                 return Err(ConfigError::DuplicateCategorizer(rule.name.clone()));
             }
         }
@@ -270,10 +276,14 @@ impl WriteConfig {
             return Err(ConfigError::UnknownCodec(self.defaults.text_codec.clone()));
         }
         if !registry.contains_name(&self.defaults.binary_codec) {
-            return Err(ConfigError::UnknownCodec(self.defaults.binary_codec.clone()));
+            return Err(ConfigError::UnknownCodec(
+                self.defaults.binary_codec.clone(),
+            ));
         }
         if !registry.contains_name(&self.defaults.metadata_codec) {
-            return Err(ConfigError::UnknownCodec(self.defaults.metadata_codec.clone()));
+            return Err(ConfigError::UnknownCodec(
+                self.defaults.metadata_codec.clone(),
+            ));
         }
         for rule in &self.categorizers {
             if !registry.contains_name(&rule.codec) {
@@ -293,7 +303,9 @@ impl WriteConfig {
     /// Returns [`ConfigError`] if the codec name is unknown.
     pub fn text_codec_id(&self) -> Result<u8, ConfigError> {
         let registry = self.codec_registry()?;
-        Ok(registry.lookup_by_name(&self.defaults.text_codec).unwrap_or(0x04))
+        Ok(registry
+            .lookup_by_name(&self.defaults.text_codec)
+            .unwrap_or(0x04))
     }
 
     /// Resolve the default binary codec id.
@@ -301,7 +313,9 @@ impl WriteConfig {
     /// Returns [`ConfigError`] if the codec name is unknown.
     pub fn binary_codec_id(&self) -> Result<u8, ConfigError> {
         let registry = self.codec_registry()?;
-        Ok(registry.lookup_by_name(&self.defaults.binary_codec).unwrap_or(0x01))
+        Ok(registry
+            .lookup_by_name(&self.defaults.binary_codec)
+            .unwrap_or(0x01))
     }
 
     /// Resolve the default metadata codec id.
@@ -309,7 +323,9 @@ impl WriteConfig {
     /// Returns [`ConfigError`] if the codec name is unknown.
     pub fn metadata_codec_id(&self) -> Result<u8, ConfigError> {
         let registry = self.codec_registry()?;
-        Ok(registry.lookup_by_name(&self.defaults.metadata_codec).unwrap_or(0x04))
+        Ok(registry
+            .lookup_by_name(&self.defaults.metadata_codec)
+            .unwrap_or(0x04))
     }
 }
 
