@@ -6,7 +6,7 @@
 //!
 //! ## Why this crate exists
 //!
-//! The `ocb3` crate from RustCrypto depends on RC versions of
+//! The `ocb3` crate from `RustCrypto` depends on RC versions of
 //! `cipher 0.5` / `aes 0.9` that conflict with the stable `aes-gcm`
 //! and `chacha20poly1305` crates. This crate implements the same
 //! algorithm using only the stable `aes 0.8` / `cipher 0.4`
@@ -55,7 +55,7 @@ pub const TAG_SIZE: usize = 16;
 /// GF(2^128) reduction polynomial for AES (little-endian constant).
 const GF128_POLY: u8 = 0x87;
 /// Maximum number of precomputed L-values. Supports plaintext up to
-/// 2^(L_TABLE_SIZE + 4) bytes ≈ 1 GiB.
+/// 2^(`L_TABLE_SIZE` + 4) bytes ≈ 1 GiB.
 const L_TABLE_SIZE: usize = 24;
 
 type Block = [u8; BLOCK_SIZE];
@@ -66,7 +66,7 @@ type Tag = [u8; TAG_SIZE];
 /// Construct with [`Ocb3Aes256::new`] from a 32-byte key.
 pub struct Ocb3Aes256 {
     cipher: Aes256,
-    /// L* = dbl(E_K(0)).
+    /// L\* = `dbl`(`E_K`(0)).
     ll_star: Block,
     /// L$ = dbl(L*).
     ll_dollar: Block,
@@ -149,6 +149,7 @@ impl Ocb3Aes256 {
     ///
     /// # Errors
     /// Returns `Err(())` if the computed tag does not match `tag`.
+    #[allow(clippy::result_unit_err)]
     pub fn decrypt_in_place_detached(
         &self,
         nonce: &[u8; NONCE_SIZE],
@@ -241,7 +242,7 @@ impl Ocb3Aes256 {
         //   num2str(TAGLEN mod 128, 7) || zeros(120 - 8*NONCE_SIZE) || 1 || N
         let mut nonce_block: Block = [0; BLOCK_SIZE];
         // TAGLEN = 16 bytes = 128 bits. 128 % 128 = 0, so the first 7 bits are 0.
-        nonce_block[0] = ((TAG_SIZE * 8) % 128) as u8;
+        nonce_block[0] = u8::try_from((TAG_SIZE * 8) % 128).unwrap_or(0);
 
         let start = BLOCK_SIZE - NONCE_SIZE;
         nonce_block[start..BLOCK_SIZE].copy_from_slice(nonce);
