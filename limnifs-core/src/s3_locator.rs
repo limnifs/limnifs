@@ -29,8 +29,6 @@
 //! See [`S3Locator`] and task `08-s3-locator.md`.
 
 #![cfg(feature = "http")]
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use crate::fetch::{Locator, LocatorError};
 use crate::http_locator::HttpLocator;

@@ -3,9 +3,6 @@
 //! Each operation is a single byte opcode followed by opcode-specific
 //! fields. Paths are length-prefixed UTF-8 (u32 LE length + bytes).
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::epoch::EpochId;
 use crate::error::CoreError;

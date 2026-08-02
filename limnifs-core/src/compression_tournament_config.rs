@@ -3,9 +3,6 @@
 //! Records which codecs the writer tried in the compression
 //! tournament and the minimum size threshold.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 

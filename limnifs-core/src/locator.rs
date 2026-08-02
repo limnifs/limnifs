@@ -5,9 +5,6 @@
 //! §5.3, slab index §5.4). Readers race alternatives per §I9 when
 //! multiple entries exist for one blob.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 

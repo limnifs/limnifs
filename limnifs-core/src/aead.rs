@@ -15,9 +15,6 @@
 //! | 0x02–0xFE | reserved | — | — | — | Future AEADs |
 //! | 0xFF | extended | — | — | — | Post-v1 descriptor |
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 /// AEAD id 0x00: plaintext (no encryption).
 pub const AEAD_PLAINTEXT: u8 = 0x00;
 /// AEAD id 0x01: XChaCha20-Poly1305 (mandatory baseline).

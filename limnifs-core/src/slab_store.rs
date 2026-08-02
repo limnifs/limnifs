@@ -16,7 +16,6 @@
 //! `total_image_plaintext`.
 
 #![deny(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -53,7 +52,7 @@ impl SlabSource {
 pub struct SlabStore {
     /// One slab source per ordinal. Index = ordinal.
     slabs: Vec<SlabSource>,
-    /// DropId → slab ordinal. Built once at load time.
+    /// `DropId` → slab ordinal. Built once at load time.
     drop_index: HashMap<[u8; 32], usize>,
 }
 
@@ -111,7 +110,7 @@ impl SlabStore {
 
     /// Memory-map every slab file. The kernel pages data on demand;
     /// unaccessed slab regions consume no RSS. Ideal for large images
-    /// and random-access workloads (locate, read_random, partial extract).
+    /// and random-access workloads (locate, `read_random`, partial extract).
     ///
     /// # Errors
     /// - [`CoreError::Corrupt`] if any slab file cannot be opened,

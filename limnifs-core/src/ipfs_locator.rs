@@ -36,9 +36,7 @@
 //! See task `08-ipfs-car.md`.
 
 #![cfg(feature = "http")]
-#![forbid(unsafe_code)]
 #![allow(clippy::doc_markdown)]
-#![warn(clippy::pedantic)]
 
 use crate::fetch::{Locator, LocatorError};
 use crate::http_locator::HttpLocator;

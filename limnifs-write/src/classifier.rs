@@ -31,9 +31,6 @@
 //! was a misnomer that caused the writer to attempt (and fail)
 //! compression on random/encrypted input.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 /// Number of bytes at the drop's start used for classification.
 /// The full drop can be megabytes; the first 4 KiB is enough signal.
 pub const CLASSIFIER_SAMPLE_SIZE: usize = 4 * 1024;

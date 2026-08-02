@@ -13,9 +13,6 @@
 //! reference; switching gives us levels 1, 3, 6, 12, 22 with no
 //! quality regression.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::Codec;
 use crate::error::CoreError;
 

@@ -12,9 +12,6 @@
 //! Clean-room implementation from Gregory Smith's published format
 //! specification. No GPL code in the source tree.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::Codec;
 use crate::codec::CODEC_GLZA;
 use crate::error::CoreError;

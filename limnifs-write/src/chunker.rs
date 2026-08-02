@@ -29,9 +29,6 @@
 //! the same chunk boundaries — independent of platform, build, or
 //! RNG quality. This is required for content-addressed dedup.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use std::io::Read;
 
 /// Default minimum chunk size (64 KiB).

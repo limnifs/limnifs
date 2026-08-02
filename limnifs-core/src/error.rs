@@ -5,9 +5,6 @@
 //! these to stable exit codes; other consumers (e.g. mount layer,
 //! adapters) can match on the variant for policy decisions.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use core::fmt;
 
 /// Error reading a manifest header or section.

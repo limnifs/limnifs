@@ -4,9 +4,6 @@
 //! Universal compatibility: gzip, zlib, PNG, HTTP content-encoding.
 //! Lower ratio than ZSTD/Brotli/LZMA but universally interoperable.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::Codec;
 use crate::error::CoreError;
 

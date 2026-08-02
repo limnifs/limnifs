@@ -10,9 +10,6 @@
 //!   and integrity verification.
 //! - `payload`: the compressed bytes (or the raw plaintext if codec is store).
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::epoch::EpochId;
 use crate::error::CoreError;

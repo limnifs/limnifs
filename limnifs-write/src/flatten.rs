@@ -31,9 +31,6 @@
 //!
 //! See task `06-metadata-flatten.md`.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use std::collections::HashMap;
 
 use limnifs_core::{

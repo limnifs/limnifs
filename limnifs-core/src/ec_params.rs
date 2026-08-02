@@ -4,9 +4,6 @@
 //! section is OPTIONAL — present iff the EC feature flag (`0x0001`)
 //! is declared in the feature flags section (§5.2).
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 use limnifs_format::SlabId;

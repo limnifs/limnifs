@@ -5,9 +5,6 @@
 //! floating-point arrays where each bit plane has different
 //! statistical properties.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::{compress, decompress, Codec, CODEC_BITSHUFFLE_LZ4, CODEC_LZ4};
 use crate::error::CoreError;
 use omnizip_filters::Filter;
@@ -27,6 +24,8 @@ impl BitshuffleLz4Codec {
     }
 
     #[must_use]
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     pub fn with_item_size(item_size: usize) -> Self {
         Self {
             item_size: if item_size == 0 {

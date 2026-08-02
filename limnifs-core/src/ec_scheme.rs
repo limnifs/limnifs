@@ -14,9 +14,6 @@
 //! | 0x02–0xFE | reserved | — | — | Future schemes |
 //! | 0xFF | extended | — | — | Post-v1 descriptor |
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 /// EC id 0x00: no erasure coding.
 pub const EC_NONE: u8 = 0x00;
 /// EC id 0x01: Reed-Solomon over GF(2^8).

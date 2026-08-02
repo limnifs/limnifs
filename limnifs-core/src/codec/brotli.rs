@@ -2,15 +2,12 @@
 //! by Daniel Reiter Horn — the format's original author).
 //!
 //! The codec defaults to **quality 5**, Brotli's standard fast mode.
-//! This is the right tradeoff for LimniFS's per-chunk pipeline: fast
-//! enough to keep create throughput competitive with SquashFS's zstd
+//! This is the right tradeoff for `LimniFS`'s per-chunk pipeline: fast
+//! enough to keep create throughput competitive with `SquashFS`'s zstd
 //! L1, while beating ZSTD L1 (ruzstd-bounded) on text/source ratio.
 //! The future `--codec-map` flag (roadmap item 06) will allow callers
 //! to opt into q11 for archival workloads where create speed doesn't
 //! matter.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use std::io::Cursor;
 

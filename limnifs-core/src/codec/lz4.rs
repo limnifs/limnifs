@@ -1,8 +1,5 @@
 //! LZ4 codec (0x01): block format via `lz4_flex` (pure Rust).
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::Codec;
 use crate::error::CoreError;
 

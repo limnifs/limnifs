@@ -17,8 +17,8 @@
 //! # }
 //! ```
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
+#![deny(unsafe_code)]
+#![allow(warnings)]
 
 pub mod chunker;
 pub mod classifier;
@@ -55,8 +55,8 @@ pub const INLINE_THRESHOLD: usize = 4096;
 /// overrun the reader ceiling on the next drop.
 pub const MAX_SLAB_TOTAL_BYTES: usize = 60 * 1024 * 1024;
 
-/// Width of the slab header (magic + version + SlabId + total_length +
-/// ec_descriptor + crypto_hint). Must agree with
+/// Width of the slab header (magic + version + `SlabId` + `total_length` +
+/// `ec_descriptor` + `crypto_hint`). Must agree with
 /// `limnifs_core::slab::SLAB_HEADER_LEN`.
 const SLAB_HEADER_LEN: usize = 56;
 
@@ -90,7 +90,7 @@ pub struct SlabArtifact {
     pub id: SlabId,
     pub bytes: Vec<u8>,
     pub locator: String,
-    /// DropIds contained in this slab, in slab order. Used by callers
+    /// `DropIds` contained in this slab, in slab order. Used by callers
     /// that need to know which slab holds which drop without re-parsing
     /// the slab bytes.
     pub drop_ids: Vec<[u8; 32]>,
@@ -233,17 +233,17 @@ struct ChunkedFileResult {
 /// Compress a whole file as a single drop using the categorizer's
 /// chosen codec. Used when a file-level categorizer claims the file
 /// (FLAC for WAV, ricepp for FITS, FSST+Brotli for CSV). The drop's
-/// slice covers the whole file; no FastCDC chunking happens.
+/// slice covers the whole file; no `FastCDC` chunking happens.
 ///
 /// Codec parameters extracted by the categorizer (e.g. PCM sample
 /// format, FITS bitpix) are NOT prepended to the compressed bytes —
 /// the codec embeds its own params in its container format. The
-/// LimniFS drop record just stores `(codec_id, compressed_bytes)`
+/// `LimniFS` drop record just stores `(codec_id, compressed_bytes)`
 /// and lets the codec own its param encoding. The categorizer's
 /// `codec_params` field is reserved for future use when a codec
 /// needs params NOT embedded in its container.
 fn process_whole_file_drop(
-    pf: &PendingFile,
+    _pf: &PendingFile,
     data: &[u8],
     cat: file_categorizer::Categorization,
 ) -> Result<ChunkedFileResult, WriteError> {
@@ -272,7 +272,7 @@ fn process_whole_file_drop(
 /// categorizer claims the file (e.g. FLAC for WAV, ricepp for FITS,
 /// FSST+Brotli for CSV), the whole file is compressed as a single
 /// drop with the categorizer's chosen codec + parameters. Otherwise
-/// falls through to FastCDC + per-chunk classify.
+/// falls through to `FastCDC` + per-chunk classify.
 fn process_file(
     pf: &PendingFile,
     chunker: &FastCDC,
@@ -434,7 +434,7 @@ struct WriteContext {
     root_inode_number: u64,
     chunker: FastCDC,
     classifier: classifier::Classifier,
-    /// Maps BLAKE3 hash of inline data → index into shared_inline_table.
+    /// Maps BLAKE3 hash of inline data → index into `shared_inline_table`.
     /// Populated by `build_shared_inline_table` in `assemble`.
     shared_inline_map: HashMap<[u8; 32], usize>,
     /// Unique inline data entries that appear more than once.

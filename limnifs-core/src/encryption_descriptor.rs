@@ -3,9 +3,6 @@
 //! Records which AEAD algorithm and key-wrap method was used,
 //! along with the key-wrap parameters needed for decryption.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 

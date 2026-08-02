@@ -15,9 +15,6 @@
 //!   codec_id (1) | class_id (1) | dict_len (4 LE) | dict_data (dict_len)
 //! ```
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 
@@ -25,7 +22,7 @@ pub const DICTIONARY_SECTION_VERSION: u8 = 1;
 const MAX_DICT_COUNT: u8 = 255;
 const MAX_DICT_SIZE: u32 = 1024 * 1024;
 
-/// Sentinel dict_id meaning "no dictionary". Matches the default
+/// Sentinel `dict_id` meaning "no dictionary". Matches the default
 /// `dict_id` in [`crate::drop_record::DropRecord`].
 pub const NO_DICT: u8 = 0xFF;
 

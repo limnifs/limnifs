@@ -5,9 +5,6 @@
 //! floating-point arrays and structured numeric data where the
 //! shuffle filter exposes redundancy that Zstd exploits.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::{compress, decompress, Codec, CODEC_SHUFFLE_ZSTD, CODEC_ZSTD};
 use crate::error::CoreError;
 use omnizip_filters::Filter;
@@ -28,6 +25,7 @@ impl ShuffleZstdCodec {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub fn with_item_size(item_size: usize) -> Self {
         Self {
             item_size: if item_size == 0 {

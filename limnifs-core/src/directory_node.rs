@@ -9,9 +9,6 @@
 //! Entries within a node MUST be lexicographic by name (§1.4). This
 //! makes range reads and diff walks deterministic.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 

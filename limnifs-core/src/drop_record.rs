@@ -3,9 +3,6 @@
 //! One 48-byte descriptor per drop in a slab, locating the drop's
 //! bytes inside one of the slab's solid windows.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 use crate::slab::SlabHeader;
@@ -14,11 +11,11 @@ use limnifs_format::{DropId, Representation};
 /// Width of a single drop record on the wire.
 ///
 /// v0.2: extended from 48 to 49 bytes by adding `dict_id` (1 byte)
-/// at the end. dict_id = 0xFF means "no dictionary"; 0..254
+/// at the end. `dict_id` = 0xFF means "no dictionary"; 0..254
 /// references an entry in the `dictionary_section` manifest section.
 pub const DROP_RECORD_LEN: usize = 49;
 
-/// Sentinel dict_id meaning "no dictionary used for this drop".
+/// Sentinel `dict_id` meaning "no dictionary used for this drop".
 pub const NO_DICT: u8 = 0xFF;
 
 /// Default per-drop plaintext-size ceiling. The spec's writer pipeline

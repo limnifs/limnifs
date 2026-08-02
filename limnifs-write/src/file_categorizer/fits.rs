@@ -8,8 +8,7 @@
 //! ricepp routing:
 //!
 //! - `SIMPLE  = T` — marks a primary header (always the first record)
-//! - `BITPIX  = N` — bits per pixel (8, 16, 32, -32 for float,
-//!                   -64 for double)
+//! - `BITPIX  = N` — bits per pixel (8, 16, 32, -32 for float, -64 for double)
 //! - `NAXIS   = N` — number of axes (2 for a 2D image)
 //! - `NAXISn  = N` — size of axis n
 //!
@@ -18,9 +17,6 @@
 //! Routing is disabled until `omnizip-ricepp` ships a real Rice++
 //! encoder. When it does, flip `RICEPP_ENABLED` to `true` and the
 //! categorizer will claim FITS files for the ricepp codec (id 0x08).
-
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use std::path::Path;
 

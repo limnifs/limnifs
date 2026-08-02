@@ -13,9 +13,6 @@
 //! | 0x02–0xFE | reserved | Future schemes |
 //! | 0xFF | extended | Post-v1 descriptor |
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 /// DMS scheme id 0x01: Shamir secret sharing over GF(2^8).
 pub const DMS_SCHEME_SHAMIR: u8 = 0x01;
 /// Sentinel for extended DMS descriptor (post-v1).

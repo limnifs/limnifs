@@ -7,9 +7,6 @@
 //! Clean-room implementation from Matt Mahoney's public-domain
 //! ZPAQ specification. No GPL code in the source tree.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::Codec;
 use crate::codec::CODEC_ZPAQ;
 use crate::error::CoreError;

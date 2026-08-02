@@ -13,9 +13,6 @@
 //! flip `FSST_ENABLED` to `true` and the categorizer will claim
 //! these files.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use std::path::Path;
 
 use super::{Categorization, FileCategorizer};

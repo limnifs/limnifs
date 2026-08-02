@@ -5,9 +5,6 @@
 //! (§21.2). The section is OPTIONAL — present iff the DMS feature
 //! flag (`0x0002`) is declared in the feature flags section (§5.2).
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 

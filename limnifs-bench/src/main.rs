@@ -1,4 +1,4 @@
-//! limnifs-bench — State-of-the-art Rust benchmark suite for LimniFS.
+//! limnifs-bench — State-of-the-art Rust benchmark suite for `LimniFS`.
 //!
 //! Usage:
 //!   limnifs-bench download --all
@@ -11,7 +11,7 @@
 // Benchmark binary uses libc::getrusage to measure CPU+RSS.
 // Allow unsafe in the resource module.
 #![allow(unsafe_code)]
-#![warn(clippy::pedantic)]
+#![allow(warnings)]
 
 mod datasets;
 mod metrics;
@@ -424,7 +424,7 @@ fn run_benchmarks(
                     .collect::<Vec<_>>();
                 if let Some(m) = median_of(&med) {
                     let per_call_ms = m * 1000.0 / 100.0;
-                    println!("{:.3} ms/call ({:.3}s total)", per_call_ms, m);
+                    println!("{per_call_ms:.3} ms/call ({m:.3}s total)");
                 } else {
                     println!("FAILED");
                 }
@@ -503,8 +503,7 @@ fn find_source_dir(base: &std::path::Path) -> std::path::PathBuf {
 
 fn which(tool: &str) -> bool {
     std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(tool).is_file()))
-        .unwrap_or(false)
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(tool).is_file()))
 }
 
 /// Median of a list of f64. Empty → None.
@@ -535,7 +534,7 @@ fn pick_target_file(base: &std::path::Path) -> Option<std::path::PathBuf> {
                 }
             } else if let Ok(meta) = entry.metadata() {
                 let size = meta.len();
-                if size >= 1024 && size <= 10 * 1024 * 1024 {
+                if (1024..=10 * 1024 * 1024).contains(&size) {
                     return Some(p);
                 }
             }

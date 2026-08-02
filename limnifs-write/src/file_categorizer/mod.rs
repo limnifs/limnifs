@@ -1,15 +1,15 @@
 //! File-level categorizer framework.
 //!
 //! The seine chunk classifier (`crate::classifier`) operates on
-//! chunks AFTER FastCDC has split a file. By that point file-level
+//! chunks AFTER `FastCDC` has split a file. By that point file-level
 //! signal is gone — a FITS header lives in chunk 0; chunk 50 looks
 //! like generic binary. Specialized codecs (FLAC for PCM audio,
 //! ricepp for FITS) need that file-level signal to route correctly.
 //!
-//! This module runs file-level categorizers BEFORE FastCDC. If a
+//! This module runs file-level categorizers BEFORE `FastCDC`. If a
 //! categorizer claims the file, the whole file becomes one drop
 //! compressed with the categorizer's chosen codec. Otherwise the
-//! file falls through to the existing FastCDC path unchanged.
+//! file falls through to the existing `FastCDC` path unchanged.
 //!
 //! ## Architecture
 //!
@@ -17,7 +17,7 @@
 //!   deterministic. Same `(path, data)` → same `Categorization`.
 //! - [`FileCategorizerRegistry`]: OCP. Adding a categorizer is one
 //!   new file + one `register()` call. Dispatch code never changes.
-//! - The registry is consulted by `process_file` before FastCDC.
+//! - The registry is consulted by `process_file` before `FastCDC`.
 //!
 //! ## Current state
 //!
@@ -25,9 +25,6 @@
 //! ricepp (FITS), and FSST (CSV/JSON) will be added when the
 //! corresponding omnizip codec crates ship. The framework is in
 //! place so the integration is a one-file PR per codec.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -40,9 +37,9 @@ pub mod registry;
 pub use registry::FileCategorizerRegistry;
 
 /// Process-wide default registry. Populated on first access with
-/// every shipped categorizer (pcm_audio, fits, csv_text). The
+/// every shipped categorizer (`pcm_audio`, fits, `csv_text`). The
 /// writer calls `default_registry().categorize(...)` from
-/// `process_file` before FastCDC; categorizers that aren't
+/// `process_file` before `FastCDC`; categorizers that aren't
 /// enabled (their `*_ENABLED` flag is false) return `None`
 /// internally and fall through.
 ///
@@ -103,7 +100,7 @@ pub trait FileCategorizer: Sync + Send {
     ///
     /// Returns `Some(Categorization)` if this categorizer claims the
     /// file, `None` to defer to the next categorizer in the registry
-    /// (or to the FastCDC fallback path).
+    /// (or to the `FastCDC` fallback path).
     ///
     /// Implementations should not read the file from disk — `data`
     /// is already in hand. Path is provided for extension-based

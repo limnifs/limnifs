@@ -1,8 +1,5 @@
 //! Store codec (0x00): no compression. Bytes are written verbatim.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::codec::Codec;
 use crate::error::CoreError;
 

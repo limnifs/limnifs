@@ -14,9 +14,6 @@
 //! | `s3:` | _future_ | S3 GetObject (08-locators) |
 //! | `ipfs:` | _future_ | IPFS CAR (Phase 3) |
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use std::path::{Path, PathBuf};
 
 /// Error from a [`Locator`] operation.

@@ -45,7 +45,7 @@ struct DatasetView {
     name: String,
     category: Category,
     input_size_mb: f64,
-    /// Keyed by "{format}::{operation}".
+    /// Keyed by "{`format}::{operation`}".
     entries: BTreeMap<String, BenchmarkSummary>,
 }
 

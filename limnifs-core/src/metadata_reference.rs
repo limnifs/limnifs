@@ -18,9 +18,6 @@
 //!   v1 for readers — old readers reject v2 with `UnsupportedFeature`,
 //!   new readers handle both.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 use crate::locator::{
@@ -450,7 +447,7 @@ mod tests {
         }
     }
 
-    /// Build a v2 metadata_reference section with `codec` + the given
+    /// Build a v2 `metadata_reference` section with `codec` + the given
     /// on-wire bytes.
     fn make_v2_bytes(
         metadata_hash: [u8; 32],

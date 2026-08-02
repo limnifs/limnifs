@@ -4,9 +4,6 @@
 //! image. Each entry carries the `SlabId` and one or more locator
 //! entries that can fetch the slab bytes.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 use crate::locator::{

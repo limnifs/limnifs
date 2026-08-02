@@ -383,6 +383,7 @@ mod tests {
     fn round_trip_empty() {
         let ocb = Ocb3Aes256::new(&KEY);
         let mut buffer = Vec::new();
+        #[allow(unused_must_use)]
         let tag = ocb.encrypt_in_place_detached(&NONCE, b"", &mut buffer);
         assert_eq!(tag.len(), TAG_SIZE);
         ocb.decrypt_in_place_detached(&NONCE, b"", &mut buffer, &tag)
@@ -394,6 +395,7 @@ mod tests {
     fn round_trip_short() {
         let ocb = Ocb3Aes256::new(&KEY);
         let mut buffer = b"hello world".to_vec();
+        #[allow(unused_must_use)]
         let tag = ocb.encrypt_in_place_detached(&NONCE, b"aad", &mut buffer);
         ocb.decrypt_in_place_detached(&NONCE, b"aad", &mut buffer, &tag)
             .expect("round-trip short");
@@ -404,6 +406,7 @@ mod tests {
     fn round_trip_exact_block() {
         let ocb = Ocb3Aes256::new(&KEY);
         let mut buffer = vec![0x55u8; 16];
+        #[allow(unused_must_use)]
         let tag = ocb.encrypt_in_place_detached(&NONCE, b"", &mut buffer);
         ocb.decrypt_in_place_detached(&NONCE, b"", &mut buffer, &tag)
             .expect("round-trip 1 block");
@@ -414,6 +417,7 @@ mod tests {
     fn round_trip_multi_block() {
         let ocb = Ocb3Aes256::new(&KEY);
         let mut buffer = vec![0x42u8; 100]; // 6 full blocks + 4 bytes
+        #[allow(unused_must_use)]
         let tag = ocb.encrypt_in_place_detached(&NONCE, b"metadata", &mut buffer);
         ocb.decrypt_in_place_detached(&NONCE, b"metadata", &mut buffer, &tag)
             .expect("round-trip multi-block");
@@ -423,8 +427,9 @@ mod tests {
     #[test]
     fn round_trip_large() {
         let ocb = Ocb3Aes256::new(&KEY);
-        let original: Vec<u8> = (0..10_000u32).flat_map(|i| i.to_le_bytes()).collect();
+        let original: Vec<u8> = (0..10_000u32).flat_map(u32::to_le_bytes).collect();
         let mut buffer = original.clone();
+        #[allow(unused_must_use)]
         let tag = ocb.encrypt_in_place_detached(&NONCE, b"", &mut buffer);
         ocb.decrypt_in_place_detached(&NONCE, b"", &mut buffer, &tag)
             .expect("round-trip large");
@@ -435,6 +440,7 @@ mod tests {
     fn detects_tampered_ciphertext() {
         let ocb = Ocb3Aes256::new(&KEY);
         let mut buffer = b"sensitive data here".to_vec();
+        #[allow(unused_must_use)]
         let tag = ocb.encrypt_in_place_detached(&NONCE, b"", &mut buffer);
         buffer[0] ^= 0xFF;
         assert!(ocb
@@ -457,6 +463,7 @@ mod tests {
     fn detects_tampered_aad() {
         let ocb = Ocb3Aes256::new(&KEY);
         let mut buffer = b"sensitive data".to_vec();
+        #[allow(unused_must_use)]
         let tag = ocb.encrypt_in_place_detached(&NONCE, b"original aad", &mut buffer);
         assert!(ocb
             .decrypt_in_place_detached(&NONCE, b"tampered aad", &mut buffer, &tag)
@@ -471,8 +478,8 @@ mod tests {
         let mut buf1 = b"same plaintext".to_vec();
         let mut buf2 = b"same plaintext".to_vec();
 
-        ocb.encrypt_in_place_detached(&NONCE, b"", &mut buf1);
-        ocb.encrypt_in_place_detached(&nonce2, b"", &mut buf2);
+        let _tag1 = ocb.encrypt_in_place_detached(&NONCE, b"", &mut buf1);
+        let _tag2 = ocb.encrypt_in_place_detached(&nonce2, b"", &mut buf2);
 
         assert_ne!(buf1, buf2);
     }

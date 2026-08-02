@@ -27,9 +27,6 @@
 //!
 //! See task `05-dms.md`.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::gf256;
 
 /// GF(2^8) reduction polynomial: x^8 + x^4 + x^3 + x + 1 = 0x11B.

@@ -1,4 +1,4 @@
-//! Benchmark runners — LimniFS via library calls, external tools via subprocess.
+//! Benchmark runners — `LimniFS` via library calls, external tools via subprocess.
 
 #![allow(unsafe_code)]
 #![warn(clippy::pedantic)]
@@ -24,7 +24,7 @@ impl WorkspacePaths {
     }
 }
 
-/// Run LimniFS create via direct library call.
+/// Run `LimniFS` create via direct library call.
 ///
 /// Writes the manifest, all slabs, and the optional metadata sidecar
 /// to `work`, mirroring what the `limni limn` CLI does. Without these
@@ -87,7 +87,7 @@ pub fn limnifs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Oper
     results
 }
 
-/// Run LimniFS extract via the limni binary (subprocess — extract is in the CLI).
+/// Run `LimniFS` extract via the limni binary (subprocess — extract is in the CLI).
 pub fn limnifs_extract(
     image: &Path,
     work: &Path,
@@ -140,7 +140,7 @@ pub fn limnifs_extract(
     results
 }
 
-/// Run LimniFS verify via the limni binary.
+/// Run `LimniFS` verify via the limni binary.
 pub fn limnifs_verify(image: &Path, iterations: usize) -> Vec<OperationResult> {
     let limni = std::env::current_exe()
         .ok()
@@ -154,7 +154,7 @@ pub fn limnifs_verify(image: &Path, iterations: usize) -> Vec<OperationResult> {
         let elapsed = start.elapsed();
         match status {
             Ok(s) if s.success() => {
-                results.push(OperationResult::success("limnifs", "verify", elapsed, 0))
+                results.push(OperationResult::success("limnifs", "verify", elapsed, 0));
             }
             _ => results.push(OperationResult::failure("limnifs", "verify", elapsed)),
         }
@@ -162,7 +162,7 @@ pub fn limnifs_verify(image: &Path, iterations: usize) -> Vec<OperationResult> {
     results
 }
 
-/// Benchmark DwarFS create (mkdwarfs), if available.
+/// Benchmark `DwarFS` create (mkdwarfs), if available.
 pub fn dwarfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
     run_external(
         "mkdwarfs",
@@ -194,7 +194,7 @@ pub fn dwarfs_extract(
     )
 }
 
-/// SquashFS
+/// `SquashFS`
 pub fn squashfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
     let mut results = Vec::with_capacity(iterations);
     let image = work.join("squashfs.squashfs");
@@ -380,7 +380,7 @@ fn run_external_extract(
         let elapsed = start.elapsed();
         match status {
             Ok(s) if s.success() => {
-                results.push(OperationResult::success(format, op, elapsed, input_size))
+                results.push(OperationResult::success(format, op, elapsed, input_size));
             }
             _ => results.push(OperationResult::failure(format, op, elapsed)),
         }
@@ -497,7 +497,7 @@ pub fn extract_one(
                     .args(["-xf"])
                     .arg(image)
                     .args(["-C"])
-                    .arg(&work)
+                    .arg(work)
                     .arg(target_path.trim_start_matches('/'))
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
@@ -595,7 +595,7 @@ pub fn locate_one(
 ///
 /// We do N reads of M bytes each at random offsets, but each is a
 /// single `limni cat --offset --length` subprocess. The per-call
-/// cost is the metric; total time = N × per_call.
+/// cost is the metric; total time = N × `per_call`.
 pub fn read_random(
     image: &Path,
     target_path: &str,

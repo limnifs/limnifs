@@ -29,9 +29,6 @@
 //!
 //! See task `07-reed-solomon-slabs.md`.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::gf256;
 
 /// Errors returned by [`encode`] and [`decode`].

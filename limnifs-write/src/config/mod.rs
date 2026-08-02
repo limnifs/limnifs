@@ -24,9 +24,6 @@
 //! [`WriteConfig::default_v0_1`] + adding a TOML section. No
 //! existing code changes.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 pub mod defaults;
 pub mod error;
 pub mod toml;
@@ -50,11 +47,11 @@ pub const DEFAULT_METADATA_CODEC: &str = "brotli";
 pub const DEFAULT_METADATA_QUALITY: u8 = 5;
 /// Default inline-data threshold (bytes).
 pub const DEFAULT_INLINE_THRESHOLD: u16 = 4096;
-/// Default FastCDC average chunk size.
+/// Default `FastCDC` average chunk size.
 pub const DEFAULT_AVG_CHUNK_SIZE: u32 = 8192;
-/// Default FastCDC minimum chunk size.
+/// Default `FastCDC` minimum chunk size.
 pub const DEFAULT_MIN_CHUNK_SIZE: u32 = 1024;
-/// Default FastCDC maximum chunk size.
+/// Default `FastCDC` maximum chunk size.
 pub const DEFAULT_MAX_CHUNK_SIZE: u32 = 65_536;
 /// Default minimum size for the tournament to try a codec.
 pub const DEFAULT_TOURNAMENT_MIN_SIZE: u32 = 256;
@@ -81,7 +78,7 @@ pub struct WriteConfig {
     /// File categorizer rules (extension/magic → codec).
     #[serde(default, rename = "categorizer")]
     pub categorizers: Vec<CategorizerConfig>,
-    /// FastCDC chunking parameters.
+    /// `FastCDC` chunking parameters.
     pub chunking: ChunkingConfig,
     /// Compression tournament settings.
     pub tournament: TournamentConfig,
@@ -127,7 +124,7 @@ fn default_true() -> bool {
     true
 }
 
-/// FastCDC parameters.
+/// `FastCDC` parameters.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ChunkingConfig {
     pub avg_chunk_size: u32,
@@ -142,7 +139,7 @@ pub struct TournamentConfig {
     pub codecs: Vec<String>,
     /// Minimum chunk size for the tournament to try a codec.
     pub min_size_threshold: u32,
-    /// Skip tournament for binary class (use binary_codec directly).
+    /// Skip tournament for binary class (use `binary_codec` directly).
     pub skip_for_binary: bool,
 }
 
@@ -241,7 +238,7 @@ impl WriteConfig {
         for rule in &self.categorizers {
             if !names_seen
                 .insert(rule.name.as_str(), ())
-                .map_or(true, |_| false)
+                .map_or(true, |()| false)
             {
                 return Err(ConfigError::DuplicateCategorizer(rule.name.clone()));
             }

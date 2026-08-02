@@ -41,9 +41,6 @@
 //! }
 //! ```
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 mod drop_payload;
 mod header;
 mod ops;

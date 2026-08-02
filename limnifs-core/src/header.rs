@@ -4,9 +4,6 @@
 //! three independent u16 LE version fields, and a 6-byte reserved
 //! field that MUST be zero.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 use limnifs_format::{MANIFEST_HEADER_LEN, MANIFEST_MAGIC};

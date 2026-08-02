@@ -10,9 +10,6 @@
 //! success is the parser's responsibility; on error the cursor's
 //! position is unspecified.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::error::CoreError;
 
 /// A bounded cursor over the bytes of a manifest (or slab).

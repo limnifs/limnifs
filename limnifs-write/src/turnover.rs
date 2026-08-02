@@ -29,9 +29,6 @@
 //!
 //! See task `06-turnover.md`.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::compaction::{compact_image, CompactionError, CompactionResult};
 
 /// Run a turnover on the given image.

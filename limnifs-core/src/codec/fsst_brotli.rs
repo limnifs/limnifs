@@ -21,11 +21,8 @@
 //!
 //! CSV/JSON/TSV with strong column-header and value-pattern
 //! redundancy. Plain text and source code do not benefit — Brotli
-//! alone is already optimal there. The csv_text categorizer gates
+//! alone is already optimal there. The `csv_text` categorizer gates
 //! this codec behind a content-sniffing heuristic.
-
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
 
 use crate::codec::brotli::DEFAULT_QUALITY;
 use crate::codec::CODEC_FSST_BROTLI;

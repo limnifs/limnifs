@@ -1,8 +1,5 @@
 //! OCP registry for file-level categorizers.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use std::path::Path;
 
 use super::{Categorization, FileCategorizer};
@@ -52,7 +49,7 @@ impl FileCategorizerRegistry {
 
     /// Consult each categorizer in registration order. Returns the
     /// first non-`None` result, or `None` if no categorizer claims
-    /// the file (caller should fall back to FastCDC).
+    /// the file (caller should fall back to `FastCDC`).
     #[must_use]
     pub fn categorize(&self, path: &Path, data: &[u8]) -> Option<Categorization> {
         for c in &self.categorizers {

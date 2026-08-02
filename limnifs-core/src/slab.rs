@@ -5,9 +5,6 @@
 //! (ordinal + hash), u64 LE `total_length`, u8 `ec_descriptor`, u8
 //! `crypto_hint`.
 
-#![forbid(unsafe_code)]
-#![warn(clippy::pedantic)]
-
 use crate::cursor::ManifestCursor;
 use crate::error::CoreError;
 use limnifs_format::{SlabId, SLAB_MAGIC};
