@@ -30,24 +30,36 @@ fn main() {
 
     // Our FLAC
     let flac_compressed = limnifs_core::codec::compress(0x07, &wav).expect("flac compress");
-    println!("Our FLAC: {} bytes ({:.1}%)", flac_compressed.len(),
-        flac_compressed.len() as f64 / wav.len() as f64 * 100.0);
+    println!(
+        "Our FLAC: {} bytes ({:.1}%)",
+        flac_compressed.len(),
+        flac_compressed.len() as f64 / wav.len() as f64 * 100.0
+    );
 
     // Compare with Brotli on same WAV
     let brotli_compressed = limnifs_core::codec::compress(0x04, &wav).expect("brotli compress");
-    println!("Brotli:   {} bytes ({:.1}%)", brotli_compressed.len(),
-        brotli_compressed.len() as f64 / wav.len() as f64 * 100.0);
+    println!(
+        "Brotli:   {} bytes ({:.1}%)",
+        brotli_compressed.len(),
+        brotli_compressed.len() as f64 / wav.len() as f64 * 100.0
+    );
 
     // Compare with ZSTD
     let zstd_compressed = limnifs_core::codec::compress(0x02, &wav).expect("zstd compress");
-    println!("ZSTD:     {} bytes ({:.1}%)", zstd_compressed.len(),
-        zstd_compressed.len() as f64 / wav.len() as f64 * 100.0);
+    println!(
+        "ZSTD:     {} bytes ({:.1}%)",
+        zstd_compressed.len(),
+        zstd_compressed.len() as f64 / wav.len() as f64 * 100.0
+    );
 
     // Compare with LZMA
     let xz_result = limnifs_core::codec::compress(0x03, &wav);
     if let Ok(xz_compressed) = xz_result {
-        println!("XZ:       {} bytes ({:.1}%)", xz_compressed.len(),
-            xz_compressed.len() as f64 / wav.len() as f64 * 100.0);
+        println!(
+            "XZ:       {} bytes ({:.1}%)",
+            xz_compressed.len(),
+            xz_compressed.len() as f64 / wav.len() as f64 * 100.0
+        );
     } else {
         println!("XZ:       encode not available");
     }
