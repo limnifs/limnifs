@@ -1,3 +1,4 @@
+#![allow(warnings)]
 // Compare our FLAC vs reference FLAC on a small WAV
 fn main() {
     // Generate a 1MB WAV (small enough for quick test)

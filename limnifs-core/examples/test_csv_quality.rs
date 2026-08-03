@@ -1,3 +1,4 @@
+#![allow(warnings)]
 fn main() {
     let data = std::fs::read(".scratch/bench-datasets/csv-synthetic/data.csv").expect("read csv");
     println!("CSV size: {} bytes", data.len());
