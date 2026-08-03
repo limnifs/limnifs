@@ -206,6 +206,9 @@ pub fn write_directory_with_config(
     use rayon::prelude::*;
 
     let mut ctx = WriteContext::new();
+    ctx.categorizers_disabled = config.categorizers.is_empty();
+    ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
+    ctx.auto_turnover = config.turnover_threshold > 0;
 
     let root_inode_number = ctx.walk(root)?;
     ctx.root_inode_number = root_inode_number;
@@ -485,12 +488,16 @@ struct WriteContext {
     root_inode_number: u64,
     chunker: FastCDC,
     classifier: classifier::Classifier,
-    /// Maps BLAKE3 hash of inline data → index into `shared_inline_table`.
-    /// Populated by `build_shared_inline_table` in `assemble`.
     shared_inline_map: HashMap<[u8; 32], usize>,
-    /// Unique inline data entries that appear more than once.
-    /// Stored at the end of the metadata blob for dedup.
     shared_inline_table: Vec<Vec<u8>>,
+    /// Profile name for ProfileDescriptor emission (None = omit section).
+    profile_name: Option<String>,
+    /// Whether categorizers were disabled by the profile.
+    categorizers_disabled: bool,
+    /// Whether this is a RW image.
+    rw_mode: bool,
+    /// Whether auto-turnover is enabled.
+    auto_turnover: bool,
 }
 
 impl WriteContext {
@@ -509,6 +516,10 @@ impl WriteContext {
             classifier: classifier::Classifier,
             shared_inline_map: HashMap::new(),
             shared_inline_table: Vec::new(),
+            profile_name: None,
+            categorizers_disabled: false,
+            rw_mode: false,
+            auto_turnover: false,
         }
     }
 
@@ -805,6 +816,26 @@ impl WriteContext {
         manifest.extend_from_slice(&0u32.to_le_bytes());
         manifest.extend_from_slice(&0u32.to_le_bytes());
         let history_end = manifest.len();
+
+        // ProfileDescriptor section (optional — appended after history).
+        // Records which overhead layers were active so any reader can
+        // handle the image correctly. Only emitted if a profile name
+        // was set.
+        let profile_desc_start = manifest.len();
+        if let Some(ref name) = self.profile_name {
+            let desc = limnifs_core::profile_descriptor::ProfileDescriptor {
+                version: limnifs_core::profile_descriptor::PROFILE_DESCRIPTOR_SECTION_VERSION,
+                profile_name: Some(name.clone()),
+                blake3_hashing: true,
+                cross_file_dedup: true,
+                content_classification: !self.categorizers_disabled,
+                integrity_verify: true,
+                read_write: self.rw_mode,
+                auto_turnover: self.auto_turnover,
+            };
+            limnifs_core::profile_descriptor::encode_profile_descriptor(&desc, &mut manifest);
+        }
+        let profile_desc_end = manifest.len();
 
         let hashes = SectionHashes {
             metadata: metadata_hash,
