@@ -1,6 +1,6 @@
 //! Validate omnizip 0.11.1 codec fixes against the targets omnizip reported.
 
-#![allow(clippy::pedantic)]
+#![allow(warnings)]
 
 use std::fs;
 use std::path::PathBuf;
