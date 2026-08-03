@@ -217,6 +217,7 @@ pub fn write_directory_with_config(
         let text_codec = config.text_codec_id().unwrap_or(0x04);
         let binary_codec = config.binary_codec_id().unwrap_or(0x01);
         let brotli_quality = config.codec_tunables.brotli.quality;
+        let use_categorizers = !config.categorizers.is_empty();
         let results: Vec<ChunkedFileResult> = pending
             .par_iter()
             .map(|pf| {
@@ -227,6 +228,7 @@ pub fn write_directory_with_config(
                     text_codec,
                     binary_codec,
                     brotli_quality,
+                    use_categorizers,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -323,22 +325,20 @@ fn process_file(
     text_codec: u8,
     binary_codec: u8,
     brotli_quality: u8,
+    use_categorizers: bool,
 ) -> Result<ChunkedFileResult, WriteError> {
     let data = std::fs::read(&pf.path)?;
     let file_len = data.len();
 
-    // File-level categorizer path: skip FastCDC if a specialized
-    // codec claims this file. Codecs that require container headers
-    // (FLAC, Rice++) always use the whole-file path. Byte-oriented
-    // codecs (FSST+Brotli, Brotli, ZSTD) use FastCDC for files above
-    // WHOLE_FILE_MAX_SIZE to parallelize across rayon workers.
-    if let Some(cat) = file_categorizer::default_registry().categorize(&pf.path, &data) {
-        let needs_whole_file = matches!(
-            cat.codec_id,
-            limnifs_core::codec::CODEC_FLAC | limnifs_core::codec::CODEC_RICEPP
-        );
-        if needs_whole_file || file_len <= WHOLE_FILE_MAX_SIZE {
-            return process_whole_file_drop(pf, &data, cat, brotli_quality);
+    if use_categorizers {
+        if let Some(cat) = file_categorizer::default_registry().categorize(&pf.path, &data) {
+            let needs_whole_file = matches!(
+                cat.codec_id,
+                limnifs_core::codec::CODEC_FLAC | limnifs_core::codec::CODEC_RICEPP
+            );
+            if needs_whole_file || file_len <= WHOLE_FILE_MAX_SIZE {
+                return process_whole_file_drop(pf, &data, cat, brotli_quality);
+            }
         }
     }
 
