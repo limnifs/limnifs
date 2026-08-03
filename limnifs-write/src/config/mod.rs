@@ -86,10 +86,25 @@ pub struct WriteConfig {
     /// Per-codec tunable parameters (memory budgets, quality levels).
     #[serde(default)]
     pub codec_tunables: CodecTunables,
+    /// Image mode: read-only archive or read-write filesystem.
+    #[serde(default)]
+    pub mode: ImageMode,
+    /// Codec for incremental writes (RW mode only). Defaults to LZ4.
+    /// During turnover, `defaults.text_codec` is used for re-compression.
+    #[serde(default = "default_write_codec")]
+    pub write_codec: String,
+    /// Turnover threshold: number of history entries before automatic
+    /// compaction triggers (RW mode only). 0 = manual turnover only.
+    #[serde(default)]
+    pub turnover_threshold: u32,
     /// Encryption configuration.
     pub encryption: EncryptionConfig,
     /// ZSTD dictionary configuration.
     pub dictionaries: DictionaryConfig,
+}
+
+fn default_write_codec() -> String {
+    "lz4".into()
 }
 
 /// Default codec + quality settings.
@@ -162,6 +177,37 @@ pub struct DictionaryConfig {
     pub enabled: bool,
     pub min_class_size: u32,
     pub max_dict_size: u32,
+}
+
+/// Image mode: read-only (one-shot archive) or read-write (live filesystem).
+///
+/// LimniFS's key differentiator vs SquashFS/DwarFS is RW support —
+/// images can be updated incrementally without full rebuilds.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+pub enum ImageMode {
+    /// Read-only archive. Created once, read many times. All data
+    /// is available at creation time — aggressive compression and
+    /// full dedup are worthwhile.
+    #[default]
+    ReadOnly,
+    /// Read-write image supporting incremental updates.
+    ReadWrite(RWMode),
+}
+
+/// Read-write sub-mode controlling how updates are applied.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+pub enum RWMode {
+    /// Append-only: files can be added but never modified or deleted.
+    /// No history tracking needed. Best for archival, data lakes.
+    AppendOnly,
+    /// Update-in-place: files can be modified and deleted. Old versions
+    /// are kept as history entries. Best for dev directories, config mgmt.
+    #[default]
+    UpdateInPlace,
+    /// Copy-on-write: modifications create new drops; old drops are
+    /// unreferenced and reclaimed during turnover. Best for container
+    /// layers, VM disk images.
+    CopyOnWrite,
 }
 
 /// Per-codec tunable parameters. Each sub-struct has serde defaults
@@ -312,7 +358,60 @@ impl WriteConfig {
                 max_dict_size: DEFAULT_DICT_MAX_SIZE,
             },
             codec_tunables: CodecTunables::default(),
+            mode: ImageMode::ReadOnly,
+            write_codec: default_write_codec(),
+            turnover_threshold: 0,
         }
+    }
+
+    /// Load a built-in profile by name, then override fields via
+    /// builder methods.
+    #[must_use]
+    pub fn from_profile(name: &str) -> Option<Self> {
+        profile::select(name)
+    }
+
+    /// Override the text codec.
+    #[must_use]
+    pub fn with_text_codec(mut self, codec: &str) -> Self {
+        self.defaults.text_codec = codec.into();
+        self
+    }
+
+    /// Override the binary codec.
+    #[must_use]
+    pub fn with_binary_codec(mut self, codec: &str) -> Self {
+        self.defaults.binary_codec = codec.into();
+        self
+    }
+
+    /// Override the average chunk size.
+    #[must_use]
+    pub fn with_chunk_size(mut self, size: u32) -> Self {
+        self.chunking.avg_chunk_size = size;
+        self
+    }
+
+    /// Override the image mode (RO vs RW).
+    #[must_use]
+    pub fn with_mode(mut self, mode: ImageMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Override Brotli quality.
+    #[must_use]
+    pub fn with_brotli_quality(mut self, quality: u8) -> Self {
+        self.codec_tunables.brotli.quality = quality;
+        self
+    }
+
+    /// Finalize (validate and return).
+    /// # Errors
+    /// Returns [`ConfigError`] on invalid configuration.
+    pub fn build(self) -> Result<Self, ConfigError> {
+        self.validate()?;
+        Ok(self)
     }
 
     /// Validate field relationships and range constraints.

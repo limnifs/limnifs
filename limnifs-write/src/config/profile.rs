@@ -129,6 +129,9 @@ pub fn max_ratio() -> WriteConfig {
             min_class_size: 50,
             max_dict_size: 131_072,
         },
+        mode: crate::config::ImageMode::ReadOnly,
+        write_codec: "lz4".into(),
+        turnover_threshold: 0,
     }
 }
 
@@ -177,6 +180,9 @@ pub fn max_speed() -> WriteConfig {
             min_class_size: 0,
             max_dict_size: 0,
         },
+        mode: crate::config::ImageMode::ReadOnly,
+        write_codec: "lz4".into(),
+        turnover_threshold: 0,
     }
 }
 
@@ -224,33 +230,24 @@ pub fn balanced() -> WriteConfig {
             min_class_size: 100,
             max_dict_size: 65_536,
         },
+        mode: crate::config::ImageMode::ReadOnly,
+        write_codec: "lz4".into(),
+        turnover_threshold: 0,
     }
 }
 
-/// Competitive profile — designed to beat SquashFS on ratio AND DwarFS
-/// on speed simultaneously.
+/// Competitive profile — beat SquashFS on ratio AND DwarFS on speed.
 ///
-/// ## Strategy
-///
-/// The key insight: SquashFS uses LZ4 for everything (fast, poor ratio).
-/// DWarFS uses FSST+LZMA (slow, good ratio). LimniFS can do BOTH:
-///
-/// - **Binary** → LZ4 (matches SquashFS speed, same ratio)
-/// - **Text/Code** → Brotli q5 (5× better ratio than SquashFS, 30× faster than DWarFS)
-/// - **Sparse** → Brotli q5 (near-zero on zeros, beats SquashFS)
-/// - **Incompressible** → STORE (zero CPU, same ratio as everything)
-/// - **Audio** → FLAC if ≤1 MB (beats SquashFS by 30×), Brotli if larger
-/// - **FITS** → Rice++ (beats both SquashFS and DWarFS)
-///
-/// No tournament — classify once, compress once. Zero codec-trial overhead.
+/// Uses ZSTD L1 for text (5x faster compress than Brotli, 3x faster
+/// decompress, 3x better ratio than SquashFS LZ4). LZ4 for binary.
 #[must_use]
 pub fn competitive() -> WriteConfig {
     WriteConfig {
         defaults: Defaults {
-            text_codec: "brotli".into(),
+            text_codec: "zstd".into(),
             binary_codec: "lz4".into(),
-            metadata_codec: "brotli".into(),
-            metadata_quality: 5,
+            metadata_codec: "zstd".into(),
+            metadata_quality: 3,
             inline_threshold: 4096,
         },
         categorizers: crate::config::defaults::all_v0_1(),
@@ -280,6 +277,9 @@ pub fn competitive() -> WriteConfig {
             min_class_size: 0,
             max_dict_size: 0,
         },
+        mode: crate::config::ImageMode::ReadOnly,
+        write_codec: "lz4".into(),
+        turnover_threshold: 0,
     }
 }
 
@@ -335,6 +335,9 @@ pub fn max_read() -> WriteConfig {
             min_class_size: 50,
             max_dict_size: 131_072,
         },
+        mode: crate::config::ImageMode::ReadOnly,
+        write_codec: "lz4".into(),
+        turnover_threshold: 0,
     }
 }
 
@@ -378,6 +381,9 @@ pub fn max_write() -> WriteConfig {
             min_class_size: 0,
             max_dict_size: 0,
         },
+        mode: crate::config::ImageMode::ReadOnly,
+        write_codec: "lz4".into(),
+        turnover_threshold: 0,
     }
 }
 
@@ -482,9 +488,9 @@ mod tests {
     }
 
     #[test]
-    fn competitive_uses_brotli_for_text() {
+    fn competitive_uses_zstd_for_text() {
         let config = competitive();
-        assert_eq!(config.text_codec_id().unwrap(), 0x04); // Brotli
+        assert_eq!(config.text_codec_id().unwrap(), 0x02); // ZSTD
     }
 
     #[test]

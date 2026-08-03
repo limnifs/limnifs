@@ -342,64 +342,59 @@ fn process_file(
     }
 
     let chunks = chunker.chunk_slice(&data);
-    let mut drops = Vec::with_capacity(chunks.len());
     let mut slices = Vec::with_capacity(chunks.len());
     let mut file_offset: u64 = 0;
-
-    // Per-file dedup map: drop_id → index in `drops`. Cross-file
-    // dedup happens later in `merge_chunked_file`, but compressing
-    // every duplicate chunk within a single file is a real cost on
-    // repetitive inputs (FastCDC produces many identical chunks for
-    // files with repeated content). Skip compression for chunks we
-    // have already seen in this file.
     let mut seen_in_file: std::collections::HashSet<[u8; 32]> =
         std::collections::HashSet::with_capacity(chunks.len());
 
-    for chunk in chunks {
+    // Phase 1: hash all chunks + build slices + filter duplicates (sequential).
+    // FastCDC boundaries must be deterministic, and BLAKE3 hashing is fast.
+    let mut unique_chunks: Vec<(&[u8], [u8; 32])> = Vec::with_capacity(chunks.len());
+    for chunk in &chunks {
         let chunk_len = u64::try_from(chunk.len()).expect("chunk len fits u64");
         let drop_id = hash_section(chunk);
-
-        // Always emit a slice (the file's byte range), even when the
-        // chunk is a duplicate — the reader assembles the file from
-        // slices, and a slice can reference a drop defined earlier.
         slices.push(PendingSlice {
             drop_id,
             file_byte_start: file_offset,
             file_byte_end: file_offset + chunk_len,
         });
         file_offset += chunk_len;
-
-        if !seen_in_file.insert(drop_id) {
-            continue;
+        if seen_in_file.insert(drop_id) {
+            unique_chunks.push((chunk, drop_id));
         }
-
-        let class = classifier.classify(chunk);
-        // Sparse (zero-dominated) compresses very well with Brotli.
-        // Compressed/Media are already-encoded and don't compress further.
-        let preferred_codec = match class {
-            classifier::Class::Binary => binary_codec,
-            classifier::Class::Text | classifier::Class::Code | classifier::Class::Sparse => {
-                text_codec
-            }
-            _ => limnifs_core::codec::CODEC_STORE,
-        };
-
-        // Try the preferred codec; if it fails or doesn't beat store,
-        // fall back to STORE. The codec recorded on the drop record
-        // reflects what's actually in the slab window — the reader
-        // must not be told "XZ" if the bytes are raw.
-        let (codec_id, compressed) = if preferred_codec == limnifs_core::codec::CODEC_STORE {
-            (limnifs_core::codec::CODEC_STORE, chunk.to_vec())
-        } else {
-            match limnifs_core::codec::compress_with_options(preferred_codec, chunk, brotli_quality)
-            {
-                Ok(c) if c.len() < chunk.len() => (preferred_codec, c),
-                _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
-            }
-        };
-
-        drops.push((drop_id, chunk.to_vec(), compressed, codec_id));
     }
+
+    // Phase 2: compress unique chunks in parallel across rayon workers.
+    // This is the CPU-intensive step — parallelizing it gives N-core
+    // speedup for large files with many chunks.
+    use rayon::prelude::*;
+    let drops: Vec<([u8; 32], Vec<u8>, Vec<u8>, u8)> = unique_chunks
+        .par_iter()
+        .map(|(chunk, drop_id)| {
+            let class = classifier.classify(chunk);
+            let preferred_codec = match class {
+                classifier::Class::Binary => binary_codec,
+                classifier::Class::Text | classifier::Class::Code | classifier::Class::Sparse => {
+                    text_codec
+                }
+                _ => limnifs_core::codec::CODEC_STORE,
+            };
+            let (codec_id, compressed) = if preferred_codec == limnifs_core::codec::CODEC_STORE {
+                (limnifs_core::codec::CODEC_STORE, chunk.to_vec())
+            } else {
+                match limnifs_core::codec::compress_with_options(
+                    preferred_codec,
+                    chunk,
+                    brotli_quality,
+                ) {
+                    Ok(c) if c.len() < chunk.len() => (preferred_codec, c),
+                    _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
+                }
+            };
+            (*drop_id, chunk.to_vec(), compressed, codec_id)
+        })
+        .collect();
+
     let _ = file_len;
     Ok(ChunkedFileResult { drops, slices })
 }
