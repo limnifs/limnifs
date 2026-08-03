@@ -27,6 +27,7 @@ pub mod config;
 pub mod delta_builder;
 pub mod file_categorizer;
 pub mod flatten;
+pub mod rw;
 pub mod turnover;
 
 pub use config::{

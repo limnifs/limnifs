@@ -70,6 +70,7 @@ pub mod locator;
 pub mod merkle;
 pub mod metadata;
 pub mod metadata_reference;
+pub mod profile_descriptor;
 pub mod reed_solomon;
 #[cfg(feature = "http")]
 pub mod s3_locator;

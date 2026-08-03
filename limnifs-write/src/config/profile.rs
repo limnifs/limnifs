@@ -39,13 +39,16 @@ use crate::config::{
     WriteConfig,
 };
 
-/// The four built-in profile names.
+/// Built-in profile names.
 pub const MAX_RATIO: &str = "max-ratio";
 pub const MAX_SPEED: &str = "max-speed";
 pub const BALANCED: &str = "balanced";
 pub const COMPETITIVE: &str = "competitive";
 pub const MAX_READ: &str = "max-read";
 pub const MAX_WRITE: &str = "max-write";
+pub const MAX_WRITE_RW: &str = "max-write-rw";
+pub const MAX_READ_RW: &str = "max-read-rw";
+pub const BALANCED_RW: &str = "balanced-rw";
 
 /// Select a built-in profile by name. Returns a complete [`WriteConfig`]
 /// configured for that profile's strategy.
@@ -58,6 +61,9 @@ pub fn select(name: &str) -> Option<WriteConfig> {
         COMPETITIVE => Some(competitive()),
         MAX_READ => Some(max_read()),
         MAX_WRITE => Some(max_write()),
+        MAX_WRITE_RW => Some(max_write_rw()),
+        MAX_READ_RW => Some(max_read_rw()),
+        BALANCED_RW => Some(balanced_rw()),
         _ => None,
     }
 }
@@ -387,6 +393,152 @@ pub fn max_write() -> WriteConfig {
     }
 }
 
+/// Maximum write profile for RW images — optimized for write-heavy
+/// live filesystems where write latency per operation matters most.
+///
+/// - Write codec: LZ4 (instant compress, minimal write latency)
+/// - Turnover codec: ZSTD L12 (re-compaction with decent ratio)
+/// - Mode: CopyOnWrite (fast updates, unreferenced blocks reclaimed)
+/// - Chunks: 128 KB (minimal per-chunk overhead per write)
+/// - Turnover threshold: 500 updates
+#[must_use]
+pub fn max_write_rw() -> WriteConfig {
+    WriteConfig {
+        defaults: Defaults {
+            text_codec: "lz4".into(),
+            binary_codec: "lz4".into(),
+            metadata_codec: "lz4".into(),
+            metadata_quality: 1,
+            inline_threshold: 4096,
+        },
+        categorizers: vec![],
+        chunking: ChunkingConfig {
+            avg_chunk_size: 131_072,
+            min_chunk_size: 16_384,
+            max_chunk_size: 524_288,
+        },
+        tournament: TournamentConfig {
+            codecs: vec!["store".into(), "lz4".into()],
+            min_size_threshold: 0,
+            skip_for_binary: true,
+        },
+        codec_tunables: CodecTunables::default(),
+        mode: crate::config::ImageMode::ReadWrite(crate::config::RWMode::CopyOnWrite),
+        write_codec: "lz4".into(),
+        turnover_threshold: 500,
+        encryption: EncryptionConfig {
+            aead: "chacha20-poly1305".into(),
+            key_wrap: "x25519-hkdf".into(),
+        },
+        dictionaries: DictionaryConfig {
+            enabled: false,
+            min_class_size: 0,
+            max_dict_size: 0,
+        },
+    }
+}
+
+/// Maximum read profile for RW images — optimized for read-heavy
+/// live filesystems where read throughput and integrity matter.
+///
+/// - Write codec: ZSTD L6 (good ratio, decent compress speed)
+/// - Turnover codec: ZSTD L19 (best ratio for compaction)
+/// - Mode: UpdateInPlace (full history for audit trail)
+/// - Chunks: 64 KB (fewer drops to traverse during reads)
+/// - Turnover threshold: 1000 updates
+#[must_use]
+pub fn max_read_rw() -> WriteConfig {
+    WriteConfig {
+        defaults: Defaults {
+            text_codec: "zstd".into(),
+            binary_codec: "zstd".into(),
+            metadata_codec: "zstd".into(),
+            metadata_quality: 6,
+            inline_threshold: 8192,
+        },
+        categorizers: crate::config::defaults::all_v0_1(),
+        chunking: ChunkingConfig {
+            avg_chunk_size: 65_536,
+            min_chunk_size: 8192,
+            max_chunk_size: 262_144,
+        },
+        tournament: TournamentConfig {
+            codecs: vec!["store".into(), "lz4".into(), "zstd".into(), "brotli".into()],
+            min_size_threshold: 256,
+            skip_for_binary: false,
+        },
+        codec_tunables: CodecTunables {
+            brotli: crate::config::BrotliTunables {
+                quality: 11,
+                window: 22,
+            },
+            ..CodecTunables::default()
+        },
+        mode: crate::config::ImageMode::ReadWrite(crate::config::RWMode::UpdateInPlace),
+        write_codec: "zstd".into(),
+        turnover_threshold: 1000,
+        encryption: EncryptionConfig {
+            aead: "chacha20-poly1305".into(),
+            key_wrap: "x25519-hkdf".into(),
+        },
+        dictionaries: DictionaryConfig {
+            enabled: true,
+            min_class_size: 50,
+            max_dict_size: 131_072,
+        },
+    }
+}
+
+/// Balanced RW profile — general-purpose read-write image.
+///
+/// - Write codec: ZSTD L1 (fast, decent ratio per write)
+/// - Turnover codec: Brotli q5 (good ratio compaction)
+/// - Mode: UpdateInPlace
+/// - Chunks: 16 KB
+/// - Turnover threshold: 1000 updates
+#[must_use]
+pub fn balanced_rw() -> WriteConfig {
+    WriteConfig {
+        defaults: Defaults {
+            text_codec: "zstd".into(),
+            binary_codec: "lz4".into(),
+            metadata_codec: "zstd".into(),
+            metadata_quality: 3,
+            inline_threshold: 4096,
+        },
+        categorizers: crate::config::defaults::all_v0_1(),
+        chunking: ChunkingConfig {
+            avg_chunk_size: 16_384,
+            min_chunk_size: 2048,
+            max_chunk_size: 65_536,
+        },
+        tournament: TournamentConfig {
+            codecs: vec!["store".into(), "lz4".into(), "zstd".into()],
+            min_size_threshold: 256,
+            skip_for_binary: true,
+        },
+        codec_tunables: CodecTunables {
+            brotli: crate::config::BrotliTunables {
+                quality: 5,
+                window: 22,
+            },
+            ..CodecTunables::default()
+        },
+        mode: crate::config::ImageMode::ReadWrite(crate::config::RWMode::UpdateInPlace),
+        write_codec: "zstd".into(),
+        turnover_threshold: 1000,
+        encryption: EncryptionConfig {
+            aead: "chacha20-poly1305".into(),
+            key_wrap: "x25519-hkdf".into(),
+        },
+        dictionaries: DictionaryConfig {
+            enabled: true,
+            min_class_size: 100,
+            max_dict_size: 65_536,
+        },
+    }
+}
+
 /// TOML-representable profile selector. Either a built-in name or
 /// an inline custom profile.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -475,6 +627,9 @@ mod tests {
             COMPETITIVE,
             MAX_READ,
             MAX_WRITE,
+            MAX_WRITE_RW,
+            MAX_READ_RW,
+            BALANCED_RW,
         ] {
             let config = select(name).expect("profile exists");
             config.validate().expect("validates");
