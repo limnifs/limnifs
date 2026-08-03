@@ -81,6 +81,17 @@ enum Command {
         source: PathBuf,
         /// Output `.lim` file path.
         output: PathBuf,
+        /// Compression profile to use. Built-in: max-ratio, max-speed,
+        /// balanced, competitive, max-read, max-write, max-write-rw,
+        /// max-read-rw, balanced-rw. Default: balanced.
+        #[arg(long)]
+        profile: Option<String>,
+        /// Override text codec (e.g. "brotli", "zstd", "lz4").
+        #[arg(long)]
+        text_codec: Option<String>,
+        /// Override average chunk size in bytes.
+        #[arg(long)]
+        chunk_size: Option<u32>,
     },
     /// List the contents of a directory inside a `.lim` image.
     ///
@@ -270,7 +281,13 @@ fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     match cli.command {
         Command::Verify { image, json } => verify(&image, json),
-        Command::Limn { source, output } => limn(&source, &output),
+        Command::Limn {
+            source,
+            output,
+            profile,
+            text_codec,
+            chunk_size,
+        } => limn_with_profile(&source, &output, profile, text_codec, chunk_size),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat {
             image,
@@ -560,7 +577,93 @@ fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Read a `.lim` manifest, extract its inlined metadata blob, and list
+fn limn_with_profile(
+    source: &Path,
+    output: &Path,
+    profile: Option<String>,
+    text_codec: Option<String>,
+    chunk_size: Option<u32>,
+) -> Result<(), CliError> {
+    // Resolve config from profile or use default.
+    let mut config = match &profile {
+        Some(name) => limnifs_write::WriteConfig::from_profile(name).unwrap_or_else(|| {
+            eprintln!("warning: unknown profile '{name}', using balanced");
+            limnifs_write::profile::balanced()
+        }),
+        None => limnifs_write::WriteConfig::default_v0_1(),
+    };
+
+    // Apply CLI overrides.
+    if let Some(codec) = &text_codec {
+        config = config.with_text_codec(codec);
+    }
+    if let Some(size) = chunk_size {
+        config = config.with_chunk_size(size);
+    }
+
+    if let Some(ref p) = profile {
+        eprintln!("profile: {p}");
+    }
+    eprintln!(
+        "  text={}, binary={}, quality={}",
+        config.defaults.text_codec,
+        config.defaults.binary_codec,
+        config.codec_tunables.brotli.quality
+    );
+
+    let artifact = limnifs_write::write_directory_with_config(source, &config)
+        .map_err(|source| CliError::WriteFailed { source })?;
+
+    std::fs::write(output, &artifact.bytes).map_err(|source| CliError::ReadFailed {
+        path: output.to_path_buf(),
+        source,
+    })?;
+
+    let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
+    for slab in &artifact.slabs {
+        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        let slab_path = parent.join(slab_name);
+        std::fs::write(&slab_path, &slab.bytes).map_err(|source| CliError::ReadFailed {
+            path: slab_path.clone(),
+            source,
+        })?;
+        println!(
+            "{}: wrote {} bytes (slab {}, {} drops)",
+            slab_path.display(),
+            slab.bytes.len(),
+            slab.id.ordinal,
+            slab.drop_ids.len(),
+        );
+    }
+
+    if let Some(sidecar) = &artifact.metadata_sidecar {
+        let name = sidecar
+            .locator
+            .strip_prefix("file:")
+            .unwrap_or(&sidecar.locator);
+        let sidecar_path = parent.join(name);
+        std::fs::write(&sidecar_path, &sidecar.bytes).map_err(|source| CliError::ReadFailed {
+            path: sidecar_path.clone(),
+            source,
+        })?;
+    }
+
+    println!(
+        "{output}: wrote {len} bytes, {manifest_root}",
+        output = output.display(),
+        len = artifact.bytes.len(),
+        manifest_root = artifact.merkle_root,
+    );
+    println!(
+        "  inodes: {}  files: {}  dirs: {}  drops: {}  slabs: {}",
+        artifact.inode_count,
+        artifact.file_count,
+        artifact.dir_count,
+        artifact.drop_count,
+        artifact.slabs.len(),
+    );
+    Ok(())
+}
 /// the entries of the directory at `path` (slash-separated, relative
 /// to the image's root; `/` lists the root).
 fn ls(image: &Path, path: &str) -> Result<(), CliError> {
