@@ -166,7 +166,7 @@ pub fn limnifs_verify(image: &Path, iterations: usize) -> Vec<OperationResult> {
 pub fn dwarfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
     run_external(
         "mkdwarfs",
-        &["-i", "-o", "-l1", "--no-history"],
+        &["-i", "-o", "-l6", "--no-history"],
         source,
         work,
         "dwarfs",
