@@ -8,8 +8,8 @@ repository.workspace = true
 description = "LimniFS core reader — manifest parse, drop store, overlay resolution"
 
 [dependencies]
-limnifs-format = { path = "../limnifs-format", version = "0.1.0" }
-limnifs-ocb3 = { path = "../limnifs-ocb3", version = "0.1.0" }
+limnifs-format = { path = "../limnifs-format", version = "0.2.0" }
+limnifs-ocb3 = { path = "../limnifs-ocb3", version = "0.2.0" }
 aes-gcm.workspace = true
 blake3.workspace = true
 brotli.workspace = true
