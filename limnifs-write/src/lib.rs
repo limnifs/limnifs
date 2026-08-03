@@ -30,8 +30,8 @@ pub mod flatten;
 pub mod turnover;
 
 pub use config::{
-    CategorizerConfig, ChunkingConfig, CodecRegistry, Defaults, DictionaryConfig, EncryptionConfig,
-    TournamentConfig, WriteConfig,
+    profile, CategorizerConfig, ChunkingConfig, CodecRegistry, CodecTunables, Defaults,
+    DictionaryConfig, EncryptionConfig, TournamentConfig, WriteConfig,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -194,31 +194,32 @@ impl From<std::io::Error> for WriteError {
 ///
 /// Returns [`WriteError::Io`] for filesystem errors.
 pub fn write_directory(root: &Path) -> Result<WriteArtifact, WriteError> {
+    write_directory_with_config(root, &WriteConfig::default_v0_1())
+}
+
+/// Create an image with a custom [`WriteConfig`] (e.g. from a profile).
+pub fn write_directory_with_config(
+    root: &Path,
+    config: &WriteConfig,
+) -> Result<WriteArtifact, WriteError> {
     use rayon::prelude::*;
 
     let mut ctx = WriteContext::new();
 
-    // Phase 1: walk the tree SEQUENTIALLY (deterministic inode
-    // allocation). Collect files that need chunking (> INLINE_THRESHOLD)
-    // for parallel processing.
     let root_inode_number = ctx.walk(root)?;
     ctx.root_inode_number = root_inode_number;
 
-    // Phase 2: process each pending chunked file in PARALLEL via rayon.
-    // This is the CPU-heavy path: file read + FastCDC + BLAKE3 + LZ4.
-    // Each file is independent; results are collected in original order
-    // so the output stays deterministic.
     let pending = std::mem::take(&mut ctx.pending_files);
     if !pending.is_empty() {
         let chunker = ctx.chunker.clone();
         let classifier = ctx.classifier;
+        let text_codec = config.text_codec_id().unwrap_or(0x04);
+        let binary_codec = config.binary_codec_id().unwrap_or(0x01);
         let results: Vec<ChunkedFileResult> = pending
             .par_iter()
-            .map(|pf| process_file(pf, &chunker, classifier))
+            .map(|pf| process_file(pf, &chunker, classifier, text_codec, binary_codec))
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Phase 3: merge results SEQUENTIALLY into drops + inodes.
-        // Dedup happens here so the slab layout is deterministic.
         for (pf, result) in pending.iter().zip(results) {
             ctx.merge_chunked_file(pf, result);
         }
@@ -308,6 +309,8 @@ fn process_file(
     pf: &PendingFile,
     chunker: &FastCDC,
     classifier: classifier::Classifier,
+    text_codec: u8,
+    binary_codec: u8,
 ) -> Result<ChunkedFileResult, WriteError> {
     let data = std::fs::read(&pf.path)?;
     let file_len = data.len();
@@ -363,9 +366,9 @@ fn process_file(
         // Sparse (zero-dominated) compresses very well with Brotli.
         // Compressed/Media are already-encoded and don't compress further.
         let preferred_codec = match class {
-            classifier::Class::Binary => limnifs_core::codec::best_binary_codec(),
+            classifier::Class::Binary => binary_codec,
             classifier::Class::Text | classifier::Class::Code | classifier::Class::Sparse => {
-                limnifs_core::codec::best_compressible_codec()
+                text_codec
             }
             _ => limnifs_core::codec::CODEC_STORE,
         };
