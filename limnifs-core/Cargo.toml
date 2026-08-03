@@ -19,20 +19,22 @@ ed25519-dalek = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
 lz4_flex.workspace = true
 miniz_oxide.workspace = true
-omnizip-blosc = "0.11"
-omnizip-bzip2 = "0.11"
-omnizip-codecs = "0.11"
-omnizip-deflate64 = "0.11"
-omnizip-filters = "0.11"
-omnizip-flac = "0.11"
-omnizip-fsst = "0.11"
-omnizip-glza = "0.11"
-omnizip-lzma = "0.11"
-omnizip-ppmd = "0.11"
-omnizip-ricepp = "0.11"
-omnizip-snappy = "0.11"
-omnizip-zpaq = "0.11"
-omnizip-zstd = "0.11"
+omnizip-blosc = "0.13"
+omnizip-brotli = "0.13"
+omnizip-bzip2 = "0.13"
+omnizip-codecs = "0.13"
+omnizip-deflate = "0.13"
+omnizip-deflate64 = "0.13"
+omnizip-filters = "0.13"
+omnizip-flac = "0.13"
+omnizip-fsst = "0.13"
+omnizip-glza = "0.13"
+omnizip-lzma = "0.13"
+omnizip-ppmd = "0.13"
+omnizip-ricepp = "0.13"
+omnizip-snappy = "0.13"
+omnizip-zpaq = "0.13"
+omnizip-zstd = "0.13"
 rand_core = { workspace = true, optional = true }
 rayon.workspace = true
 ruzstd.workspace = true

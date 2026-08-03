@@ -37,6 +37,7 @@ mod fsst_brotli;
 mod glza;
 mod lz4;
 mod ppmd;
+mod ppmd8;
 mod ricepp;
 mod shuffle_lz4;
 mod shuffle_zstd;
@@ -95,6 +96,8 @@ pub const CODEC_BITSHUFFLE_LZ4: u8 = 0x0F;
 pub const CODEC_BZIP2: u8 = 0x10;
 /// Codec id 0x11: Deflate64 (ZIP method 9, 64 KB window).
 pub const CODEC_DEFLATE64: u8 = 0x11;
+/// Codec id 0x12: PPMd8 (RESTART + RLE, user-tunable memory budget).
+pub const CODEC_PPMD8: u8 = 0x12;
 
 /// The behaviour every compression codec implements. New codecs register
 /// a `Codec` impl with [`CodecRegistry::register`]; the dispatch code
@@ -233,7 +236,8 @@ impl Default for CodecRegistry {
         registry.register(Box::new(fsst_brotli::FsstBrotliCodec));
         registry.register(Box::new(shuffle_lz4::ShuffleLz4Codec::float32()));
         registry.register(Box::new(zpaq::ZpaqCodec));
-        registry.register(Box::new(ppmd::PpmdCodec));
+        registry.register(Box::new(ppmd::PpmdCodec::new()));
+        registry.register(Box::new(ppmd8::Ppmd8Codec::new()));
         registry.register(Box::new(glza::GlzaCodec));
         registry.register(Box::new(shuffle_zstd::ShuffleZstdCodec::new()));
         registry.register(Box::new(bitshuffle_lz4::BitshuffleLz4Codec::new()));
