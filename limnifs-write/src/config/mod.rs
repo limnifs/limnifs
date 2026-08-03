@@ -26,6 +26,7 @@
 
 pub mod defaults;
 pub mod error;
+pub mod profile;
 pub mod toml;
 
 use std::collections::BTreeMap;

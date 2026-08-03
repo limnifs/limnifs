@@ -656,7 +656,7 @@ fn cat(image: &Path, path: &str, offset: Option<u64>, length: Option<u64>) -> Re
                 None
             } else {
                 Some(
-                    limnifs_core::slab_store::SlabStore::load(image, &slab_index)
+                    limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index)
                         .map_err(map_err)?,
                 )
             };
@@ -747,7 +747,7 @@ fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
     let slab_store: Option<limnifs_core::slab_store::SlabStore> = if slab_index.is_empty() {
         None
     } else {
-        Some(limnifs_core::slab_store::SlabStore::load(image, &slab_index).map_err(map_err)?)
+        Some(limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?)
     };
 
     let stdout = std::io::stdout();
@@ -1109,7 +1109,7 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
     let slab_store: Option<limnifs_core::slab_store::SlabStore> = if slab_index.is_empty() {
         None
     } else {
-        Some(limnifs_core::slab_store::SlabStore::load(image, &slab_index).map_err(map_err)?)
+        Some(limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?)
     };
 
     let file_count = file_tasks.len();
@@ -1550,7 +1550,7 @@ fn check_cmd(image: &Path) -> Result<(), CliError> {
     }
 
     let slab_store =
-        limnifs_core::slab_store::SlabStore::load(image, &slab_index).map_err(map_err)?;
+        limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?;
 
     let mut checked = 0usize;
     let mut passed = 0usize;

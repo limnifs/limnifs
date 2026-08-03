@@ -37,7 +37,8 @@ pub fn limnifs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Oper
         let _ = std::fs::remove_file(&image);
         let before = ResourceSnapshot::now();
         let start = Instant::now();
-        let artifact = limnifs_write::write_directory(source);
+        let config = limnifs_write::profile::competitive();
+        let artifact = limnifs_write::write_directory_with_config(source, &config);
         let elapsed = start.elapsed();
         let after = ResourceSnapshot::now();
 
@@ -182,16 +183,34 @@ pub fn dwarfs_extract(
     iterations: usize,
     input_size: u64,
 ) -> Vec<OperationResult> {
-    run_external_extract(
-        "dwarfsextract",
-        &["-i", "-o"],
-        image,
-        work,
-        "dwarfs",
-        "extract",
-        input_size,
-        iterations,
-    )
+    use crate::resource::ResourceSnapshot;
+
+    let dest = work.join("extract_dwarfs");
+    let mut results = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let _ = std::fs::remove_dir_all(&dest);
+        let before = ResourceSnapshot::children();
+        let start = Instant::now();
+        let status = Command::new("dwarfsextract")
+            .arg("-i")
+            .arg(image)
+            .arg("-o")
+            .arg(&dest)
+            .status();
+        let elapsed = start.elapsed();
+        let after = ResourceSnapshot::children();
+        match status {
+            Ok(s) if s.success() => {
+                let mut r = OperationResult::success("dwarfs", "extract", elapsed, input_size);
+                r.cpu_user_secs = (after.user_secs - before.user_secs).max(0.0);
+                r.cpu_system_secs = (after.system_secs - before.system_secs).max(0.0);
+                r.peak_rss_bytes = after.rss_bytes.max(before.rss_bytes);
+                results.push(r);
+            }
+            _ => results.push(OperationResult::failure("dwarfs", "extract", elapsed)),
+        }
+    }
+    results
 }
 
 /// `SquashFS`
@@ -233,22 +252,30 @@ pub fn squashfs_extract(
     iterations: usize,
     input_size: u64,
 ) -> Vec<OperationResult> {
+    use crate::resource::ResourceSnapshot;
+
     let dest = work.join("extract_sqfs");
     let mut results = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let _ = std::fs::remove_dir_all(&dest);
+        let before = ResourceSnapshot::children();
         let start = Instant::now();
         let status = Command::new("unsquashfs")
-            .args(["-d"])
+            .arg("-d")
             .arg(&dest)
             .args(["-no-progress"])
             .arg(image)
             .status();
         let elapsed = start.elapsed();
+        let after = ResourceSnapshot::children();
         match status {
-            Ok(s) if s.success() => results.push(OperationResult::success(
-                "squashfs", "extract", elapsed, input_size,
-            )),
+            Ok(s) if s.success() => {
+                let mut r = OperationResult::success("squashfs", "extract", elapsed, input_size);
+                r.cpu_user_secs = (after.user_secs - before.user_secs).max(0.0);
+                r.cpu_system_secs = (after.system_secs - before.system_secs).max(0.0);
+                r.peak_rss_bytes = after.rss_bytes.max(before.rss_bytes);
+                results.push(r);
+            }
             _ => results.push(OperationResult::failure("squashfs", "extract", elapsed)),
         }
     }
@@ -326,6 +353,8 @@ fn run_external(
     image_name: &str,
     iterations: usize,
 ) -> Vec<OperationResult> {
+    use crate::resource::ResourceSnapshot;
+
     if which(tool).is_none() {
         return Vec::new();
     }
@@ -333,6 +362,7 @@ fn run_external(
     let image = work.join(image_name);
     for _ in 0..iterations {
         let _ = std::fs::remove_file(&image);
+        let before = ResourceSnapshot::children();
         let start = Instant::now();
         let status = Command::new(tool)
             .arg("-i")
@@ -342,10 +372,15 @@ fn run_external(
             .args(flags)
             .status();
         let elapsed = start.elapsed();
+        let after = ResourceSnapshot::children();
         match status {
             Ok(s) if s.success() => {
                 let size = std::fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
-                results.push(OperationResult::success(format, op, elapsed, size));
+                let mut r = OperationResult::success(format, op, elapsed, size);
+                r.cpu_user_secs = (after.user_secs - before.user_secs).max(0.0);
+                r.cpu_system_secs = (after.system_secs - before.system_secs).max(0.0);
+                r.peak_rss_bytes = after.rss_bytes.max(before.rss_bytes);
+                results.push(r);
             }
             _ => results.push(OperationResult::failure(format, op, elapsed)),
         }
@@ -355,7 +390,7 @@ fn run_external(
 
 fn run_external_extract(
     tool: &str,
-    _flags: &[&str],
+    flags: &[&str],
     image: &Path,
     work: &Path,
     format: &str,
@@ -363,6 +398,8 @@ fn run_external_extract(
     input_size: u64,
     iterations: usize,
 ) -> Vec<OperationResult> {
+    use crate::resource::ResourceSnapshot;
+
     if which(tool).is_none() {
         return Vec::new();
     }
@@ -370,17 +407,22 @@ fn run_external_extract(
     let mut results = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let _ = std::fs::remove_dir_all(&dest);
+        let before = ResourceSnapshot::children();
         let start = Instant::now();
         let status = Command::new(tool)
-            .args(["-i"])
+            .args(flags)
             .arg(image)
-            .args(["-o"])
             .arg(&dest)
             .status();
         let elapsed = start.elapsed();
+        let after = ResourceSnapshot::children();
         match status {
             Ok(s) if s.success() => {
-                results.push(OperationResult::success(format, op, elapsed, input_size));
+                let mut r = OperationResult::success(format, op, elapsed, input_size);
+                r.cpu_user_secs = (after.user_secs - before.user_secs).max(0.0);
+                r.cpu_system_secs = (after.system_secs - before.system_secs).max(0.0);
+                r.peak_rss_bytes = after.rss_bytes.max(before.rss_bytes);
+                results.push(r);
             }
             _ => results.push(OperationResult::failure(format, op, elapsed)),
         }
