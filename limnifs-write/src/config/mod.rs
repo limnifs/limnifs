@@ -267,9 +267,7 @@ pub struct Bzip2Tunables {
 
 impl Default for Bzip2Tunables {
     fn default() -> Self {
-        Self {
-            block_size_kb: 900,
-        }
+        Self { block_size_kb: 900 }
     }
 }
 
