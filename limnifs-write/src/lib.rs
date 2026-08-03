@@ -49,6 +49,12 @@ use limnifs_format::{ManifestRoot, SlabId};
 /// in their inode. Larger files are stored as drops in a slab.
 pub const INLINE_THRESHOLD: usize = 4096;
 
+/// Maximum file size for the whole-file categorizer path. Files above
+/// this threshold use FastCDC chunking even when a categorizer claims
+/// them, enabling rayon parallelism across chunks. The categorizer's
+/// codec is still used per-chunk when possible.
+pub const WHOLE_FILE_MAX_SIZE: usize = 1024 * 1024;
+
 /// Maximum total length of a single slab file (header + content).
 /// Matches the reader's `DEFAULT_SLAB_MAX_BYTES` (spec §3.1) minus a
 /// safety margin so a slab that is full but not yet flushed cannot
@@ -282,9 +288,18 @@ fn process_file(
     let file_len = data.len();
 
     // File-level categorizer path: skip FastCDC if a specialized
-    // codec claims this file. The whole file becomes one drop.
+    // codec claims this file. Codecs that require container headers
+    // (FLAC, Rice++) always use the whole-file path. Byte-oriented
+    // codecs (FSST+Brotli, Brotli, ZSTD) use FastCDC for files above
+    // WHOLE_FILE_MAX_SIZE to parallelize across rayon workers.
     if let Some(cat) = file_categorizer::default_registry().categorize(&pf.path, &data) {
-        return process_whole_file_drop(pf, &data, cat);
+        let needs_whole_file = matches!(
+            cat.codec_id,
+            limnifs_core::codec::CODEC_FLAC | limnifs_core::codec::CODEC_RICEPP
+        );
+        if needs_whole_file || file_len <= WHOLE_FILE_MAX_SIZE {
+            return process_whole_file_drop(pf, &data, cat);
+        }
     }
 
     let chunks = chunker.chunk_slice(&data);
