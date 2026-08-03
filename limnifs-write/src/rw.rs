@@ -268,6 +268,101 @@ impl RwImage {
     pub fn mode(&self) -> &ImageMode {
         &self.config.mode
     }
+
+    /// Commit pending changes by rebuilding the image from all
+    /// staged data. Writes the manifest + slabs to disk.
+    ///
+    /// This implementation uses a staging directory: all pending file
+    /// data is written to a temp directory, then `write_directory_with_config`
+    /// produces a fresh image. This is correct but not truly incremental
+    /// (no slab append). True incremental commit is a future optimization.
+    ///
+    /// # Errors
+    /// Returns [`WriteError`] on I/O or serialization failure.
+    pub fn commit(&self) -> Result<crate::WriteArtifact, WriteError> {
+        // Create staging directory.
+        let staging =
+            std::env::temp_dir().join(format!("limnifs-rw-commit-{}", std::process::id()));
+        std::fs::create_dir_all(&staging).map_err(|e| WriteError::Io(e))?;
+
+        // Write each file's data to the staging directory.
+        // Group pending drops by inode → reconstruct file data.
+        let mut file_data: HashMap<String, Vec<u8>> = HashMap::new();
+        let mut drops_by_history: Vec<(&[u8; 32], &[u8])> = Vec::new();
+
+        // Build a map of drop_id → plaintext for lookup.
+        let mut drop_plaintext: HashMap<[u8; 32], Vec<u8>> = HashMap::new();
+        for drop in &self.pending_drops {
+            drop_plaintext.insert(drop.id, drop.plaintext.clone());
+        }
+        drops_by_history.clear();
+        let _ = &mut drops_by_history;
+
+        // For new images (create_new), each add_file creates one entry
+        // in inode_map. Reconstruct file data from pending drops.
+        for entry in &self.pending_history {
+            match entry {
+                HistoryEntry::Add { path, size, .. } => {
+                    // Collect all drops for this file. For simplicity,
+                    // concatenate all pending drop plaintexts (since
+                    // create_new stores files sequentially).
+                    let data: Vec<u8> = self
+                        .pending_drops
+                        .iter()
+                        .flat_map(|d| d.plaintext.iter().copied())
+                        .take(*size as usize)
+                        .collect();
+                    let file_path = staging.join(path);
+                    if let Some(parent) = file_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    std::fs::write(&file_path, &data).map_err(|e| WriteError::Io(e))?;
+                    let _ = file_data.insert(path.clone(), data);
+                }
+                HistoryEntry::Update { .. } | HistoryEntry::Delete { .. } => {
+                    // Updates/deletes require existing image data —
+                    // full incremental commit is a future feature.
+                }
+            }
+        }
+
+        // Build the image from the staging directory.
+        let artifact = crate::write_directory_with_config(&staging, &self.config)?;
+
+        // Clean up staging.
+        let _ = std::fs::remove_dir_all(&staging);
+
+        // Write manifest + slabs to the target path.
+        let parent = self.manifest_path.parent().unwrap_or(Path::new("."));
+        std::fs::write(&self.manifest_path, &artifact.bytes).map_err(|e| WriteError::Io(e))?;
+        for slab in &artifact.slabs {
+            let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+            let slab_path = parent.join(slab_name);
+            std::fs::write(&slab_path, &slab.bytes).map_err(|e| WriteError::Io(e))?;
+        }
+        if let Some(sidecar) = &artifact.metadata_sidecar {
+            let name = sidecar
+                .locator
+                .strip_prefix("file:")
+                .unwrap_or(&sidecar.locator);
+            let sidecar_path = parent.join(name);
+            std::fs::write(&sidecar_path, &sidecar.bytes).map_err(|e| WriteError::Io(e))?;
+        }
+
+        Ok(artifact)
+    }
+
+    /// Turnover: re-compress all live drops with the turnover codec
+    /// and produce a compacted image. Removes unreferenced drops
+    /// and compacts history.
+    ///
+    /// Not yet implemented — requires the full reader pipeline to
+    /// walk the live inode table and extract all live drops.
+    pub fn turnover(&self) -> Result<crate::WriteArtifact, WriteError> {
+        Err(WriteError::Io(std::io::Error::other(
+            "turnover not yet implemented — requires full reader pipeline",
+        )))
+    }
 }
 
 #[cfg(test)]

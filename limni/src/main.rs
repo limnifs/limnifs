@@ -150,6 +150,21 @@ enum Command {
     },
     /// Extract an image's contents to a filesystem directory.
     Extract { image: PathBuf, dest: PathBuf },
+    /// Add a file to an existing image (RW).
+    Add {
+        image: PathBuf,
+        dest: String,
+        source: PathBuf,
+        #[arg(long)]
+        profile: Option<String>,
+    },
+    /// Delete a file from an existing image (RW).
+    Delete {
+        image: PathBuf,
+        path: String,
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Compute tree operations between a parent and child image.
     Diff { parent: PathBuf, child: PathBuf },
     /// Print a comprehensive overview of an image: manifest summary,
@@ -299,6 +314,17 @@ fn run() -> Result<(), CliError> {
         Command::Stat { image, path } => stat(&image, &path),
         Command::Tree { image, path } => tree(&image, &path),
         Command::Extract { image, dest } => extract(&image, &dest),
+        Command::Add {
+            image,
+            dest,
+            source,
+            profile,
+        } => rw_add(&image, &dest, &source, profile),
+        Command::Delete {
+            image,
+            path,
+            profile,
+        } => rw_delete(&image, &path, profile),
         Command::Diff { parent, child } => diff(&parent, &child),
         Command::Inspect { image } => inspect(&image),
         Command::Slab { slab } => slab_cmd(&slab),
@@ -717,6 +743,116 @@ fn ls(image: &Path, path: &str) -> Result<(), CliError> {
         })?;
 
     print_directory_listing(image, path, dir_node);
+    Ok(())
+}
+
+fn rw_add(
+    image: &Path,
+    dest_path: &str,
+    src: &Path,
+    profile: Option<String>,
+) -> Result<(), CliError> {
+    let config = match &profile {
+        Some(name) => limnifs_write::WriteConfig::from_profile(name)
+            .unwrap_or_else(|| limnifs_write::profile::balanced_rw()),
+        None => limnifs_write::profile::balanced_rw(),
+    };
+    let staging = std::env::temp_dir().join(format!("limnifs-rw-add-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    if image.exists() {
+        extract(image, &staging)?;
+    } else {
+        std::fs::create_dir_all(&staging).map_err(|e| CliError::ReadFailed {
+            path: staging.clone(),
+            source: e,
+        })?;
+    }
+    let dest_file = staging.join(dest_path);
+    if let Some(parent) = dest_file.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| CliError::ReadFailed {
+            path: parent.to_path_buf(),
+            source: e,
+        })?;
+    }
+    std::fs::copy(src, &dest_file).map_err(|e| CliError::ReadFailed {
+        path: src.to_path_buf(),
+        source: e,
+    })?;
+    eprintln!("added: {dest_path} ({})", src.display());
+    let artifact = limnifs_write::write_directory_with_config(&staging, &config)
+        .map_err(|source| CliError::WriteFailed { source })?;
+    std::fs::write(image, &artifact.bytes).map_err(|e| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source: e,
+    })?;
+    let parent = image.parent().unwrap_or_else(|| std::path::Path::new("."));
+    for slab in &artifact.slabs {
+        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        std::fs::write(parent.join(slab_name), &slab.bytes).map_err(|e| CliError::ReadFailed {
+            path: parent.join(slab_name),
+            source: e,
+        })?;
+    }
+    if let Some(sidecar) = &artifact.metadata_sidecar {
+        let name = sidecar
+            .locator
+            .strip_prefix("file:")
+            .unwrap_or(&sidecar.locator);
+        std::fs::write(parent.join(name), &sidecar.bytes).map_err(|e| CliError::ReadFailed {
+            path: parent.join(name),
+            source: e,
+        })?;
+    }
+    eprintln!(
+        "rebuilt: {} ({} inodes, {} drops)",
+        image.display(),
+        artifact.inode_count,
+        artifact.drop_count,
+    );
+    let _ = std::fs::remove_dir_all(&staging);
+    Ok(())
+}
+
+fn rw_delete(image: &Path, path: &str, profile: Option<String>) -> Result<(), CliError> {
+    let config = match &profile {
+        Some(name) => limnifs_write::WriteConfig::from_profile(name)
+            .unwrap_or_else(|| limnifs_write::profile::balanced_rw()),
+        None => limnifs_write::profile::balanced_rw(),
+    };
+    let staging = std::env::temp_dir().join(format!("limnifs-rw-del-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    extract(image, &staging)?;
+    let target = staging.join(path);
+    std::fs::remove_file(&target).map_err(|e| CliError::ReadFailed {
+        path: target.clone(),
+        source: e,
+    })?;
+    eprintln!("deleted: {path}");
+    let artifact = limnifs_write::write_directory_with_config(&staging, &config)
+        .map_err(|source| CliError::WriteFailed { source })?;
+    std::fs::write(image, &artifact.bytes).map_err(|e| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source: e,
+    })?;
+    let parent = image.parent().unwrap_or_else(|| std::path::Path::new("."));
+    for slab in &artifact.slabs {
+        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        std::fs::write(parent.join(slab_name), &slab.bytes).map_err(|e| CliError::ReadFailed {
+            path: parent.join(slab_name),
+            source: e,
+        })?;
+    }
+    if let Some(sidecar) = &artifact.metadata_sidecar {
+        let name = sidecar
+            .locator
+            .strip_prefix("file:")
+            .unwrap_or(&sidecar.locator);
+        std::fs::write(parent.join(name), &sidecar.bytes).map_err(|e| CliError::ReadFailed {
+            path: parent.join(name),
+            source: e,
+        })?;
+    }
+    let _ = std::fs::remove_dir_all(&staging);
     Ok(())
 }
 
