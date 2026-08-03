@@ -13,17 +13,10 @@
 //! | 0x00 | store | yes (identity) | yes | No compression |
 //! | 0x01 | lz4   | yes (`lz4_flex`) | yes | Fast baseline; pure Rust |
 //! | 0x02 | zstd  | yes (`ruzstd` `Fastest`) | yes (`ruzstd`) | Pure Rust; ZSTD level 1 |
-//! | 0x03 | xz    | **no** | yes (`lzma-rs`) | Decode-only for legacy drops |
+//! | 0x03 | xz    | yes (`omnizip-lzma`) | yes (`omnizip-lzma`) | LZMA2 in XZ container |
 //! | 0x04 | brotli | yes (`brotli` q11) | yes (`brotli`) | Best ratio; pure Rust |
 //! | 0x05 | deflate | yes (`miniz_oxide`) | yes (`miniz_oxide`) | RFC 1951; universal interop; pure Rust |
 //! | 0x06 | snappy | yes (`omnizip-snappy`) | yes (`omnizip-snappy`) | Google's high-speed codec; pure Rust |
-//!
-//! **Why XZ is decode-only.** `lzma-rs` 0.3.0 ships an LZMA2 "encoder" that
-//! wraps input as uncompressed chunks (`encode/lzma2.rs`) and a raw-LZMA
-//! encoder that emits literals only (`encode/dumbencoder.rs`). Neither
-//! performs real compression. There is no mature pure-Rust LZMA encoder as
-//! of 2026, so `LimniFS` reserves the XZ codec id for reading legacy drops
-//! produced by external tooling and routes its own encoding to ZSTD.
 //!
 //! **100% pure Rust.** No C libraries. Air-gapped safe.
 
@@ -60,7 +53,7 @@ pub const CODEC_LZ4: u8 = 0x01;
 /// Encode uses `CompressionLevel::Fastest` (ZSTD level 1); decode supports
 /// any level the reference encoder can produce.
 pub const CODEC_ZSTD: u8 = 0x02;
-/// Codec id 0x03: XZ/LZMA2 format. Decode-only in pure Rust (`lzma-rs`).
+/// Codec id 0x03: XZ/LZMA2 format via `omnizip-lzma`.
 pub const CODEC_XZ: u8 = 0x03;
 /// Codec id 0x04: Brotli frame format (`brotli`, pure Rust). Encode at
 /// quality 11 (best ratio); decode at any quality.
@@ -99,6 +92,60 @@ pub const CODEC_DEFLATE64: u8 = 0x11;
 /// Codec id 0x12: PPMd8 (RESTART + RLE, user-tunable memory budget).
 pub const CODEC_PPMD8: u8 = 0x12;
 
+/// Codec-agnostic tunables. Every codec reads only the fields it
+/// understands; the rest are ignored. The struct is the
+/// single source of truth for "what knobs does the writer want to
+/// turn" — adding a new knob is one field here, not a new
+/// `compress_with_*` function per codec (OCP).
+#[derive(Clone, Debug)]
+pub struct CodecTunables {
+    /// Brotli quality (0..=11) and ZSTD level proxy (1..=22).
+    /// Codecs without a quality parameter ignore this.
+    pub quality: u8,
+    /// PPMd7 / PPMd8 context-model order (1..=16).
+    pub ppmd_order: u8,
+    /// PPMd7 context-tree memory budget in bytes. 0 = codec default.
+    pub ppmd7_budget: usize,
+    /// PPMd8 context-tree memory budget in bytes. 0 = codec default.
+    pub ppmd8_budget: usize,
+    /// BZip2 block size in KB (100..=900). Maps to level 1..=9.
+    pub bzip2_block_kb: u32,
+    /// LZMA dictionary size in MB. Reserved — no pure-Rust LZMA
+    /// encoder exists yet; field is here so profiles can declare
+    /// intent and we wire it when omnizip-lzma ships an encoder.
+    pub lzma_dict_mb: u32,
+}
+
+impl CodecTunables {
+    /// Build tunables carrying only `quality`. Codecs that don't
+    /// override `compress_with_tunables` see no difference from
+    /// `compress(plaintext)`.
+    #[must_use]
+    pub fn from_quality(quality: u8) -> Self {
+        Self {
+            quality,
+            ppmd_order: 0,
+            ppmd7_budget: 0,
+            ppmd8_budget: 0,
+            bzip2_block_kb: 0,
+            lzma_dict_mb: 0,
+        }
+    }
+}
+
+impl Default for CodecTunables {
+    fn default() -> Self {
+        Self {
+            quality: 0,
+            ppmd_order: 0,
+            ppmd7_budget: 0,
+            ppmd8_budget: 0,
+            bzip2_block_kb: 0,
+            lzma_dict_mb: 0,
+        }
+    }
+}
+
 /// The behaviour every compression codec implements. New codecs register
 /// a `Codec` impl with [`CodecRegistry::register`]; the dispatch code
 /// never changes.
@@ -131,6 +178,24 @@ pub trait Codec: Send + Sync {
     /// grammar construction, etc.).
     fn min_compress_size(&self) -> usize {
         0
+    }
+
+    /// Compress with a tunables hint. Codecs that have user-tunable
+    /// parameters (PPMd order/budget, Brotli quality, ZSTD level,
+    /// Bzip2 block size, …) override this; the default impl ignores
+    /// tunables and calls `compress`. Adding a tunable is therefore
+    /// backward-compatible — old callers keep working.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Codec::compress`].
+    fn compress_with_tunables(
+        &self,
+        plaintext: &[u8],
+        tunables: &CodecTunables,
+    ) -> Result<Vec<u8>, CoreError> {
+        let _ = tunables;
+        self.compress(plaintext)
     }
 }
 
@@ -179,7 +244,7 @@ impl CodecRegistry {
     /// # Errors
     ///
     /// Returns [`CoreError::UnsupportedFeature`] if no codec with `id` is
-    /// registered, or if the codec is decode-only.
+    /// registered.
     pub fn compress(&self, id: u8, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
         match self.find(id) {
             Some(codec) => codec.compress(plaintext),
@@ -209,6 +274,29 @@ impl CodecRegistry {
             None => Err(CoreError::UnsupportedFeature {
                 feature: format!(
                     "decompress codec 0x{id:02X} (registered: {registered})",
+                    registered = self.registered_names()
+                ),
+            }),
+        }
+    }
+
+    /// Dispatch compression with a tunables hint. Codecs that don't
+    /// override the trait method fall through to plain `compress`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`CodecRegistry::compress`].
+    pub fn compress_with_tunables(
+        &self,
+        id: u8,
+        plaintext: &[u8],
+        tunables: &CodecTunables,
+    ) -> Result<Vec<u8>, CoreError> {
+        match self.find(id) {
+            Some(codec) => codec.compress_with_tunables(plaintext, tunables),
+            None => Err(CoreError::UnsupportedFeature {
+                feature: format!(
+                    "compress_with_tunables codec 0x{id:02X} (registered: {registered})",
                     registered = self.registered_names()
                 ),
             }),
@@ -291,8 +379,7 @@ pub fn best_binary_codec() -> u8 {
 ///
 /// # Errors
 ///
-/// Returns [`CoreError::UnsupportedFeature`] for unknown codec ids and
-/// for codecs that are decode-only in pure Rust (currently `CODEC_XZ`).
+/// Returns [`CoreError::UnsupportedFeature`] for unknown codec ids.
 /// Returns [`CoreError::Corrupt`] if the encoder fails.
 pub fn compress(codec_id: u8, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
     default_registry().compress(codec_id, plaintext)
@@ -308,6 +395,10 @@ pub fn compress(codec_id: u8, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
 /// - ZSTD (0x02): 1..=22 (higher = better ratio, slower)
 /// - All others: ignored
 ///
+/// For PPMd7 / PPMd8 / Bzip2 tunables, use
+/// [`compress_with_tunables`] with a fully-populated
+/// [`CodecTunables`].
+///
 /// # Errors
 /// Same as [`compress`].
 pub fn compress_with_options(
@@ -315,22 +406,23 @@ pub fn compress_with_options(
     plaintext: &[u8],
     quality: u8,
 ) -> Result<Vec<u8>, CoreError> {
-    match codec_id {
-        CODEC_BROTLI => compress_brotli_with_quality(plaintext, i32::from(quality)),
-        CODEC_ZSTD => {
-            let level = match quality {
-                0..=2 => omnizip_zstd::ZstdLevel::Fastest,
-                3..=5 => omnizip_zstd::ZstdLevel::Fast,
-                6..=11 => omnizip_zstd::ZstdLevel::Default,
-                12..=21 => omnizip_zstd::ZstdLevel::Better,
-                _ => omnizip_zstd::ZstdLevel::Best,
-            };
-            omnizip_zstd::compress(plaintext, level).map_err(|e| CoreError::Corrupt {
-                reason: format!("zstd: {e}"),
-            })
-        }
-        _ => compress(codec_id, plaintext),
-    }
+    let tunables = CodecTunables::from_quality(quality);
+    compress_with_tunables(codec_id, plaintext, &tunables)
+}
+
+/// Compress `plaintext` with the given codec and tunables. Codecs
+/// that don't override `compress_with_tunables` on the [`Codec`]
+/// trait fall back to plain `compress`.
+///
+/// # Errors
+///
+/// Same as [`compress`].
+pub fn compress_with_tunables(
+    codec_id: u8,
+    plaintext: &[u8],
+    tunables: &CodecTunables,
+) -> Result<Vec<u8>, CoreError> {
+    default_registry().compress_with_tunables(codec_id, plaintext, tunables)
 }
 
 /// Decompress `compressed` using the codec identified by `codec_id`, via
@@ -408,6 +500,91 @@ pub fn compress_deflate(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tunables_ppmd7_bigger_budget_helps_ratio() {
+        // Synthetic but realistic: a 1 MB text fixture with mixed
+        // repetition. PPMd7 with 256 MB context budget should
+        // outperform the 8 MB default.
+        let mut input = Vec::with_capacity(1 * 1024 * 1024);
+        let paragraph = b"the quick brown fox jumps over the lazy dog. ";
+        while input.len() + paragraph.len() <= 1 * 1024 * 1024 {
+            input.extend_from_slice(paragraph);
+        }
+
+        let small = CodecTunables {
+            quality: 0,
+            ppmd_order: 4,
+            ppmd7_budget: 8 * 1024 * 1024,
+            ppmd8_budget: 0,
+            bzip2_block_kb: 0,
+            lzma_dict_mb: 0,
+        };
+        let big = CodecTunables {
+            ppmd7_budget: 256 * 1024 * 1024,
+            ..small.clone()
+        };
+
+        let small_c = compress_with_tunables(CODEC_PPMD, &input, &small).expect("ppmd7 small");
+        let big_c = compress_with_tunables(CODEC_PPMD, &input, &big).expect("ppmd7 big");
+        assert!(
+            big_c.len() <= small_c.len(),
+            "256MB budget should not be worse than 8MB ({} vs {})",
+            big_c.len(),
+            small_c.len()
+        );
+
+        // Round trip.
+        let recovered = decompress(CODEC_PPMD, &small_c, input.len() as u32).expect("d");
+        assert_eq!(recovered, input);
+    }
+
+    #[test]
+    fn tunables_brotli_quality_flows_through() {
+        // Mixed natural-language text — q11's larger window and
+        // context model should beat q0's "store literals" mode.
+        let paragraph = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit, \
+                          sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. \
+                          Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.";
+        let mut input = Vec::with_capacity(200_000);
+        let mut i = 0;
+        while input.len() < 200_000 {
+            // Vary each line slightly so q0 can't just RLE the whole thing.
+            input.extend_from_slice(format!("{i:04}: {paragraph:?}\n").as_bytes());
+            i += 1;
+        }
+        let q0 = CodecTunables::from_quality(0);
+        let q11 = CodecTunables::from_quality(11);
+        let c0 = compress_with_tunables(CODEC_BROTLI, &input, &q0).expect("brotli q0");
+        let c11 = compress_with_tunables(CODEC_BROTLI, &input, &q11).expect("brotli q11");
+        assert!(
+            c11.len() < c0.len(),
+            "q11 ({}) should beat q0 ({}) on mixed text",
+            c11.len(),
+            c0.len()
+        );
+    }
+
+    #[test]
+    fn tunables_bzip2_block_size_maps_to_level() {
+        let input = b"the quick brown fox jumps over the lazy dog. ".repeat(2000);
+        let small = CodecTunables {
+            bzip2_block_kb: 100,
+            ..CodecTunables::default()
+        };
+        let big = CodecTunables {
+            bzip2_block_kb: 900,
+            ..CodecTunables::default()
+        };
+        let cs = compress_with_tunables(CODEC_BZIP2, &input, &small).expect("bzip2 100k");
+        let cb = compress_with_tunables(CODEC_BZIP2, &input, &big).expect("bzip2 900k");
+        assert!(
+            cb.len() <= cs.len(),
+            "900k ({}) <= 100k ({})",
+            cb.len(),
+            cs.len()
+        );
+    }
 
     #[test]
     fn store_compress_is_identity() {

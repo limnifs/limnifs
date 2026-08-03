@@ -219,7 +219,7 @@ pub fn write_directory_with_config(
         let classifier = ctx.classifier;
         let text_codec = config.text_codec_id().unwrap_or(0x04);
         let binary_codec = config.binary_codec_id().unwrap_or(0x01);
-        let brotli_quality = config.codec_tunables.brotli.quality;
+        let tunables = config.to_core_tunables();
         let use_categorizers = !config.categorizers.is_empty();
         let results: Vec<ChunkedFileResult> = pending
             .par_iter()
@@ -230,7 +230,7 @@ pub fn write_directory_with_config(
                     classifier,
                     text_codec,
                     binary_codec,
-                    brotli_quality,
+                    &tunables,
                     use_categorizers,
                 )
             })
@@ -266,22 +266,27 @@ struct ChunkedFileResult {
 /// `codec_params` field is reserved for future use when a codec
 /// needs params NOT embedded in its container.
 fn process_whole_file_drop(
-    _pf: &PendingFile,
+    pf: &PendingFile,
     data: &[u8],
     cat: file_categorizer::Categorization,
-    brotli_quality: u8,
+    tunables: &limnifs_core::codec::CodecTunables,
 ) -> Result<ChunkedFileResult, WriteError> {
+    let _ = pf;
     let drop_id = hash_section(data);
 
-    let brotli_c = limnifs_core::codec::compress_with_options(
+    let brotli_c = limnifs_core::codec::compress_with_tunables(
         limnifs_core::codec::CODEC_BROTLI,
         data,
-        brotli_quality,
+        tunables,
     )
     .map_err(|e| WriteError::Io(std::io::Error::other(format!("brotli compress: {e}"))))?;
 
-    let zstd_c =
-        limnifs_core::codec::compress(limnifs_core::codec::CODEC_ZSTD, data).unwrap_or_default();
+    let zstd_c = limnifs_core::codec::compress_with_tunables(
+        limnifs_core::codec::CODEC_ZSTD,
+        data,
+        tunables,
+    )
+    .unwrap_or_default();
 
     let (mut best_codec, mut best_compressed) = if brotli_c.len() <= zstd_c.len() {
         (limnifs_core::codec::CODEC_BROTLI, brotli_c)
@@ -327,7 +332,7 @@ fn process_file(
     classifier: classifier::Classifier,
     text_codec: u8,
     binary_codec: u8,
-    brotli_quality: u8,
+    tunables: &limnifs_core::codec::CodecTunables,
     use_categorizers: bool,
 ) -> Result<ChunkedFileResult, WriteError> {
     let data = std::fs::read(&pf.path)?;
@@ -340,7 +345,7 @@ fn process_file(
                 limnifs_core::codec::CODEC_FLAC | limnifs_core::codec::CODEC_RICEPP
             );
             if needs_whole_file || file_len <= WHOLE_FILE_MAX_SIZE {
-                return process_whole_file_drop(pf, &data, cat, brotli_quality);
+                return process_whole_file_drop(pf, &data, cat, tunables);
             }
         }
     }
@@ -386,11 +391,8 @@ fn process_file(
             let (codec_id, compressed) = if preferred_codec == limnifs_core::codec::CODEC_STORE {
                 (limnifs_core::codec::CODEC_STORE, chunk.to_vec())
             } else {
-                match limnifs_core::codec::compress_with_options(
-                    preferred_codec,
-                    chunk,
-                    brotli_quality,
-                ) {
+                match limnifs_core::codec::compress_with_tunables(preferred_codec, chunk, tunables)
+                {
                     Ok(c) if c.len() < chunk.len() => (preferred_codec, c),
                     _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
                 }

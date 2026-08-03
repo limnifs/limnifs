@@ -13,7 +13,7 @@
 //! reference; switching gives us levels 1, 3, 6, 12, 22 with no
 //! quality regression.
 
-use crate::codec::Codec;
+use crate::codec::{Codec, CodecTunables};
 use crate::error::CoreError;
 
 /// ZSTD codec. Encode at `Default` (L6); decode at any level.
@@ -49,6 +49,27 @@ impl Codec for ZstdCodec {
             });
         }
         Ok(result)
+    }
+
+    fn compress_with_tunables(
+        &self,
+        plaintext: &[u8],
+        t: &CodecTunables,
+    ) -> Result<Vec<u8>, CoreError> {
+        let level = if t.quality > 0 {
+            match t.quality {
+                0..=2 => omnizip_zstd::ZstdLevel::Fastest,
+                3..=5 => omnizip_zstd::ZstdLevel::Fast,
+                6..=11 => omnizip_zstd::ZstdLevel::Default,
+                12..=21 => omnizip_zstd::ZstdLevel::Better,
+                _ => omnizip_zstd::ZstdLevel::Best,
+            }
+        } else {
+            omnizip_zstd::ZstdLevel::Default
+        };
+        omnizip_zstd::compress(plaintext, level).map_err(|e| CoreError::Corrupt {
+            reason: format!("zstd compress (level {level}) failed: {e}"),
+        })
     }
 }
 

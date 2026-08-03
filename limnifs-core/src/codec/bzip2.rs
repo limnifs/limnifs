@@ -6,8 +6,7 @@
 
 use omnizip_codecs::{Codec as OmnizipCodec, CompressionLevel};
 
-use crate::codec::Codec;
-use crate::codec::CODEC_BZIP2;
+use crate::codec::{Codec, CodecTunables, CODEC_BZIP2};
 use crate::error::CoreError;
 
 /// Default `BZip2` compression level (1..=9, higher = better ratio).
@@ -61,6 +60,24 @@ impl Codec for Bzip2Codec {
     fn decompress(&self, compressed: &[u8], expected_len: u32) -> Result<Vec<u8>, CoreError> {
         let codec = omnizip_bzip2::Bzip2Codec::new();
         OmnizipCodec::decompress(&codec, compressed, expected_len).map_err(bzip2_err)
+    }
+
+    fn compress_with_tunables(
+        &self,
+        plaintext: &[u8],
+        t: &CodecTunables,
+    ) -> Result<Vec<u8>, CoreError> {
+        // Bzip2 block size in 100 KB increments (1..=9). Profiles
+        // declare `block_size_kb` (e.g. 900 for max-ratio); map to
+        // the closest valid level.
+        let level = if t.bzip2_block_kb > 0 {
+            let kb = t.bzip2_block_kb.clamp(100, 900);
+            CompressionLevel::from(((kb + 99) / 100) as u8)
+        } else {
+            self.level
+        };
+        let codec = omnizip_bzip2::Bzip2Codec::new();
+        OmnizipCodec::compress(&codec, plaintext, level).map_err(bzip2_err)
     }
 }
 

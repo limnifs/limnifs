@@ -8,7 +8,7 @@
 //! - Built-in RLE for runs of identical bytes
 //! - Trie pruning for bounded memory usage
 
-use crate::codec::{Codec, CODEC_PPMD8};
+use crate::codec::{Codec, CodecTunables, CODEC_PPMD8};
 use crate::error::CoreError;
 
 /// Default PPMd8 memory budget: 64 MB.
@@ -75,6 +75,28 @@ impl Codec for Ppmd8Codec {
         let expected = usize::try_from(expected_len).unwrap_or(usize::MAX);
         omnizip_ppmd::ppmd8::decompress(compressed, expected).map_err(|e| CoreError::Corrupt {
             reason: format!("ppmd8 decompress: {e}"),
+        })
+    }
+
+    fn compress_with_tunables(
+        &self,
+        plaintext: &[u8],
+        t: &CodecTunables,
+    ) -> Result<Vec<u8>, CoreError> {
+        let order = if t.ppmd_order > 0 {
+            t.ppmd_order
+        } else {
+            self.order
+        };
+        let budget = if t.ppmd8_budget > 0 {
+            t.ppmd8_budget
+        } else {
+            self.budget
+        };
+        omnizip_ppmd::ppmd8::compress_with_budget(plaintext, order, budget).map_err(|e| {
+            CoreError::Corrupt {
+                reason: format!("ppmd8 compress: {e}"),
+            }
         })
     }
 }

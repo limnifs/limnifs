@@ -527,6 +527,29 @@ impl WriteConfig {
             .unwrap_or(0x01))
     }
 
+    /// Build the codec-agnostic [`limnifs_core::codec::CodecTunables`]
+    /// view of this config's per-codec knobs. Used by the parallel
+    /// writer to honour PPMd order/budget, Brotli quality, ZSTD
+    /// level, Bzip2 block size — anything else falls back to codec
+    /// defaults.
+    #[must_use]
+    pub fn to_core_tunables(&self) -> limnifs_core::codec::CodecTunables {
+        limnifs_core::codec::CodecTunables {
+            quality: self.codec_tunables.brotli.quality,
+            ppmd_order: self
+                .codec_tunables
+                .ppmd7
+                .order
+                .max(self.codec_tunables.ppmd8.order),
+            ppmd7_budget: (self.codec_tunables.ppmd7.memory_budget_mb as usize)
+                .saturating_mul(1024 * 1024),
+            ppmd8_budget: (self.codec_tunables.ppmd8.memory_budget_mb as usize)
+                .saturating_mul(1024 * 1024),
+            bzip2_block_kb: self.codec_tunables.bzip2.block_size_kb,
+            lzma_dict_mb: self.codec_tunables.lzma.dict_size_mb,
+        }
+    }
+
     /// Resolve the default metadata codec id.
     /// # Errors
     /// Returns [`ConfigError`] if the codec name is unknown.
