@@ -165,6 +165,14 @@ enum Command {
         #[arg(long)]
         profile: Option<String>,
     },
+    /// Compact an image: extract all files, re-compress with the
+    /// turnover profile, and overwrite. Removes unreferenced drops
+    /// and history fragmentation.
+    Turnover {
+        image: PathBuf,
+        #[arg(long, default_value = "max-ratio")]
+        profile: String,
+    },
     /// Compute tree operations between a parent and child image.
     Diff { parent: PathBuf, child: PathBuf },
     /// Print a comprehensive overview of an image: manifest summary,
@@ -325,6 +333,7 @@ fn run() -> Result<(), CliError> {
             path,
             profile,
         } => rw_delete(&image, &path, profile),
+        Command::Turnover { image, profile } => turnover_cmd(&image, &profile),
         Command::Diff { parent, child } => diff(&parent, &child),
         Command::Inspect { image } => inspect(&image),
         Command::Slab { slab } => slab_cmd(&slab),
@@ -853,6 +862,79 @@ fn rw_delete(image: &Path, path: &str, profile: Option<String>) -> Result<(), Cl
         })?;
     }
     let _ = std::fs::remove_dir_all(&staging);
+    Ok(())
+}
+
+/// Turnover: extract all files, re-compress with the turnover profile,
+/// and overwrite the original image. This removes unreferenced drops,
+/// compacts history, and applies the best compression ratio.
+fn turnover_cmd(image: &Path, profile_name: &str) -> Result<(), CliError> {
+    eprintln!("turnover: extracting {} ...", image.display());
+
+    let staging = std::env::temp_dir().join(format!("limnifs-turnover-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    extract(image, &staging)?;
+
+    let config = limnifs_write::WriteConfig::from_profile(profile_name).unwrap_or_else(|| {
+        eprintln!("warning: unknown profile '{profile_name}', using max-ratio");
+        limnifs_write::profile::max_ratio()
+    });
+    eprintln!("turnover: re-compressing with {profile_name} ...");
+
+    let artifact = limnifs_write::write_directory_with_config(&staging, &config)
+        .map_err(|source| CliError::WriteFailed { source })?;
+
+    let old_size = std::fs::metadata(image).map(|m| m.len()).unwrap_or(0);
+    let mut new_size = artifact.bytes.len() as u64;
+    for slab in &artifact.slabs {
+        new_size += slab.bytes.len() as u64;
+    }
+    if let Some(sidecar) = &artifact.metadata_sidecar {
+        new_size += sidecar.bytes.len() as u64;
+    }
+
+    std::fs::write(image, &artifact.bytes).map_err(|e| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source: e,
+    })?;
+    let parent = image.parent().unwrap_or_else(|| std::path::Path::new("."));
+    for slab in &artifact.slabs {
+        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        std::fs::write(parent.join(slab_name), &slab.bytes).map_err(|e| CliError::ReadFailed {
+            path: parent.join(slab_name),
+            source: e,
+        })?;
+    }
+    if let Some(sidecar) = &artifact.metadata_sidecar {
+        let name = sidecar
+            .locator
+            .strip_prefix("file:")
+            .unwrap_or(&sidecar.locator);
+        std::fs::write(parent.join(name), &sidecar.bytes).map_err(|e| CliError::ReadFailed {
+            path: parent.join(name),
+            source: e,
+        })?;
+    }
+
+    let _ = std::fs::remove_dir_all(&staging);
+
+    let delta = if new_size < old_size {
+        format!(
+            "-{:.1}%",
+            (old_size - new_size) as f64 / old_size as f64 * 100.0
+        )
+    } else {
+        format!(
+            "+{:.1}%",
+            (new_size - old_size) as f64 / old_size as f64 * 100.0
+        )
+    };
+    eprintln!(
+        "turnover: done — {} inodes, {} drops, {} slabs, {old_size} -> {new_size} bytes ({delta})",
+        artifact.inode_count,
+        artifact.drop_count,
+        artifact.slabs.len(),
+    );
     Ok(())
 }
 
