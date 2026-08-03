@@ -53,7 +53,7 @@ pub const INLINE_THRESHOLD: usize = 4096;
 /// this threshold use FastCDC chunking even when a categorizer claims
 /// them, enabling rayon parallelism across chunks. The categorizer's
 /// codec is still used per-chunk when possible.
-pub const WHOLE_FILE_MAX_SIZE: usize = 1024 * 1024;
+pub const WHOLE_FILE_MAX_SIZE: usize = 64 * 1024 * 1024;
 
 /// Maximum total length of a single slab file (header + content).
 /// Matches the reader's `DEFAULT_SLAB_MAX_BYTES` (spec §3.1) minus a
@@ -254,15 +254,40 @@ fn process_whole_file_drop(
     cat: file_categorizer::Categorization,
 ) -> Result<ChunkedFileResult, WriteError> {
     let drop_id = hash_section(data);
-    let compressed = limnifs_core::codec::compress(cat.codec_id, data).map_err(|e| {
-        WriteError::Io(std::io::Error::other(format!(
-            "codec 0x{:02X} compress failed: {e}",
-            cat.codec_id
-        )))
-    })?;
+
+    // Tournament: try fast general-purpose codecs first, then
+    // conditionally try the categorizer's specialized codec if the
+    // general-purpose result is poor. This avoids wasting CPU on
+    // expensive codecs (FLAC: 205s, FSST: 9s) when Brotli already
+    // achieves a good ratio.
+    let brotli_c = limnifs_core::codec::compress(limnifs_core::codec::CODEC_BROTLI, data)
+        .map_err(|e| WriteError::Io(std::io::Error::other(format!("brotli compress: {e}"))))?;
+
+    let zstd_c = limnifs_core::codec::compress(limnifs_core::codec::CODEC_ZSTD, data)
+        .unwrap_or_default();
+
+    let (mut best_codec, mut best_compressed) = if brotli_c.len() <= zstd_c.len() {
+        (limnifs_core::codec::CODEC_BROTLI, brotli_c)
+    } else {
+        (limnifs_core::codec::CODEC_ZSTD, zstd_c)
+    };
+
+    // Only try the specialized codec if the general-purpose ratio
+    // is poor (>15%) — otherwise the specialized codec is unlikely
+    // to help and may be very slow (FLAC, FSST).
+    let general_ratio = best_compressed.len() as f64 / data.len() as f64;
+    if general_ratio > 0.15 || cat.codec_id == limnifs_core::codec::CODEC_RICEPP {
+        if let Ok(spec_c) = limnifs_core::codec::compress(cat.codec_id, data) {
+            if spec_c.len() < best_compressed.len() {
+                best_codec = cat.codec_id;
+                best_compressed = spec_c;
+            }
+        }
+    }
+
     let file_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
     Ok(ChunkedFileResult {
-        drops: vec![(drop_id, data.to_vec(), compressed, cat.codec_id)],
+        drops: vec![(drop_id, data.to_vec(), best_compressed, best_codec)],
         slices: vec![PendingSlice {
             drop_id,
             file_byte_start: 0,

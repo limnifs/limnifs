@@ -166,7 +166,7 @@ pub fn limnifs_verify(image: &Path, iterations: usize) -> Vec<OperationResult> {
 pub fn dwarfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
     run_external(
         "mkdwarfs",
-        &["-i", "-o", "-l6", "--no-history"],
+        &["-l6", "--no-history"],
         source,
         work,
         "dwarfs",
@@ -318,7 +318,7 @@ pub fn tar_zstd_extract(
 
 fn run_external(
     tool: &str,
-    _flags: &[&str],
+    flags: &[&str],
     source: &Path,
     work: &Path,
     format: &str,
@@ -335,11 +335,11 @@ fn run_external(
         let _ = std::fs::remove_file(&image);
         let start = Instant::now();
         let status = Command::new(tool)
-            .args(["-i"])
+            .arg("-i")
             .arg(source)
-            .args(["-o"])
+            .arg("-o")
             .arg(&image)
-            .args(["-l1", "--no-history"])
+            .args(flags)
             .status();
         let elapsed = start.elapsed();
         match status {
