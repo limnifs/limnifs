@@ -215,10 +215,12 @@ pub fn dwarfs_extract(
 
 /// `SquashFS`
 pub fn squashfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
+    use crate::resource::ResourceSnapshot;
     let mut results = Vec::with_capacity(iterations);
     let image = work.join("squashfs.squashfs");
     for _ in 0..iterations {
         let _ = std::fs::remove_file(&image);
+        let before = ResourceSnapshot::children();
         let start = Instant::now();
         let status = Command::new("mksquashfs")
             .arg(source)
@@ -233,12 +235,15 @@ pub fn squashfs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Ope
             ])
             .status();
         let elapsed = start.elapsed();
+        let after = ResourceSnapshot::children();
         match status {
             Ok(s) if s.success() => {
                 let size = std::fs::metadata(&image).map(|m| m.len()).unwrap_or(0);
-                results.push(OperationResult::success(
-                    "squashfs", "create", elapsed, size,
-                ));
+                let mut r = OperationResult::success("squashfs", "create", elapsed, size);
+                r.cpu_user_secs = (after.user_secs - before.user_secs).max(0.0);
+                r.cpu_system_secs = (after.system_secs - before.system_secs).max(0.0);
+                r.peak_rss_bytes = after.rss_bytes.max(before.rss_bytes);
+                results.push(r);
             }
             _ => results.push(OperationResult::failure("squashfs", "create", elapsed)),
         }
@@ -284,10 +289,12 @@ pub fn squashfs_extract(
 
 /// tar + zstd
 pub fn tar_zstd_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
+    use crate::resource::ResourceSnapshot;
     let mut results = Vec::with_capacity(iterations);
     let archive = work.join("test.tar.zst");
     for _ in 0..iterations {
         let _ = std::fs::remove_file(&archive);
+        let before = ResourceSnapshot::children();
         let start = Instant::now();
         let status = Command::new("tar")
             .args(["-cf"])
@@ -298,12 +305,15 @@ pub fn tar_zstd_create(source: &Path, work: &Path, iterations: usize) -> Vec<Ope
             .arg(source.file_name().unwrap_or_default())
             .status();
         let elapsed = start.elapsed();
+        let after = ResourceSnapshot::children();
         match status {
             Ok(s) if s.success() => {
                 let size = std::fs::metadata(&archive).map(|m| m.len()).unwrap_or(0);
-                results.push(OperationResult::success(
-                    "tar+zstd", "create", elapsed, size,
-                ));
+                let mut r = OperationResult::success("tar+zstd", "create", elapsed, size);
+                r.cpu_user_secs = (after.user_secs - before.user_secs).max(0.0);
+                r.cpu_system_secs = (after.system_secs - before.system_secs).max(0.0);
+                r.peak_rss_bytes = after.rss_bytes.max(before.rss_bytes);
+                results.push(r);
             }
             _ => results.push(OperationResult::failure("tar+zstd", "create", elapsed)),
         }
