@@ -37,7 +37,7 @@ pub fn limnifs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Oper
         let _ = std::fs::remove_file(&image);
         let before = ResourceSnapshot::now();
         let start = Instant::now();
-        let config = limnifs_write::profile::competitive();
+        let config = limnifs_write::profile::max_write();
         let artifact = limnifs_write::write_directory_with_config(source, &config);
         let elapsed = start.elapsed();
         let after = ResourceSnapshot::now();
