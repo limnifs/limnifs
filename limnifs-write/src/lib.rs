@@ -263,8 +263,8 @@ fn process_whole_file_drop(
     let brotli_c = limnifs_core::codec::compress(limnifs_core::codec::CODEC_BROTLI, data)
         .map_err(|e| WriteError::Io(std::io::Error::other(format!("brotli compress: {e}"))))?;
 
-    let zstd_c = limnifs_core::codec::compress(limnifs_core::codec::CODEC_ZSTD, data)
-        .unwrap_or_default();
+    let zstd_c =
+        limnifs_core::codec::compress(limnifs_core::codec::CODEC_ZSTD, data).unwrap_or_default();
 
     let (mut best_codec, mut best_compressed) = if brotli_c.len() <= zstd_c.len() {
         (limnifs_core::codec::CODEC_BROTLI, brotli_c)
