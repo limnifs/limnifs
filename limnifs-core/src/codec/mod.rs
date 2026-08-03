@@ -20,6 +20,7 @@
 //!
 //! **100% pure Rust.** No C libraries. Air-gapped safe.
 
+mod bcj_composites;
 mod bitshuffle_lz4;
 mod brotli;
 mod bzip2;
@@ -91,6 +92,15 @@ pub const CODEC_BZIP2: u8 = 0x10;
 pub const CODEC_DEFLATE64: u8 = 0x11;
 /// Codec id 0x12: PPMd8 (RESTART + RLE, user-tunable memory budget).
 pub const CODEC_PPMD8: u8 = 0x12;
+
+/// Codec id 0x20: BCJ-x86 filter + LZ4. For x86/x86_64 executables.
+pub const CODEC_BCJ_X86_LZ4: u8 = 0x20;
+/// Codec id 0x21: BCJ-x86 filter + ZSTD.
+pub const CODEC_BCJ_X86_ZSTD: u8 = 0x21;
+/// Codec id 0x23: BCJ-ARM64 filter + LZ4. For AArch64 executables.
+pub const CODEC_BCJ_ARM64_LZ4: u8 = 0x23;
+/// Codec id 0x24: BCJ-ARM64 filter + ZSTD.
+pub const CODEC_BCJ_ARM64_ZSTD: u8 = 0x24;
 
 /// Codec-agnostic tunables. Every codec reads only the fields it
 /// understands; the rest are ignored. The struct is the
@@ -331,6 +341,13 @@ impl Default for CodecRegistry {
         registry.register(Box::new(bitshuffle_lz4::BitshuffleLz4Codec::new()));
         registry.register(Box::new(bzip2::Bzip2Codec::new()));
         registry.register(Box::new(deflate64::Deflate64Codec::new()));
+        // BCJ composite codecs — filter executable code then compress.
+        // Categorizer picks the right one based on ELF/PE/Mach-O
+        // architecture (see TODO.impl/04-bcj-categorizer-routing.md).
+        registry.register(Box::new(bcj_composites::BcjX86Lz4Codec));
+        registry.register(Box::new(bcj_composites::BcjX86ZstdCodec));
+        registry.register(Box::new(bcj_composites::BcjArm64Lz4Codec));
+        registry.register(Box::new(bcj_composites::BcjArm64ZstdCodec));
         registry
     }
 }
