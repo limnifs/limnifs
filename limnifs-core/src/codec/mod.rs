@@ -298,6 +298,41 @@ pub fn compress(codec_id: u8, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
     default_registry().compress(codec_id, plaintext)
 }
 
+/// Compress with a quality/level hint. For codecs that support a
+/// quality parameter (Brotli, ZSTD), this overrides the default.
+/// For codecs without quality control (LZ4, Store, Snappy), the
+/// hint is silently ignored.
+///
+/// `quality` interpretation per codec:
+/// - Brotli (0x04): 0..=11 (higher = better ratio, slower)
+/// - ZSTD (0x02): 1..=22 (higher = better ratio, slower)
+/// - All others: ignored
+///
+/// # Errors
+/// Same as [`compress`].
+pub fn compress_with_options(
+    codec_id: u8,
+    plaintext: &[u8],
+    quality: u8,
+) -> Result<Vec<u8>, CoreError> {
+    match codec_id {
+        CODEC_BROTLI => compress_brotli_with_quality(plaintext, i32::from(quality)),
+        CODEC_ZSTD => {
+            let level = match quality {
+                0..=2 => omnizip_zstd::ZstdLevel::Fastest,
+                3..=5 => omnizip_zstd::ZstdLevel::Fast,
+                6..=11 => omnizip_zstd::ZstdLevel::Default,
+                12..=21 => omnizip_zstd::ZstdLevel::Better,
+                _ => omnizip_zstd::ZstdLevel::Best,
+            };
+            omnizip_zstd::compress(plaintext, level).map_err(|e| CoreError::Corrupt {
+                reason: format!("zstd: {e}"),
+            })
+        }
+        _ => compress(codec_id, plaintext),
+    }
+}
+
 /// Decompress `compressed` using the codec identified by `codec_id`, via
 /// the process-wide default [`CodecRegistry`]. The `expected_len` is the
 /// `plaintext_len` from the drop record; the decompressed output MUST
