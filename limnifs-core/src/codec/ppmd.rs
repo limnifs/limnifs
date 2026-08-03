@@ -9,7 +9,7 @@
 //! Clean-room implementation from Shkarin's DCC 2001 paper.
 //! No LGPL code in the source tree.
 
-use crate::codec::{Codec, CODEC_PPMD};
+use crate::codec::{Codec, CodecTunables, CODEC_PPMD};
 use crate::error::CoreError;
 
 /// Default PPMd7 memory budget: 80 MB.
@@ -77,6 +77,28 @@ impl Codec for PpmdCodec {
         let expected = usize::try_from(expected_len).unwrap_or(usize::MAX);
         omnizip_ppmd::ppmd7::decompress(compressed, expected).map_err(|e| CoreError::Corrupt {
             reason: format!("ppmd7 decompress: {e}"),
+        })
+    }
+
+    fn compress_with_tunables(
+        &self,
+        plaintext: &[u8],
+        t: &CodecTunables,
+    ) -> Result<Vec<u8>, CoreError> {
+        let order = if t.ppmd_order > 0 {
+            t.ppmd_order
+        } else {
+            self.order
+        };
+        let budget = if t.ppmd7_budget > 0 {
+            t.ppmd7_budget
+        } else {
+            self.budget
+        };
+        omnizip_ppmd::ppmd7::compress_with_budget(plaintext, order, budget).map_err(|e| {
+            CoreError::Corrupt {
+                reason: format!("ppmd7 compress: {e}"),
+            }
         })
     }
 }
