@@ -82,6 +82,9 @@ pub struct WriteConfig {
     pub chunking: ChunkingConfig,
     /// Compression tournament settings.
     pub tournament: TournamentConfig,
+    /// Per-codec tunable parameters (memory budgets, quality levels).
+    #[serde(default)]
+    pub codec_tunables: CodecTunables,
     /// Encryption configuration.
     pub encryption: EncryptionConfig,
     /// ZSTD dictionary configuration.
@@ -160,6 +163,116 @@ pub struct DictionaryConfig {
     pub max_dict_size: u32,
 }
 
+/// Per-codec tunable parameters. Each sub-struct has serde defaults
+/// so the TOML can omit any codec the user doesn't want to customise.
+///
+/// ```toml
+/// [codec_tunables.ppmd7]
+/// order = 4
+/// memory_budget_mb = 80
+///
+/// [codec_tunables.brotli]
+/// quality = 11
+/// window = 22
+/// ```
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Default)]
+pub struct CodecTunables {
+    #[serde(default)]
+    pub ppmd7: Ppmd7Tunables,
+    #[serde(default)]
+    pub ppmd8: Ppmd8Tunables,
+    #[serde(default)]
+    pub brotli: BrotliTunables,
+    #[serde(default)]
+    pub lzma: LzmaTunables,
+    #[serde(default)]
+    pub bzip2: Bzip2Tunables,
+}
+
+/// PPMd7 tunables: context order + memory budget.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Ppmd7Tunables {
+    pub order: u8,
+    pub memory_budget_mb: u32,
+}
+
+impl Default for Ppmd7Tunables {
+    fn default() -> Self {
+        Self {
+            order: 4,
+            memory_budget_mb: 80,
+        }
+    }
+}
+
+/// PPMd8 tunables: context order + memory budget.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Ppmd8Tunables {
+    pub order: u8,
+    pub memory_budget_mb: u32,
+}
+
+impl Default for Ppmd8Tunables {
+    fn default() -> Self {
+        Self {
+            order: 6,
+            memory_budget_mb: 64,
+        }
+    }
+}
+
+/// Brotli tunables: quality (0..=11) + window log2 (10..=24).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct BrotliTunables {
+    pub quality: u8,
+    pub window: u8,
+}
+
+impl Default for BrotliTunables {
+    fn default() -> Self {
+        Self {
+            quality: 11,
+            window: 22,
+        }
+    }
+}
+
+/// LZMA tunables: lc/lp/pb + dictionary size in MiB + optimal parser.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct LzmaTunables {
+    pub lc: u8,
+    pub lp: u8,
+    pub pb: u8,
+    pub dict_size_mb: u32,
+    pub use_optimal_parser: bool,
+}
+
+impl Default for LzmaTunables {
+    fn default() -> Self {
+        Self {
+            lc: 3,
+            lp: 0,
+            pb: 2,
+            dict_size_mb: 16,
+            use_optimal_parser: false,
+        }
+    }
+}
+
+/// BZip2 tunables: block size in KB (100..=900, must be multiple of 100).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct Bzip2Tunables {
+    pub block_size_kb: u32,
+}
+
+impl Default for Bzip2Tunables {
+    fn default() -> Self {
+        Self {
+            block_size_kb: 900,
+        }
+    }
+}
+
 impl WriteConfig {
     /// Create the v0.1-compatible default configuration.
     /// All fields match the behavior of `limnifs-write` before
@@ -199,6 +312,7 @@ impl WriteConfig {
                 min_class_size: DEFAULT_DICT_MIN_CLASS_SIZE,
                 max_dict_size: DEFAULT_DICT_MAX_SIZE,
             },
+            codec_tunables: CodecTunables::default(),
         }
     }
 
