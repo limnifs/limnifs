@@ -44,6 +44,8 @@ pub const MAX_RATIO: &str = "max-ratio";
 pub const MAX_SPEED: &str = "max-speed";
 pub const BALANCED: &str = "balanced";
 pub const COMPETITIVE: &str = "competitive";
+pub const MAX_READ: &str = "max-read";
+pub const MAX_WRITE: &str = "max-write";
 
 /// Select a built-in profile by name. Returns a complete [`WriteConfig`]
 /// configured for that profile's strategy.
@@ -54,6 +56,8 @@ pub fn select(name: &str) -> Option<WriteConfig> {
         MAX_SPEED => Some(max_speed()),
         BALANCED => Some(balanced()),
         COMPETITIVE => Some(competitive()),
+        MAX_READ => Some(max_read()),
+        MAX_WRITE => Some(max_write()),
         _ => None,
     }
 }
@@ -279,6 +283,104 @@ pub fn competitive() -> WriteConfig {
     }
 }
 
+/// Maximum read profile — optimized for read-heavy workloads (write
+/// once, read many). Uses codecs with the best ratio that still
+/// decompresses quickly. Write cost is amortised over many reads.
+///
+/// - Text/Binary: ZSTD L19 (best ratio among fast-decompress codecs;
+///   ZSTD decompresses at ~1500 MB/s vs Brotli's ~500 MB/s)
+/// - Metadata: ZSTD L19
+/// - Categorizers: enabled (FLAC, Rice++ for best ratio per file type)
+/// - Chunks: 64 KB (fewer drops = fewer slab lookups during extract)
+/// - Inline threshold: 8192 (more inline = fewer slab reads)
+#[must_use]
+pub fn max_read() -> WriteConfig {
+    WriteConfig {
+        defaults: Defaults {
+            text_codec: "zstd".into(),
+            binary_codec: "zstd".into(),
+            metadata_codec: "zstd".into(),
+            metadata_quality: 11,
+            inline_threshold: 8192,
+        },
+        categorizers: crate::config::defaults::all_v0_1(),
+        chunking: ChunkingConfig {
+            avg_chunk_size: 65_536,
+            min_chunk_size: 8192,
+            max_chunk_size: 262_144,
+        },
+        tournament: TournamentConfig {
+            codecs: vec!["store".into(), "lz4".into(), "zstd".into(), "brotli".into()],
+            min_size_threshold: 256,
+            skip_for_binary: false,
+        },
+        codec_tunables: CodecTunables {
+            brotli: crate::config::BrotliTunables {
+                quality: 11,
+                window: 22,
+            },
+            lzma: crate::config::LzmaTunables {
+                dict_size_mb: 64,
+                use_optimal_parser: true,
+                ..crate::config::LzmaTunables::default()
+            },
+            ..CodecTunables::default()
+        },
+        encryption: EncryptionConfig {
+            aead: "chacha20-poly1305".into(),
+            key_wrap: "x25519-hkdf".into(),
+        },
+        dictionaries: DictionaryConfig {
+            enabled: true,
+            min_class_size: 50,
+            max_dict_size: 131_072,
+        },
+    }
+}
+
+/// Maximum write profile — optimized for write-heavy workloads where
+/// write latency matters more than ratio. Uses the fastest possible
+/// compression (LZ4 at ~1 GB/s) and skips all categorization/tournament
+/// overhead.
+///
+/// - Text/Binary/Metadata: LZ4 (fastest compress AND decompress)
+/// - Categorizers: disabled (zero categorization overhead)
+/// - Tournament: none (classify once, compress once)
+/// - Chunks: 128 KB (minimal per-chunk overhead)
+#[must_use]
+pub fn max_write() -> WriteConfig {
+    WriteConfig {
+        defaults: Defaults {
+            text_codec: "lz4".into(),
+            binary_codec: "lz4".into(),
+            metadata_codec: "lz4".into(),
+            metadata_quality: 1,
+            inline_threshold: 4096,
+        },
+        categorizers: vec![],
+        chunking: ChunkingConfig {
+            avg_chunk_size: 131_072,
+            min_chunk_size: 16_384,
+            max_chunk_size: 524_288,
+        },
+        tournament: TournamentConfig {
+            codecs: vec!["store".into(), "lz4".into()],
+            min_size_threshold: 0,
+            skip_for_binary: true,
+        },
+        codec_tunables: CodecTunables::default(),
+        encryption: EncryptionConfig {
+            aead: "chacha20-poly1305".into(),
+            key_wrap: "x25519-hkdf".into(),
+        },
+        dictionaries: DictionaryConfig {
+            enabled: false,
+            min_class_size: 0,
+            max_dict_size: 0,
+        },
+    }
+}
+
 /// TOML-representable profile selector. Either a built-in name or
 /// an inline custom profile.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -360,7 +462,14 @@ mod tests {
 
     #[test]
     fn all_builtins_resolve() {
-        for name in [MAX_RATIO, MAX_SPEED, BALANCED, COMPETITIVE] {
+        for name in [
+            MAX_RATIO,
+            MAX_SPEED,
+            BALANCED,
+            COMPETITIVE,
+            MAX_READ,
+            MAX_WRITE,
+        ] {
             let config = select(name).expect("profile exists");
             config.validate().expect("validates");
         }

@@ -215,9 +215,19 @@ pub fn write_directory_with_config(
         let classifier = ctx.classifier;
         let text_codec = config.text_codec_id().unwrap_or(0x04);
         let binary_codec = config.binary_codec_id().unwrap_or(0x01);
+        let brotli_quality = config.codec_tunables.brotli.quality;
         let results: Vec<ChunkedFileResult> = pending
             .par_iter()
-            .map(|pf| process_file(pf, &chunker, classifier, text_codec, binary_codec))
+            .map(|pf| {
+                process_file(
+                    pf,
+                    &chunker,
+                    classifier,
+                    text_codec,
+                    binary_codec,
+                    brotli_quality,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         for (pf, result) in pending.iter().zip(results) {
@@ -253,16 +263,16 @@ fn process_whole_file_drop(
     _pf: &PendingFile,
     data: &[u8],
     cat: file_categorizer::Categorization,
+    brotli_quality: u8,
 ) -> Result<ChunkedFileResult, WriteError> {
     let drop_id = hash_section(data);
 
-    // Tournament: try fast general-purpose codecs first, then
-    // conditionally try the categorizer's specialized codec if the
-    // general-purpose result is poor. This avoids wasting CPU on
-    // expensive codecs (FLAC: 205s, FSST: 9s) when Brotli already
-    // achieves a good ratio.
-    let brotli_c = limnifs_core::codec::compress(limnifs_core::codec::CODEC_BROTLI, data)
-        .map_err(|e| WriteError::Io(std::io::Error::other(format!("brotli compress: {e}"))))?;
+    let brotli_c = limnifs_core::codec::compress_with_options(
+        limnifs_core::codec::CODEC_BROTLI,
+        data,
+        brotli_quality,
+    )
+    .map_err(|e| WriteError::Io(std::io::Error::other(format!("brotli compress: {e}"))))?;
 
     let zstd_c =
         limnifs_core::codec::compress(limnifs_core::codec::CODEC_ZSTD, data).unwrap_or_default();
@@ -311,6 +321,7 @@ fn process_file(
     classifier: classifier::Classifier,
     text_codec: u8,
     binary_codec: u8,
+    brotli_quality: u8,
 ) -> Result<ChunkedFileResult, WriteError> {
     let data = std::fs::read(&pf.path)?;
     let file_len = data.len();
@@ -326,7 +337,7 @@ fn process_file(
             limnifs_core::codec::CODEC_FLAC | limnifs_core::codec::CODEC_RICEPP
         );
         if needs_whole_file || file_len <= WHOLE_FILE_MAX_SIZE {
-            return process_whole_file_drop(pf, &data, cat);
+            return process_whole_file_drop(pf, &data, cat, brotli_quality);
         }
     }
 
@@ -380,7 +391,8 @@ fn process_file(
         let (codec_id, compressed) = if preferred_codec == limnifs_core::codec::CODEC_STORE {
             (limnifs_core::codec::CODEC_STORE, chunk.to_vec())
         } else {
-            match limnifs_core::codec::compress(preferred_codec, chunk) {
+            match limnifs_core::codec::compress_with_options(preferred_codec, chunk, brotli_quality)
+            {
                 Ok(c) if c.len() < chunk.len() => (preferred_codec, c),
                 _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
             }
