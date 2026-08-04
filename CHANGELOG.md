@@ -5,6 +5,34 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.17] — 2026-08-04
+
+### Changed
+
+- **balanced() profile: metadata_codec zstd L3** instead of Brotli
+  q5. zstd L3 is faster than Brotli q5 on metadata-shaped data
+  (repetitive u64/u32 fields) while producing comparable ratio.
+  The encode speed improvement is most visible on large trees
+  (50K+ inodes).
+
+### Added
+
+- **TODO.perf/ directory** — 13 performance TODOs categorised as
+  LimniFS-side (8 items, P0–P2) or omnizip-side (5 items, filed
+  as proposals). Each TODO has priority, effort estimate, root
+  cause analysis, proposed fix, and acceptance criteria.
+  - LimniFS P0: metadata zstd (done this release), CachedSlabStore
+    wiring, multi-profile benchmark.
+  - LimniFS P1: inline_threshold tuning, slab prefetch (fadvise),
+    FastCDC SIMD, categorizer early-exit.
+  - omnizip P0: FLAC LPC speed (1.5s vs DwarFS 0.146s), ricepp
+    speed (23.9s vs DwarFS 3.9s).
+  - omnizip P1–P2: ZSTD SIMD, Brotli SIMD, PPMd init.
+
+### Test count
+
+575 (unchanged).
+
 ## [0.2.16] — 2026-08-04
 
 ### Changed
@@ -433,6 +461,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.17]: https://github.com/limnifs/limnifs/releases/tag/v0.2.17
 [0.2.16]: https://github.com/limnifs/limnifs/releases/tag/v0.2.16
 [0.2.15]: https://github.com/limnifs/limnifs/releases/tag/v0.2.15
 [0.2.14]: https://github.com/limnifs/limnifs/releases/tag/v0.2.14

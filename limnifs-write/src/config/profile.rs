@@ -210,8 +210,8 @@ pub fn balanced() -> WriteConfig {
         defaults: Defaults {
             text_codec: "brotli".into(),
             binary_codec: "lz4".into(),
-            metadata_codec: "brotli".into(),
-            metadata_quality: 5,
+            metadata_codec: "zstd".into(),
+            metadata_quality: 3,
             inline_threshold: 4096,
         },
         categorizers: crate::config::defaults::all_v0_1(),
