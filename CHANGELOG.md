@@ -5,6 +5,32 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.13] — 2026-08-04
+
+### Added
+
+- **Pipeline parallelism (opt-in)** — new
+  `limnifs_write::pipeline::write_directory_with_pipeline` behind
+  the `pipeline-parallelism` feature flag. Producer/consumer
+  pipeline: 2 read I/O threads feed a bounded crossbeam channel; M
+  compress threads pull from it. Output byte-identical to
+  `write_directory_with_config` (PendingFile order preserved).
+  Default build unchanged.
+  - Activation: `cargo build --features pipeline-parallelism` or
+    `limnifs-write = { features = ["pipeline-parallelism"] }` in
+    downstream Cargo.toml.
+  - Call `write_directory_with_pipeline(root, config)` instead of
+    `write_directory_with_config(root, config)`.
+  - Cold-cache users can A/B test the two paths and pick the
+    faster one for their workload. Warm-cache users should stay
+    on the default (`par_iter`).
+  - Closes `TODO.impl/04-writer-pipeline/04-pipeline-parallelism.md`
+    (spec + impl; benchmark evidence is downstream's job).
+
+### Test count
+
+574 (unchanged — pipeline is opt-in, default tests don't exercise it).
+
 ## [0.2.12] — 2026-08-04
 
 ### Added
@@ -324,6 +350,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.13]: https://github.com/limnifs/limnifs/releases/tag/v0.2.13
 [0.2.12]: https://github.com/limnifs/limnifs/releases/tag/v0.2.12
 [0.2.11]: https://github.com/limnifs/limnifs/releases/tag/v0.2.11
 [0.2.10]: https://github.com/limnifs/limnifs/releases/tag/v0.2.10
