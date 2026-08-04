@@ -5,6 +5,22 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.10] — 2026-08-04
+
+### Added
+
+- **SlabSource trait** — new `limnifs_core::slab_source` module
+  with a `SlabSource` trait (sync, `Send + Sync`) and
+  `MmapSlabSource` impl wrapping the existing `SlabStore`. The
+  trait exists so a future Linux `IoUringSlabSource` can slot in
+  behind the same interface without touching callers. Intentionally
+  NOT `async` to keep the dependency graph clean (no `tokio` /
+  `async-trait`).
+
+### Test count
+
+570 → **571** (+1 slab_source delegation test).
+
 ## [0.2.9] — 2026-08-04
 
 ### Added
@@ -264,6 +280,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.10]: https://github.com/limnifs/limnifs/releases/tag/v0.2.10
 [0.2.9]: https://github.com/limnifs/limnifs/releases/tag/v0.2.9
 [0.2.8]: https://github.com/limnifs/limnifs/releases/tag/v0.2.8
 [0.2.7]: https://github.com/limnifs/limnifs/releases/tag/v0.2.7
