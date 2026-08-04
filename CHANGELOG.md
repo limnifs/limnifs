@@ -5,6 +5,27 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] — 2026-08-04
+
+### Added
+
+- **ZSTD dictionary trainer API at writer layer** — new
+  `limnifs_write::dictionary` module exposing `train_zstd`,
+  `TrainedDictionary` (with `compress`/`decompress` helpers), and
+  `allocate_ids`. Wraps `limnifs_core::codec::zstd_dict`. The
+  writer-pipeline integration (collect samples per class, train,
+  re-compress, emit dictionary_section) is filed as a follow-up
+  in `TODO.impl/04-writer-pipeline/04-zstd-dictionary-training.md`.
+
+### Changed
+
+- `limnifs_core::codec::zstd_dict` module is now `pub` so the
+  writer layer can wrap it. Internal API unchanged.
+
+### Test count
+
+561 → **567** (+6 dictionary tests).
+
 ## [0.2.1] — 2026-08-04
 
 7 PRs landed since v0.2.0 (#137 → #143). Major themes: RW image
@@ -74,5 +95,6 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.2]: https://github.com/limnifs/limnifs/releases/tag/v0.2.2
 [0.2.1]: https://github.com/limnifs/limnifs/releases/tag/v0.2.1
 [0.2.0]: https://github.com/limnifs/limnifs/releases/tag/v0.2.0
