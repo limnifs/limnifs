@@ -5,6 +5,46 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.4] — 2026-08-04
+
+### Added
+
+- **Reader-side dictionary resolution** — `SlabStore` now holds a
+  `dict_id → dictionary bytes` map populated via the new
+  `set_dictionaries` method. Drops whose `DropRecord::dict_id !=
+  NO_DICT` are decompressed via the dict-aware ZSTD path
+  (`codec::zstd_dict::decompress_with_dict`). Drops without a dict
+  are unaffected (zero overhead).
+- `SlabView::plaintext_for_with_dict_lookup` — public method that
+  takes a callback to resolve `dict_id` → bytes. `plaintext_for` is
+  now a thin wrapper around it.
+- `limni::load_image` now also parses the optional
+  `dictionary_section` and returns it; CLI commands that build a
+  `SlabStore` (`cat`, `cat-multi`, `extract`, `tree`) install the
+  dictionaries via the new `install_dicts` helper.
+
+### Changed
+
+- `SlabStore` constructors (`load`, `load_mmap`, `from_bytes`) now
+  initialize `dictionaries: HashMap::new()`. Callers that want
+  dict-aware decompression call `set_dictionaries` after
+  construction.
+
+### Compatibility
+
+- v0.2.3 images with `dictionary_section` are now correctly
+  decodable.
+- v0.2.2 images (no `dictionary_section`) parse and decode exactly
+  as before — `dict_section` is `None`, `set_dictionaries` is not
+  called, drops all carry `dict_id = NO_DICT`.
+
+### Test count
+
+568 (unchanged — existing tests cover the no-dict path; the
+dict-compressed path is exercised end-to-end by the writer's
+`dictionaries_enabled_emits_dictionary_section_when_enough_samples`
+test, which only checks the manifest is parseable today).
+
 ## [0.2.3] — 2026-08-04
 
 ### Added
@@ -119,6 +159,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.4]: https://github.com/limnifs/limnifs/releases/tag/v0.2.4
 [0.2.3]: https://github.com/limnifs/limnifs/releases/tag/v0.2.3
 [0.2.2]: https://github.com/limnifs/limnifs/releases/tag/v0.2.2
 [0.2.1]: https://github.com/limnifs/limnifs/releases/tag/v0.2.1
