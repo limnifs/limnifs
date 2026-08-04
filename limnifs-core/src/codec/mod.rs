@@ -41,7 +41,7 @@ mod store;
 mod xz;
 mod zpaq;
 mod zstd;
-mod zstd_dict;
+pub mod zstd_dict;
 
 use std::sync::OnceLock;
 
