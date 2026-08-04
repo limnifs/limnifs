@@ -97,6 +97,7 @@ pub fn max_ratio() -> WriteConfig {
             codecs: vec![
                 "store".into(),
                 "lz4".into(),
+                "lz4-hc".into(),
                 "zstd".into(),
                 "brotli".into(),
                 "ppmd".into(),

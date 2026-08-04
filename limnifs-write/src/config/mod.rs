@@ -478,6 +478,7 @@ impl WriteConfig {
         let mut registry = CodecRegistry::default();
         registry.insert("store", 0x00);
         registry.insert("lz4", 0x01);
+        registry.insert("lz4-hc", 0x13);
         registry.insert("zstd", 0x02);
         registry.insert("xz", 0x03);
         registry.insert("brotli", 0x04);
