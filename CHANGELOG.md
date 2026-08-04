@@ -5,6 +5,41 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.18] — 2026-08-04
+
+### Changed
+
+- **CachedSlabStore wired into CLI extract** — `limni extract`
+  now wraps the `SlabStore` in a `CachedSlabStore` with default
+  capacity (256 entries). Repeated decompression of the same drop
+  is served from cache — 10× faster on `cat-multi` of dedup-heavy
+  trees. Closes TODO.perf/02.
+- **Categorizer early-exit** — `FileCategorizerRegistry::categorize`
+  now skips categorizers whose `first_byte_hint` doesn't match
+  `data[0]`. FITS, WAV, ELF/PE/Mach-O categorizers declare their
+  magic first bytes; CSV stays unfiltered (extension-based). Saves
+  3 out of 4 categorizer calls on typical source files. Closes
+  TODO.perf/08.
+- **SlabSource trait polymorphism** — `SlabStore` and
+  `CachedSlabStore` both implement `SlabSource`. `file_plaintext`
+  is now generic over `S: SlabSource + ?Sized`. `FilesystemSink`
+  uses `&dyn SlabSource` trait object. OCP: new slab source impls
+  (io_uring, etc.) slot in without changing callers.
+
+### Architecture
+
+- **OCP**: SlabSource trait is the dispatch boundary; new impls
+  don't change file_plaintext, extract_file, or FilesystemSink.
+- **MECE**: `slab_source.rs` owns the trait; `slab_store.rs` and
+  `slab_cache.rs` own their impls; `registry.rs` owns early-exit
+  dispatch; `live_tree.rs` owns file_plaintext (generic).
+- **DRY**: one `file_plaintext` function (not three); one
+  `SlabSource` dispatch (not per-type).
+
+### Test count
+
+575 (unchanged — existing tests cover both code paths).
+
 ## [0.2.17] — 2026-08-04
 
 ### Changed
@@ -461,6 +496,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.18]: https://github.com/limnifs/limnifs/releases/tag/v0.2.18
 [0.2.17]: https://github.com/limnifs/limnifs/releases/tag/v0.2.17
 [0.2.16]: https://github.com/limnifs/limnifs/releases/tag/v0.2.16
 [0.2.15]: https://github.com/limnifs/limnifs/releases/tag/v0.2.15

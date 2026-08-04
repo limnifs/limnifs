@@ -404,8 +404,11 @@ impl RwImage {
     /// [`limnifs_core::live_tree::walk_live_tree`] with a
     /// [`FilesystemSink`].
     fn write_live_tree(&self, state: &OpenState, staging: &Path) -> Result<(), WriteError> {
-        let mut sink =
-            limnifs_core::live_tree::FilesystemSink::new(staging, state.slab_store.as_ref());
+        let slab_ref: Option<&dyn limnifs_core::slab_source::SlabSource> = state
+            .slab_store
+            .as_ref()
+            .map(|s| s as &dyn limnifs_core::slab_source::SlabSource);
+        let mut sink = limnifs_core::live_tree::FilesystemSink::new(staging, slab_ref);
         limnifs_core::live_tree::walk_live_tree(&state.blob, state.root_inode, &mut sink)
             .map_err(core_to_io)
     }

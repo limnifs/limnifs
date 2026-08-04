@@ -154,6 +154,18 @@ impl CachedSlabStore {
     }
 }
 
+impl crate::slab_source::SlabSource for CachedSlabStore {
+    fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, crate::CoreError>> {
+        CachedSlabStore::plaintext_for(self, drop_id)
+    }
+    fn slab_count(&self) -> usize {
+        self.slab_count()
+    }
+    fn drop_count(&self) -> usize {
+        self.drop_count()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

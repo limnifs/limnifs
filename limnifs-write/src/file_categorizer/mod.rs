@@ -108,4 +108,19 @@ pub trait FileCategorizer: Sync + Send {
     /// is already in hand. Path is provided for extension-based
     /// hints when magic-byte detection is ambiguous.
     fn categorize(&self, path: &Path, data: &[u8]) -> Option<Categorization>;
+
+    /// The set of first bytes that this categorizer can possibly
+    /// match. The registry uses this to skip categorizers without
+    /// a function call when `data[0]` isn't in the set.
+    ///
+    /// Return `None` (default) to opt out of the early-exit
+    /// optimisation — the categorizer is always tried. Return
+    /// `Some(&[bytes])` to enable early-exit: the registry checks
+    /// `data[0]` and skips this categorizer if it's not in the set.
+    ///
+    /// Example: ELF categorizer returns `Some(&[0x7F])` — it can
+    /// only match files whose first byte is 0x7F.
+    fn first_byte_hint(&self) -> Option<&'static [u8]> {
+        None
+    }
 }

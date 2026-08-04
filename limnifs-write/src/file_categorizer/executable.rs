@@ -152,6 +152,10 @@ impl FileCategorizer for ExecutableCategorizer {
         &["binary/executable"]
     }
 
+    fn first_byte_hint(&self) -> Option<&'static [u8]> {
+        Some(&[0x7F, b'M', 0xFE, 0xCE, 0xCF])
+    }
+
     fn categorize(&self, _path: &Path, data: &[u8]) -> Option<Categorization> {
         let codec_id = pick_codec(data)?;
         Some(Categorization {
