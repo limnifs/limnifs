@@ -30,7 +30,10 @@ fn make_workdir(name: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0);
-    let p = std::env::temp_dir().join(format!("limnifs-dict-rt-{name}-{}-{nonce}", std::process::id()));
+    let p = std::env::temp_dir().join(format!(
+        "limnifs-dict-rt-{name}-{}-{nonce}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).expect("mkdir");
     p
@@ -54,7 +57,7 @@ fn dict_compressed_image_round_trips() {
              }}\n\
              struct Foo_{i} {{ x: i32, y: i32 }} // type decl {i}\n"
         )
-        .repeat(30);  // Push file size well above 4 KiB inline threshold.
+        .repeat(30); // Push file size well above 4 KiB inline threshold.
         let path = workdir.join(format!("file_{i:04}.rs"));
         std::fs::write(&path, content.as_bytes()).expect("write source file");
         original.insert(format!("/file_{i:04}.rs"), content.into_bytes());
@@ -73,7 +76,10 @@ fn dict_compressed_image_round_trips() {
         std::fs::write(workdir.join(name), &slab.bytes).expect("write slab");
     }
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar.locator.strip_prefix("file:").unwrap_or(&sidecar.locator);
+        let name = sidecar
+            .locator
+            .strip_prefix("file:")
+            .unwrap_or(&sidecar.locator);
         std::fs::write(workdir.join(name), &sidecar.bytes).expect("write sidecar");
     }
 
@@ -83,10 +89,7 @@ fn dict_compressed_image_round_trips() {
     parse_manifest_header(&mut cursor).expect("header");
     parse_feature_flags_section(&mut cursor).expect("flags");
     let meta_ref = parse_metadata_reference(&mut cursor).expect("meta_ref");
-    let blob_bytes = meta_ref
-        .inline_metadata
-        .clone()
-        .unwrap_or_default();
+    let blob_bytes = meta_ref.inline_metadata.clone().unwrap_or_default();
     let mut blob_cursor = ManifestCursor::new(&blob_bytes);
     let blob = parse_metadata_blob(&mut blob_cursor).expect("blob");
     let slab_index = parse_slab_index(&mut cursor).expect("slab_index");
@@ -135,7 +138,8 @@ fn dict_compressed_image_round_trips() {
         // inline to avoid depending on the live_tree module).
         let _ = hash_section; // import check
         assert_eq!(
-            recovered.as_slice(), expected.as_slice(),
+            recovered.as_slice(),
+            expected.as_slice(),
             "round-trip mismatch for {path}"
         );
         checked += 1;

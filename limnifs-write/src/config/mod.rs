@@ -381,7 +381,8 @@ impl WriteConfig {
             dictionaries: DictionaryConfig {
                 enabled: DEFAULT_DICT_ENABLED,
                 min_class_size: DEFAULT_DICT_MIN_CLASS_SIZE,
-                max_dict_size: DEFAULT_DICT_MAX_SIZE, trainer: "frequency".into(), 
+                max_dict_size: DEFAULT_DICT_MAX_SIZE,
+                trainer: "frequency".into(),
             },
             codec_tunables: CodecTunables::default(),
             mode: ImageMode::ReadOnly,

@@ -607,11 +607,7 @@ impl WriteContext {
                 let retain_plaintext =
                     self.collect_dict_samples && codec == limnifs_core::codec::CODEC_ZSTD;
                 if retain_plaintext {
-                    let total: usize = self
-                        .dict_samples_by_class
-                        .values()
-                        .map(Vec::len)
-                        .sum();
+                    let total: usize = self.dict_samples_by_class.values().map(Vec::len).sum();
                     if total < Self::MAX_DICT_SAMPLES {
                         let class = self.classifier.classify(&plaintext);
                         self.dict_samples_by_class
