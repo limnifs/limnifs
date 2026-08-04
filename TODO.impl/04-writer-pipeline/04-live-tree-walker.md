@@ -1,10 +1,36 @@
 # 04 — Live tree walker (DRY refactor)
 
-- **Status:** in_progress (core walker + RwImage + extract_file migrated; compaction deferred; full extract_dir_collect parallel refactor deferred)
+- **Status:** DONE (parallel extract migrated 2026-08-04; compaction remains defensive flat-iteration by design)
 - **Phase:** 2
 - **Depends on:** 06-turnover, 03-drop-store-reader
 - **Design refs:** 2026-throughput-roadmap.md §9
-- **Priority:** P1
+- **Priority:** ~~P1~~ closed
+
+## Final resolution (2026-08-04)
+
+`limnifs_core::live_tree` now provides:
+- `LiveTreeSink` trait.
+- `walk_live_tree` walker.
+- `FilesystemSink` — single-threaded extract (RwImage).
+- `ParallelExtractSink` — creates dirs inline, collects owned-Inode tasks for rayon.
+- `DropIdCollectorSink` — for future compaction.
+- `file_plaintext` — canonical extraction (sub-drop addressing bug fix).
+
+All three tree-walking callsites now use the shared walker:
+- `RwImage::write_live_dir` → `walk_live_tree` + `FilesystemSink`.
+- `limni::extract` → `walk_live_tree` + `ParallelExtractSink`, rayon fan-out on the collected tasks.
+- `limni::extract_file` → `file_plaintext`.
+
+`extract_dir_collect` deleted from main.rs.
+
+## Compaction (intentionally NOT migrated)
+
+`limnifs_write::compaction::find_referenced_drops` flat-iterates all
+inodes in the blob rather than walking from root. The semantic
+difference is intentional: compaction defensively enumerates drops
+even from unreachable inodes (corruption-tolerant). A `DropIdCollectorSink`
+exists for future use but compaction's defensive iteration is a
+feature, not duplication.
 
 ## Update (2026-08-04)
 

@@ -276,6 +276,68 @@ impl LiveTreeSink for DropIdCollectorSink {
     }
 }
 
+/// Sink for parallel extraction: creates directories inline (the
+/// sequential walk guarantees ordering — parents before children,
+/// no races) and collects regular-file inodes as owned clones for
+/// a later rayon fan-out phase.
+///
+/// Used by `limni::extract`'s two-phase pipeline:
+/// 1. `walk_live_tree` + `ParallelExtractSink` (this struct) —
+///    sequential, creates dirs, collects file tasks.
+/// 2. rayon across `self.tasks` — parallel file writes.
+pub struct ParallelExtractSink<'a> {
+    root: &'a Path,
+    pub tasks: Vec<(PathBuf, Inode)>,
+    pub dir_count: usize,
+}
+
+impl<'a> ParallelExtractSink<'a> {
+    /// Construct a sink that creates directories under `root` and
+    /// collects file tasks for later parallel processing.
+    #[must_use]
+    pub fn new(root: &'a Path) -> Self {
+        Self {
+            root,
+            tasks: Vec::new(),
+            dir_count: 0,
+        }
+    }
+}
+
+impl<'a> LiveTreeSink for ParallelExtractSink<'a> {
+    fn on_directory(&mut self, abs_path: &Path) -> Result<(), CoreError> {
+        let path = if abs_path.as_os_str().is_empty() {
+            self.root.to_path_buf()
+        } else {
+            self.root.join(abs_path)
+        };
+        std::fs::create_dir_all(&path).map_err(io_to_core)?;
+        self.dir_count += 1;
+        Ok(())
+    }
+
+    fn on_regular_file(&mut self, abs_path: &Path, inode: &Inode) -> Result<(), CoreError> {
+        // Clone the inode so the rayon phase can outlive the borrow
+        // of `blob` held open by `walk_live_tree`. Path is absolute
+        // under `root`; the caller joins when popping tasks.
+        self.tasks.push((self.root.join(abs_path), inode.clone()));
+        Ok(())
+    }
+
+    fn on_symlink(&mut self, abs_path: &Path, target: &str) -> Result<(), CoreError> {
+        let path = self.root.join(abs_path);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, &path).map_err(io_to_core)?;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, target);
+        }
+        Ok(())
+    }
+}
+
 fn io_to_core(e: std::io::Error) -> CoreError {
     CoreError::Corrupt {
         reason: format!("live_tree: I/O: {e}"),
