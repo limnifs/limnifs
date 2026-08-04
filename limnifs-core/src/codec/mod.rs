@@ -24,6 +24,7 @@ mod bcj_composites;
 mod bitshuffle_lz4;
 mod brotli;
 mod bzip2;
+mod composite;
 mod deflate;
 mod deflate64;
 mod flac;

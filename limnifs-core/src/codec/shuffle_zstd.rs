@@ -5,7 +5,7 @@
 //! floating-point arrays and structured numeric data where the
 //! shuffle filter exposes redundancy that Zstd exploits.
 
-use crate::codec::{compress, decompress, Codec, CODEC_SHUFFLE_ZSTD, CODEC_ZSTD};
+use crate::codec::{Codec, CODEC_SHUFFLE_ZSTD, CODEC_ZSTD};
 use crate::error::CoreError;
 use omnizip_filters::Filter;
 
@@ -58,28 +58,16 @@ impl Codec for ShuffleZstdCodec {
 
     fn compress(&self, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
         let filter = omnizip_filters::shuffle::ByteShuffle::new(self.item_size);
-        let shuffled = filter.encode(plaintext);
-        let zstd_compressed = compress(CODEC_ZSTD, &shuffled)?;
-        let shuffled_len = u32::try_from(shuffled.len()).unwrap_or(u32::MAX);
-        let mut out = Vec::with_capacity(4 + zstd_compressed.len());
-        out.extend_from_slice(&shuffled_len.to_le_bytes());
-        out.extend_from_slice(&zstd_compressed);
-        Ok(out)
+        crate::codec::composite::filter_then_compress(plaintext, &filter, CODEC_ZSTD)
     }
 
     fn decompress(&self, compressed: &[u8], _expected_len: u32) -> Result<Vec<u8>, CoreError> {
-        if compressed.len() < 4 {
-            return Err(CoreError::Corrupt {
-                reason: "shuffle+zstd: input too short for length prefix".into(),
-            });
-        }
-        let shuffled_len =
-            u32::from_le_bytes([compressed[0], compressed[1], compressed[2], compressed[3]])
-                as usize;
-        let zstd_bytes = &compressed[4..];
-        let shuffled = decompress(CODEC_ZSTD, zstd_bytes, shuffled_len as u32)?;
         let filter = omnizip_filters::shuffle::ByteShuffle::new(self.item_size);
-        let plaintext = filter.decode(&shuffled);
-        Ok(plaintext)
+        crate::codec::composite::decompress_then_filter(
+            compressed,
+            &filter,
+            CODEC_ZSTD,
+            "shuffle+zstd",
+        )
     }
 }

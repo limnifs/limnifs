@@ -79,31 +79,17 @@ impl Codec for ShuffleLz4Codec {
 
     fn compress(&self, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
         let filter = omnizip_filters::shuffle::ByteShuffle::new(self.item_size);
-        let shuffled = filter.encode(plaintext);
-        let lz4_compressed = crate::codec::compress(crate::codec::CODEC_LZ4, &shuffled)?;
-        // Prefix with the shuffled length so the decoder can tell LZ4
-        // exactly how many bytes to produce (LZ4 validates output length).
-        let shuffled_len = u32::try_from(shuffled.len()).unwrap_or(u32::MAX);
-        let mut out = Vec::with_capacity(4 + lz4_compressed.len());
-        out.extend_from_slice(&shuffled_len.to_le_bytes());
-        out.extend_from_slice(&lz4_compressed);
-        Ok(out)
+        crate::codec::composite::filter_then_compress(plaintext, &filter, crate::codec::CODEC_LZ4)
     }
 
     fn decompress(&self, compressed: &[u8], _expected_len: u32) -> Result<Vec<u8>, CoreError> {
-        if compressed.len() < 4 {
-            return Err(CoreError::Corrupt {
-                reason: "shuffle+lz4: truncated header".into(),
-            });
-        }
-        let mut len_bytes = [0u8; 4];
-        len_bytes.copy_from_slice(&compressed[..4]);
-        let shuffled_len = u32::from_le_bytes(len_bytes);
-        let lz4_bytes = &compressed[4..];
-        let shuffled = crate::codec::decompress(crate::codec::CODEC_LZ4, lz4_bytes, shuffled_len)?;
         let filter = omnizip_filters::shuffle::ByteShuffle::new(self.item_size);
-        let recovered = filter.decode(&shuffled);
-        Ok(recovered)
+        crate::codec::composite::decompress_then_filter(
+            compressed,
+            &filter,
+            crate::codec::CODEC_LZ4,
+            "shuffle+lz4",
+        )
     }
 }
 
