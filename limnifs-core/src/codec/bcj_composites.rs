@@ -33,7 +33,8 @@
 
 use omnizip_filters::Filter;
 
-use crate::codec::{compress, decompress, Codec, CodecTunables, CoreError, CODEC_LZ4, CODEC_ZSTD};
+use crate::codec::composite::{decompress_then_filter, filter_then_compress};
+use crate::codec::{Codec, CodecTunables, CoreError, CODEC_LZ4, CODEC_ZSTD};
 
 /// Codec id 0x20: BCJ-x86 filter + LZ4.
 pub const CODEC_BCJ_X86_LZ4: u8 = 0x20;
@@ -48,43 +49,8 @@ pub const CODEC_BCJ_ARM64_ZSTD: u8 = 0x24;
 /// effect on tiny inputs (no calls to convert) and adds overhead.
 const MIN_BCJ_SIZE: usize = 1024;
 
-/// Apply `filter.encode` then `inner_codec.compress`, prefixing the
-/// result with the filtered-byte count so the decoder validates.
-fn filter_then_compress<F: Filter>(
-    plaintext: &[u8],
-    filter: &F,
-    inner_codec: u8,
-) -> Result<Vec<u8>, CoreError> {
-    let filtered = filter.encode(plaintext);
-    let inner = compress(inner_codec, &filtered)?;
-    let filtered_len = u32::try_from(filtered.len()).unwrap_or(u32::MAX);
-    let mut out = Vec::with_capacity(4 + inner.len());
-    out.extend_from_slice(&filtered_len.to_le_bytes());
-    out.extend_from_slice(&inner);
-    Ok(out)
-}
-
-/// Read the length prefix, decompress the inner codec, then apply
-/// `filter.decode`.
-fn decompress_then_filter<F: Filter>(
-    compressed: &[u8],
-    filter: &F,
-    inner_codec: u8,
-) -> Result<Vec<u8>, CoreError> {
-    if compressed.len() < 4 {
-        return Err(CoreError::Corrupt {
-            reason: "BCJ composite: truncated header".into(),
-        });
-    }
-    let mut len_bytes = [0u8; 4];
-    len_bytes.copy_from_slice(&compressed[..4]);
-    let filtered_len = u32::from_le_bytes(len_bytes);
-    let filtered = decompress(inner_codec, &compressed[4..], filtered_len)?;
-    Ok(filter.decode(&filtered))
-}
-
 macro_rules! bcj_composite_codec {
-    ($struct_name:ident, $codec_id:ident, $name:expr, $filter:expr, $inner:ident) => {
+    ($struct_name:ident, $codec_id:ident, $name:expr, $filter:expr, $inner:ident, $label:expr) => {
         pub struct $struct_name;
 
         impl Codec for $struct_name {
@@ -105,7 +71,7 @@ macro_rules! bcj_composite_codec {
                 compressed: &[u8],
                 _expected_len: u32,
             ) -> Result<Vec<u8>, CoreError> {
-                decompress_then_filter(compressed, &$filter, $inner)
+                decompress_then_filter(compressed, &$filter, $inner, $label)
             }
             fn compress_with_tunables(
                 &self,
@@ -126,28 +92,32 @@ bcj_composite_codec!(
     CODEC_BCJ_X86_LZ4,
     "bcj-x86+lz4",
     omnizip_filters::BcjX86Filter,
-    CODEC_LZ4
+    CODEC_LZ4,
+    "bcj-x86+lz4"
 );
 bcj_composite_codec!(
     BcjX86ZstdCodec,
     CODEC_BCJ_X86_ZSTD,
     "bcj-x86+zstd",
     omnizip_filters::BcjX86Filter,
-    CODEC_ZSTD
+    CODEC_ZSTD,
+    "bcj-x86+zstd"
 );
 bcj_composite_codec!(
     BcjArm64Lz4Codec,
     CODEC_BCJ_ARM64_LZ4,
     "bcj-arm64+lz4",
     omnizip_filters::BcjArm64Filter,
-    CODEC_LZ4
+    CODEC_LZ4,
+    "bcj-arm64+lz4"
 );
 bcj_composite_codec!(
     BcjArm64ZstdCodec,
     CODEC_BCJ_ARM64_ZSTD,
     "bcj-arm64+zstd",
     omnizip_filters::BcjArm64Filter,
-    CODEC_ZSTD
+    CODEC_ZSTD,
+    "bcj-arm64+zstd"
 );
 
 #[cfg(test)]
