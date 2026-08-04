@@ -71,7 +71,11 @@ impl TrainedDictionary {
     ///
     /// # Errors
     /// Returns [`crate::WriteError`] on decompression failure.
-    pub fn decompress(&self, compressed: &[u8], expected_len: u32) -> Result<Vec<u8>, crate::WriteError> {
+    pub fn decompress(
+        &self,
+        compressed: &[u8],
+        expected_len: u32,
+    ) -> Result<Vec<u8>, crate::WriteError> {
         decompress_with_dict(compressed, expected_len, &self.content).map_err(|e| {
             crate::WriteError::Io(std::io::Error::other(format!(
                 "dict decompress (id {}): {e}",
@@ -88,11 +92,7 @@ impl TrainedDictionary {
 ///
 /// `id` is the caller-allocated dictionary id (0x00..=0xFE).
 #[must_use]
-pub fn train_zstd(
-    id: u8,
-    samples: &[&[u8]],
-    target_size: usize,
-) -> Option<TrainedDictionary> {
+pub fn train_zstd(id: u8, samples: &[&[u8]], target_size: usize) -> Option<TrainedDictionary> {
     if samples.is_empty() || target_size == 0 {
         return None;
     }
