@@ -135,7 +135,8 @@ pub fn max_ratio() -> WriteConfig {
         dictionaries: DictionaryConfig {
             enabled: true,
             min_class_size: 50,
-            max_dict_size: 131_072, trainer: "frequency".into(), 
+            max_dict_size: 131_072,
+            trainer: "frequency".into(),
         },
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
@@ -187,7 +188,8 @@ pub fn max_speed() -> WriteConfig {
         dictionaries: DictionaryConfig {
             enabled: false,
             min_class_size: 0,
-            max_dict_size: 0, trainer: "frequency".into(), 
+            max_dict_size: 0,
+            trainer: "frequency".into(),
         },
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
@@ -238,7 +240,8 @@ pub fn balanced() -> WriteConfig {
         dictionaries: DictionaryConfig {
             enabled: true,
             min_class_size: 100,
-            max_dict_size: 65_536, trainer: "frequency".into(), 
+            max_dict_size: 65_536,
+            trainer: "frequency".into(),
         },
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
@@ -286,7 +289,8 @@ pub fn competitive() -> WriteConfig {
         dictionaries: DictionaryConfig {
             enabled: false,
             min_class_size: 0,
-            max_dict_size: 0, trainer: "frequency".into(), 
+            max_dict_size: 0,
+            trainer: "frequency".into(),
         },
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
@@ -345,7 +349,8 @@ pub fn max_read() -> WriteConfig {
         dictionaries: DictionaryConfig {
             enabled: true,
             min_class_size: 50,
-            max_dict_size: 131_072, trainer: "frequency".into(), 
+            max_dict_size: 131_072,
+            trainer: "frequency".into(),
         },
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
@@ -392,7 +397,8 @@ pub fn max_write() -> WriteConfig {
         dictionaries: DictionaryConfig {
             enabled: false,
             min_class_size: 0,
-            max_dict_size: 0, trainer: "frequency".into(), 
+            max_dict_size: 0,
+            trainer: "frequency".into(),
         },
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
@@ -441,7 +447,8 @@ pub fn max_write_rw() -> WriteConfig {
         dictionaries: DictionaryConfig {
             enabled: false,
             min_class_size: 0,
-            max_dict_size: 0, trainer: "frequency".into(), 
+            max_dict_size: 0,
+            trainer: "frequency".into(),
         },
     }
 }
@@ -493,7 +500,8 @@ pub fn max_read_rw() -> WriteConfig {
         dictionaries: DictionaryConfig {
             enabled: true,
             min_class_size: 50,
-            max_dict_size: 131_072, trainer: "frequency".into(), 
+            max_dict_size: 131_072,
+            trainer: "frequency".into(),
         },
     }
 }
@@ -544,7 +552,8 @@ pub fn balanced_rw() -> WriteConfig {
         dictionaries: DictionaryConfig {
             enabled: true,
             min_class_size: 100,
-            max_dict_size: 65_536, trainer: "frequency".into(), 
+            max_dict_size: 65_536,
+            trainer: "frequency".into(),
         },
     }
 }

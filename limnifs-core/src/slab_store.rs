@@ -111,7 +111,11 @@ impl SlabStore {
             slabs.push(SlabSource::Memory(bytes));
         }
 
-        Ok(Self { slabs, drop_index, dictionaries: HashMap::new() })
+        Ok(Self {
+            slabs,
+            drop_index,
+            dictionaries: HashMap::new(),
+        })
     }
 
     /// Memory-map every slab file. The kernel pages data on demand;
@@ -171,7 +175,11 @@ impl SlabStore {
             slabs.push(SlabSource::Mapped(mmap));
         }
 
-        Ok(Self { slabs, drop_index, dictionaries: HashMap::new() })
+        Ok(Self {
+            slabs,
+            drop_index,
+            dictionaries: HashMap::new(),
+        })
     }
 
     /// Build a store directly from in-memory slab bytes.
