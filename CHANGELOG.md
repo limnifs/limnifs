@@ -5,6 +5,28 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.9] — 2026-08-04
+
+### Added
+
+- **RW crash-safety WAL** — `RwImage::commit` now writes a
+  write-ahead log to `<image>.wal` *before* the manifest swap. If
+  the swap is interrupted, the WAL survives and is replayed on the
+  next `RwImage::open`, restoring the user's pending writes,
+  updates, and deletes.
+  - WAL format: `LIMWAL\0\0` magic + pending_files (path →
+    plaintext) + pending_history (op kind + path).
+  - WAL is written atomically (write to `.tmp` then rename).
+  - WAL is unlinked after successful swap.
+  - `RwImage::open` calls `replay_wal_if_present()` automatically.
+  - Corrupt WAL is silently discarded with no panic.
+- Closes `TODO.impl/06-deltas-overlays/06-rw-crash-safety.md`
+  (combined with the stale `.new/` cleanup from v0.2.1).
+
+### Test count
+
+569 → **570** (+1 WAL round-trip behavioural test).
+
 ## [0.2.8] — 2026-08-04
 
 ### Added
@@ -242,6 +264,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.9]: https://github.com/limnifs/limnifs/releases/tag/v0.2.9
 [0.2.8]: https://github.com/limnifs/limnifs/releases/tag/v0.2.8
 [0.2.7]: https://github.com/limnifs/limnifs/releases/tag/v0.2.7
 [0.2.6]: https://github.com/limnifs/limnifs/releases/tag/v0.2.6
