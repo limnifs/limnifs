@@ -5,6 +5,28 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.11] — 2026-08-04
+
+### Added
+
+- **PerCodecTunables trait** — new optional trait in
+  `limnifs_core::codec` that codecs can implement alongside `Codec`
+  to expose strongly-typed per-codec tunables. The flat
+  `CodecTunables` struct remains for callers that want a single
+  uniform knob set; codecs that want clean OCP for their own knobs
+  implement `PerCodecTunables` with a fresh `Tunables` type.
+  - PPMd7 demonstrates the pattern: `Ppmd7Tunables { order, budget }`
+    + `impl PerCodecTunables for PpmdCodec`.
+  - Adding a new PPMd knob is one field on `Ppmd7Tunables`, no edits
+    to existing codecs or to the flat struct.
+- Closes `TODO.impl/04-writer-pipeline/04-codec-tunables-per-codec.md`
+  (framework + reference impl; migrating other codecs is a follow-up
+  per-codec).
+
+### Test count
+
+571 → **573** (+2 PPMd7 per-codec tunables tests).
+
 ## [0.2.10] — 2026-08-04
 
 ### Added
@@ -280,6 +302,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.11]: https://github.com/limnifs/limnifs/releases/tag/v0.2.11
 [0.2.10]: https://github.com/limnifs/limnifs/releases/tag/v0.2.10
 [0.2.9]: https://github.com/limnifs/limnifs/releases/tag/v0.2.9
 [0.2.8]: https://github.com/limnifs/limnifs/releases/tag/v0.2.8

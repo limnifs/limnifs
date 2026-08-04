@@ -214,6 +214,36 @@ pub trait Codec: Send + Sync {
     }
 }
 
+/// Optional trait: codecs with strongly-typed per-codec tunables.
+///
+/// The flat [`CodecTunables`] struct works for today's six codec
+/// families but doesn't scale. Codecs that want clean OCP for their
+/// own knobs implement this trait alongside [`Codec`]; new codecs
+/// = one `impl PerCodecTunables` with a fresh `Tunables` type, no
+/// edits to existing code or to the flat struct.
+///
+/// The flat `CodecTunables` remains the dispatch entry point for
+/// callers that want a single uniform struct; codecs that implement
+/// `PerCodecTunables` can read from it inside their
+/// `compress_with_tunables` override.
+pub trait PerCodecTunables: Codec {
+    /// Per-codec tunables type. Should be `Clone + Send + Sync +
+    /// 'static` so it can live in a `Box<dyn Any>` registry if/when
+    /// we move to per-codec-keyed tunables dispatch.
+    type Tunables: Clone + Send + Sync + 'static;
+
+    /// Compress with this codec's strongly-typed tunables.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Codec::compress`].
+    fn compress_with_owned_tunables(
+        &self,
+        plaintext: &[u8],
+        tunables: &Self::Tunables,
+    ) -> Result<Vec<u8>, CoreError>;
+}
+
 /// Process-wide registry of codecs, keyed by codec id.
 pub struct CodecRegistry {
     codecs: Vec<Box<dyn Codec>>,
