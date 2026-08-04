@@ -787,8 +787,11 @@ impl WriteContext {
             .flat_map(|c| self.dict_samples_by_class.get(c).into_iter().flatten())
             .map(Vec::as_slice)
             .collect();
+        let trainer = crate::dictionary::TrainerKind::from_config_str(&dictionaries.trainer);
         if text_samples.len() >= min_class {
-            if let Some(dict) = crate::dictionary::train_zstd(0, &text_samples, target) {
+            if let Some(dict) =
+                crate::dictionary::train_zstd_with_trainer(0, &text_samples, target, trainer)
+            {
                 self.trained_dicts_by_class
                     .insert(crate::classifier::Class::Text, dict);
             }
@@ -799,7 +802,9 @@ impl WriteContext {
             .map(Vec::as_slice)
             .collect();
         if binary_samples.len() >= min_class {
-            if let Some(dict) = crate::dictionary::train_zstd(1, &binary_samples, target) {
+            if let Some(dict) =
+                crate::dictionary::train_zstd_with_trainer(1, &binary_samples, target, trainer)
+            {
                 self.trained_dicts_by_class
                     .insert(crate::classifier::Class::Binary, dict);
             }

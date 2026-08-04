@@ -15,6 +15,15 @@ pub fn train_dictionary(samples: &[&[u8]], target_size: usize) -> Vec<u8> {
     omnizip_zstd::train_dictionary(samples, target_size)
 }
 
+/// Train using the FastCover algorithm (dmer-frequency scoring).
+/// Better than `train_dictionary` (FrequencyTrainer) on corpora with
+/// distributed redundancy (mixed JSON, source files, log lines).
+#[must_use]
+pub fn train_dictionary_fastcover(samples: &[&[u8]], target_size: usize) -> Vec<u8> {
+    use omnizip_zstd::dict_trainer::{DictTrainer, FastCoverTrainer};
+    FastCoverTrainer::default().train(samples, target_size)
+}
+
 /// Compress `plaintext` using a pre-trained ZSTD dictionary.
 ///
 /// # Errors

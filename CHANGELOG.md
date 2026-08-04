@@ -5,6 +5,33 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.8] — 2026-08-04
+
+### Added
+
+- **FastCover trainer option** — `DictionaryConfig::trainer` field
+  selects between `"frequency"` (default — top-K substrings by
+  frequency × length) and `"fastcover"` (dmer-frequency scoring per
+  FastCover, Facebook 2018). FastCover tends to win on corpora with
+  distributed redundancy (mixed JSON, source files, log lines);
+  FrequencyTrainer wins on corpora with strong common substrings.
+- New public APIs:
+  - `limnifs_write::dictionary::TrainerKind::{Frequency, FastCover}`.
+  - `limnifs_write::dictionary::train_zstd_with_trainer(id, samples,
+    target_size, kind)`.
+  - `limnifs_core::codec::zstd_dict::train_dictionary_fastcover`.
+
+### Compatibility
+
+- Existing profiles serialize with `trainer = "frequency"` by
+  default (via `#[serde(default = ...)]`). Older clients that don't
+  know the field keep working.
+
+### Test count
+
+569 (unchanged — both trainer paths produce a dict that round-trips
+through the existing dict round-trip integration test).
+
 ## [0.2.7] — 2026-08-04
 
 ### Changed
@@ -215,6 +242,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.8]: https://github.com/limnifs/limnifs/releases/tag/v0.2.8
 [0.2.7]: https://github.com/limnifs/limnifs/releases/tag/v0.2.7
 [0.2.6]: https://github.com/limnifs/limnifs/releases/tag/v0.2.6
 [0.2.5]: https://github.com/limnifs/limnifs/releases/tag/v0.2.5
