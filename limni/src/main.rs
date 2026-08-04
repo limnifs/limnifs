@@ -31,6 +31,24 @@ use limnifs_core::{
     parse_metadata_reference, parse_slab_index, ContentHandle, CoreError, FeatureFlags, HistoryOp,
     ManifestCursor, ManifestHeader, ManifestRoot, MetadataBlob, SectionHashes,
 };
+use limnifs_core::dictionary_section::parse_dictionary_section;
+
+/// Install dictionaries parsed from the manifest's `dictionary_section`
+/// into a `SlabStore`. Drops with `dict_id != NO_DICT` will use the
+/// dict-aware ZSTD decompress path.
+fn install_dicts(
+    store: &mut limnifs_core::slab_store::SlabStore,
+    section: &limnifs_core::dictionary_section::DictionarySection,
+) {
+    use std::collections::HashMap;
+    let mut map: HashMap<u8, Vec<u8>> = HashMap::new();
+    for d in &section.dicts {
+        // Use `class_id` as the dict id (matches the writer's
+        // convention — see WriteContext::assemble).
+        map.insert(d.class_id, d.data.clone());
+    }
+    store.set_dictionaries(map);
+}
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -710,7 +728,7 @@ fn ls(image: &Path, path: &str) -> Result<(), CliError> {
         path: image.to_path_buf(),
         source,
     };
-    let (blob, root_inode_number, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+    let (blob, root_inode_number, slab_index, _dict_section) = load_image(&manifest_bytes, image, map_err)?;
     let _ = slab_index;
 
     let root_inode = blob
@@ -952,7 +970,7 @@ fn cat(image: &Path, path: &str, offset: Option<u64>, length: Option<u64>) -> Re
         path: image.to_path_buf(),
         source,
     };
-    let (blob, root_inode_number, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+    let (blob, root_inode_number, slab_index, _dict_section) = load_image(&manifest_bytes, image, map_err)?;
 
     let root_inode = blob
         .inode_by_number(root_inode_number)
@@ -1054,7 +1072,7 @@ fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
         path: image.to_path_buf(),
         source,
     };
-    let (blob, _root_inode_number, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+    let (blob, _root_inode_number, slab_index, _dict_section) = load_image(&manifest_bytes, image, map_err)?;
 
     // Build the path→inode index ONCE. For trees with many files
     // this is the difference between O(N²) and O(N) cat-multi.
@@ -1068,7 +1086,7 @@ fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
     let slab_store: Option<limnifs_core::slab_store::SlabStore> = if slab_index.is_empty() {
         None
     } else {
-        Some(limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?)
+        Some(limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err).map(|mut s| { if let Some(d) = &_dict_section { install_dicts(&mut s, d); } s })?)
     };
 
     let stdout = std::io::stdout();
@@ -1315,7 +1333,7 @@ fn stat(image: &Path, path: &str) -> Result<(), CliError> {
         path: image.to_path_buf(),
         source,
     };
-    let (blob, root_inode_number, _) = load_image(&manifest_bytes, image, map_err)?;
+    let (blob, root_inode_number, _, _dict_section) = load_image(&manifest_bytes, image, map_err)?;
     let root_inode = blob.inode_by_number(root_inode_number).expect("validated");
     let inode = resolve_path(&blob, root_inode, path).ok_or_else(|| CliError::FormatFailed {
         path: image.to_path_buf(),
@@ -1352,7 +1370,7 @@ fn tree(image: &Path, path: &str) -> Result<(), CliError> {
         path: image.to_path_buf(),
         source,
     };
-    let (blob, root_inode_number, _) = load_image(&manifest_bytes, image, map_err)?;
+    let (blob, root_inode_number, _, _dict_section) = load_image(&manifest_bytes, image, map_err)?;
     let root_inode = blob.inode_by_number(root_inode_number).expect("validated");
     let start_inode =
         resolve_path(&blob, root_inode, path).ok_or_else(|| CliError::FormatFailed {
@@ -1409,7 +1427,7 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
         path: image.to_path_buf(),
         source,
     };
-    let (blob, root_inode_number, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+    let (blob, root_inode_number, slab_index, _dict_section) = load_image(&manifest_bytes, image, map_err)?;
     std::fs::create_dir_all(dest).map_err(|source| CliError::ReadFailed {
         path: dest.to_path_buf(),
         source,
@@ -1428,7 +1446,7 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
     let slab_store: Option<limnifs_core::slab_store::SlabStore> = if slab_index.is_empty() {
         None
     } else {
-        Some(limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?)
+        Some(limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err).map(|mut s| { if let Some(d) = &_dict_section { install_dicts(&mut s, d); } s })?)
     };
 
     let file_count = sink.tasks.len();
@@ -1574,7 +1592,7 @@ fn gc_cmd(image: &Path) -> Result<(), CliError> {
         path: image.to_path_buf(),
         source,
     };
-    let (blob, _, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+    let (blob, _, slab_index, _dict_section) = load_image(&manifest_bytes, image, map_err)?;
 
     let mut referenced: HashSet<[u8; 32]> = HashSet::new();
     for inode in &blob.inodes {
@@ -1677,7 +1695,7 @@ fn dedup_cmd(image: &Path) -> Result<(), CliError> {
         path: image.to_path_buf(),
         source,
     };
-    let (blob, _, _) = load_image(&manifest_bytes, image, map_err)?;
+    let (blob, _, _, _dict_section) = load_image(&manifest_bytes, image, map_err)?;
 
     let mut drop_refs: HashSet<[u8; 32]> = HashSet::new();
     let mut total_refs = 0usize;
@@ -1793,7 +1811,7 @@ fn check_cmd(image: &Path) -> Result<(), CliError> {
         path: image.to_path_buf(),
         source,
     };
-    let (_blob, _, slab_index) = load_image(&manifest_bytes, image, map_err)?;
+    let (_blob, _, slab_index, _dict_section) = load_image(&manifest_bytes, image, map_err)?;
 
     if slab_index.is_empty() {
         println!("integrity check: {}", image.display());
@@ -1803,7 +1821,7 @@ fn check_cmd(image: &Path) -> Result<(), CliError> {
     }
 
     let slab_store =
-        limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?;
+        limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err).map(|mut s| { if let Some(d) = &_dict_section { install_dicts(&mut s, d); } s })?;
 
     let mut checked = 0usize;
     let mut passed = 0usize;
@@ -2182,7 +2200,15 @@ fn load_image(
     manifest_bytes: &[u8],
     image: &Path,
     map_err: impl Fn(CoreError) -> CliError,
-) -> Result<(limnifs_core::MetadataBlob, u64, limnifs_core::SlabIndex), CliError> {
+) -> Result<
+    (
+        limnifs_core::MetadataBlob,
+        u64,
+        limnifs_core::SlabIndex,
+        Option<limnifs_core::dictionary_section::DictionarySection>,
+    ),
+    CliError,
+> {
     let mut cursor = ManifestCursor::new(manifest_bytes);
     let _ = parse_manifest_header(&mut cursor).map_err(&map_err)?;
     let _ = parse_feature_flags_section(&mut cursor).map_err(&map_err)?;
@@ -2219,6 +2245,15 @@ fn load_image(
     let blob = parse_metadata_blob(&mut blob_cursor).map_err(&map_err)?;
 
     let slab_index = parse_slab_index(&mut cursor).map_err(&map_err)?;
+    // History may or may not be present; ignore errors.
+    let _ = parse_history(&mut cursor);
+    // Optional: dictionary_section (added in v0.2.3). Best-effort
+    // parse — older manifests don't have one and that's fine.
+    let dict_section = if cursor.remaining_len() > 0 {
+        parse_dictionary_section(&mut cursor).ok()
+    } else {
+        None
+    };
 
     let root_inode_number = blob
         .root_inode_number()
@@ -2237,7 +2272,7 @@ fn load_image(
         });
     }
 
-    Ok((blob, root_inode_number, slab_index))
+    Ok((blob, root_inode_number, slab_index, dict_section))
 }
 
 /// Walk a slash-separated path from `root_inode` and return the inode
