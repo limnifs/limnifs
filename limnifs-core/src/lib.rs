@@ -82,6 +82,7 @@ pub mod slab;
 pub mod slab_cache;
 pub mod slab_index;
 pub mod slab_reader;
+pub mod slab_source;
 pub mod slab_store;
 
 pub use cursor::ManifestCursor;
