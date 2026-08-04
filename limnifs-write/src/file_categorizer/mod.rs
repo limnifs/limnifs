@@ -30,6 +30,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 pub mod csv_text;
+pub mod executable;
 pub mod fits;
 pub mod pcm_audio;
 pub mod registry;
@@ -53,6 +54,7 @@ pub fn default_registry() -> &'static FileCategorizerRegistry {
             .register(Box::new(fits::FitsCategorizer))
             .register(Box::new(pcm_audio::PcmAudioCategorizer))
             .register(Box::new(csv_text::CsvTextCategorizer))
+            .register(Box::new(executable::ExecutableCategorizer))
     })
 }
 
