@@ -31,6 +31,7 @@
 
 use limnifs_core::codec::zstd_dict::{
     compress_with_dict, decompress_with_dict, train_dictionary as core_train,
+    train_dictionary_fastcover,
 };
 
 /// Default target dictionary size (64 KiB). Matches `DictionaryConfig::max_dict_size` default.
@@ -93,10 +94,49 @@ impl TrainedDictionary {
 /// `id` is the caller-allocated dictionary id (0x00..=0xFE).
 #[must_use]
 pub fn train_zstd(id: u8, samples: &[&[u8]], target_size: usize) -> Option<TrainedDictionary> {
+    train_zstd_with_trainer(id, samples, target_size, TrainerKind::Frequency)
+}
+
+/// Trainer algorithm selection. See [`train_zstd_with_trainer`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrainerKind {
+    /// Top-K substrings by frequency × length. Default. Wins on
+    /// corpora with strong common substrings.
+    Frequency,
+    /// Dmer-frequency scoring per FastCover (Facebook 2018). Wins on
+    /// corpora with distributed redundancy (mixed JSON, source files,
+    /// log lines).
+    FastCover,
+}
+
+impl TrainerKind {
+    /// Parse from a config string. Unknown values fall back to
+    /// `Frequency` (the default).
+    #[must_use]
+    pub fn from_config_str(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "fastcover" => Self::FastCover,
+            _ => Self::Frequency,
+        }
+    }
+}
+
+/// Train with explicit trainer selection. See [`train_zstd`] for the
+/// default-FrequencyTrainer shortcut.
+#[must_use]
+pub fn train_zstd_with_trainer(
+    id: u8,
+    samples: &[&[u8]],
+    target_size: usize,
+    trainer: TrainerKind,
+) -> Option<TrainedDictionary> {
     if samples.is_empty() || target_size == 0 {
         return None;
     }
-    let content = core_train(samples, target_size);
+    let content = match trainer {
+        TrainerKind::Frequency => core_train(samples, target_size),
+        TrainerKind::FastCover => train_dictionary_fastcover(samples, target_size),
+    };
     if content.is_empty() {
         return None;
     }

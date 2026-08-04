@@ -190,6 +190,18 @@ pub struct DictionaryConfig {
     pub enabled: bool,
     pub min_class_size: u32,
     pub max_dict_size: u32,
+    /// Trainer algorithm: `"frequency"` (default — top-K substrings
+    /// by frequency × length) or `"fastcover"` (dmer-frequency
+    /// scoring per FastCover, Facebook 2018). FastCover tends to
+    /// win on corpora with distributed redundancy (mixed JSON,
+    /// source files, log lines); FrequencyTrainer wins on corpora
+    /// with strong common substrings.
+    #[serde(default = "default_trainer")]
+    pub trainer: String,
+}
+
+fn default_trainer() -> String {
+    "frequency".into()
 }
 
 /// Image mode: read-only (one-shot archive) or read-write (live filesystem).
@@ -369,7 +381,7 @@ impl WriteConfig {
             dictionaries: DictionaryConfig {
                 enabled: DEFAULT_DICT_ENABLED,
                 min_class_size: DEFAULT_DICT_MIN_CLASS_SIZE,
-                max_dict_size: DEFAULT_DICT_MAX_SIZE,
+                max_dict_size: DEFAULT_DICT_MAX_SIZE, trainer: "frequency".into(), 
             },
             codec_tunables: CodecTunables::default(),
             mode: ImageMode::ReadOnly,
