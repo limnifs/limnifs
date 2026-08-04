@@ -54,6 +54,12 @@ pub struct SlabStore {
     slabs: Vec<SlabSource>,
     /// `DropId` → slab ordinal. Built once at load time.
     drop_index: HashMap<[u8; 32], usize>,
+    /// `dict_id` → raw dictionary bytes. Populated by
+    /// [`SlabStore::set_dictionaries`] when the caller has parsed
+    /// the manifest's `dictionary_section`. Drops whose
+    /// `DropRecord::dict_id != NO_DICT` consult this map at
+    /// decompression time.
+    dictionaries: HashMap<u8, Vec<u8>>,
 }
 
 impl SlabStore {
@@ -105,7 +111,7 @@ impl SlabStore {
             slabs.push(SlabSource::Memory(bytes));
         }
 
-        Ok(Self { slabs, drop_index })
+        Ok(Self { slabs, drop_index, dictionaries: HashMap::new() })
     }
 
     /// Memory-map every slab file. The kernel pages data on demand;
@@ -165,7 +171,7 @@ impl SlabStore {
             slabs.push(SlabSource::Mapped(mmap));
         }
 
-        Ok(Self { slabs, drop_index })
+        Ok(Self { slabs, drop_index, dictionaries: HashMap::new() })
     }
 
     /// Build a store directly from in-memory slab bytes.
@@ -183,6 +189,7 @@ impl SlabStore {
         Ok(Self {
             slabs: slabs.into_iter().map(SlabSource::Memory).collect(),
             drop_index,
+            dictionaries: HashMap::new(),
         })
     }
 
@@ -225,7 +232,28 @@ impl SlabStore {
         let ordinal = *self.drop_index.get(drop_id)?;
         let bytes = self.slabs.get(ordinal)?.as_bytes();
         let view: SlabView<'_> = parse_slab(bytes).ok()?;
-        view.plaintext_for(drop_id)
+        // Hand the SlabView a closure that looks up dict_id in our
+        // dictionary map. Clones the dict bytes (cheap relative to
+        // decompression). If `dictionaries` is empty, drops with
+        // `dict_id == NO_DICT` are unaffected.
+        view.plaintext_for_with_dict_lookup(drop_id, &|id| self.dictionaries.get(&id).cloned())
+    }
+
+    /// Set the dictionary table parsed from the manifest's
+    /// `dictionary_section`. Drops whose `DropRecord::dict_id`
+    /// references an id in this map will be decompressed via the
+    /// dict-aware ZSTD path; drops with `dict_id == NO_DICT` (0xFF)
+    /// are unaffected.
+    ///
+    /// Keys are `dict_id` (0..=254); values are raw dictionary bytes.
+    pub fn set_dictionaries(&mut self, dictionaries: HashMap<u8, Vec<u8>>) {
+        self.dictionaries = dictionaries;
+    }
+
+    /// Number of registered dictionaries.
+    #[must_use]
+    pub fn dictionary_count(&self) -> usize {
+        self.dictionaries.len()
     }
 
     /// Stream a drop's decompressed plaintext directly to `writer`.

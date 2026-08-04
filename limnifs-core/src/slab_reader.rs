@@ -93,6 +93,24 @@ impl SlabView<'_> {
     ///   or decompression fails.
     #[must_use]
     pub fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>> {
+        self.plaintext_for_with_dict_lookup(drop_id, &|_| None)
+    }
+
+    /// Same as [`plaintext_for`](Self::plaintext_for) but with a
+    /// callback to resolve `dict_id` → dictionary bytes. Used by
+    /// `SlabStore` when the manifest's `dictionary_section` is
+    /// populated. For drops with `dict_id == NO_DICT` (0xFF), the
+    /// callback is not consulted.
+    ///
+    /// The callback returns the raw dictionary bytes for the given
+    /// dict_id, or `None` if the dict is unknown (which makes the
+    /// drop undecodable).
+    #[must_use]
+    pub fn plaintext_for_with_dict_lookup(
+        &self,
+        drop_id: &[u8; 32],
+        dict_lookup: &dyn Fn(u8) -> Option<Vec<u8>>,
+    ) -> Option<Result<Vec<u8>, CoreError>> {
         let record = self.find_record(drop_id)?;
         if record.representation.aead != 0x00 {
             return Some(Err(CoreError::UnsupportedFeature {
@@ -123,11 +141,29 @@ impl SlabView<'_> {
             }));
         }
         let raw = &self.bytes[start..end];
-        Some(crate::codec::decompress(
-            record.representation.codec,
-            raw,
-            record.plaintext_len,
-        ))
+        if record.dict_id == crate::drop_record::NO_DICT {
+            Some(crate::codec::decompress(
+                record.representation.codec,
+                raw,
+                record.plaintext_len,
+            ))
+        } else {
+            // Dictionary-compressed drop. Resolve the dict and use
+            // the dict-aware ZSTD decompress path.
+            let Some(dict_bytes) = dict_lookup(record.dict_id) else {
+                return Some(Err(CoreError::Corrupt {
+                    reason: format!(
+                        "drop references dict_id 0x{:02X} but no dictionary_section provided",
+                        record.dict_id
+                    ),
+                }));
+            };
+            Some(crate::codec::zstd_dict::decompress_with_dict(
+                raw,
+                record.plaintext_len,
+                &dict_bytes,
+            ))
+        }
     }
 }
 
