@@ -520,13 +520,16 @@ struct WriteContext {
     collect_dict_samples: bool,
     /// Plaintext samples collected from ZSTD-compressed drops, for
     /// training one dictionary after the parallel compress phase.
-    /// Capped at `MAX_DICT_SAMPLES` to bound memory.
-    dict_samples: Vec<Vec<u8>>,
-    /// Trained dictionary (single, applies to all ZSTD drops in
-    /// this image). Populated by `train_and_apply_dictionary` after
-    /// the parallel phase. Emitted in the manifest's
-    /// `dictionary_section`.
-    trained_dict: Option<crate::dictionary::TrainedDictionary>,
+    /// Capped at `MAX_DICT_SAMPLES` to bound memory. Keyed by
+    /// classifier class — text/code/sparse share a "text" dict,
+    /// binary gets its own. Compressed/media/incompressible classes
+    /// don't use ZSTD so their samples aren't collected.
+    dict_samples_by_class: HashMap<crate::classifier::Class, Vec<Vec<u8>>>,
+    /// Trained dictionaries keyed by class. Populated by
+    /// `train_and_apply_dictionary` after the parallel phase. Emitted
+    /// in the manifest's `dictionary_section` with one entry per
+    /// class that accumulated enough samples.
+    trained_dicts_by_class: HashMap<crate::classifier::Class, crate::dictionary::TrainedDictionary>,
 }
 
 impl WriteContext {
@@ -554,8 +557,8 @@ impl WriteContext {
             rw_mode: false,
             auto_turnover: false,
             collect_dict_samples: false,
-            dict_samples: Vec::new(),
-            trained_dict: None,
+            dict_samples_by_class: HashMap::new(),
+            trained_dicts_by_class: HashMap::new(),
         }
     }
 
@@ -596,16 +599,26 @@ impl WriteContext {
     fn merge_chunked_file(&mut self, pf: &PendingFile, result: ChunkedFileResult) {
         for (drop_id, plaintext, compressed, codec) in result.drops {
             if self.drop_index.insert(drop_id) {
-                // When dictionary training is enabled, collect a
-                // capped sample of ZSTD drops' plaintext and retain
-                // the plaintext on the drop for re-compression.
-                // Memory cost is O(unique-ZSTD-plaintext) which is
-                // acceptable for dict-friendly workloads (small
-                // files with shared vocabulary).
+                // When dictionary training is enabled, classify the
+                // plaintext and retain it for per-class dictionary
+                // training. Text-like classes share a "text" dict;
+                // Binary gets its own. Compressed/media/incompressible
+                // don't use ZSTD so we skip them entirely.
                 let retain_plaintext =
                     self.collect_dict_samples && codec == limnifs_core::codec::CODEC_ZSTD;
-                if retain_plaintext && self.dict_samples.len() < Self::MAX_DICT_SAMPLES {
-                    self.dict_samples.push(plaintext.clone());
+                if retain_plaintext {
+                    let total: usize = self
+                        .dict_samples_by_class
+                        .values()
+                        .map(Vec::len)
+                        .sum();
+                    if total < Self::MAX_DICT_SAMPLES {
+                        let class = self.classifier.classify(&plaintext);
+                        self.dict_samples_by_class
+                            .entry(class)
+                            .or_default()
+                            .push(plaintext.clone());
+                    }
                 }
                 self.drops.push(PendingDrop {
                     id: drop_id,
@@ -729,51 +742,90 @@ impl WriteContext {
     }
 
     /// After the parallel compress phase: train one ZSTD dictionary
-    /// from collected samples (if `dictionaries.enabled` was set and
-    /// enough samples accumulated), then re-compress each ZSTD drop
-    /// with the dictionary. Keep whichever representation is smaller.
-    /// Drops that get re-compressed carry `dict_id = 0` in their drop
-    /// record; the dictionary is emitted in the manifest's
+    /// per classifier class with enough samples, then re-compress
+    /// each ZSTD drop with the dictionary for its class. Keep
+    /// whichever representation is smaller. Drops that get
+    /// re-compressed carry the class's `dict_id` in their drop
+    /// record; the dictionaries are emitted in the manifest's
     /// `dictionary_section`.
+    ///
+    /// Text/Code/Sparse classes collapse into a single "text" dict
+    /// (id 0). Binary gets id 1. Other classes don't accumulate
+    /// samples because their drops aren't ZSTD-compressed.
     ///
     /// Clears the retained plaintext on every drop to free memory
     /// before slab assembly.
     fn train_and_apply_dictionary(&mut self, dictionaries: &crate::config::DictionaryConfig) {
-        // Always clear retained plaintext at the end (memory hygiene).
         let cleanup = |ctx: &mut Self| {
             for d in &mut ctx.drops {
                 d.plaintext = None;
             }
-            ctx.dict_samples.clear();
+            ctx.dict_samples_by_class.clear();
         };
 
         if !dictionaries.enabled {
             cleanup(self);
             return;
         }
-        if self.dict_samples.len() < usize::try_from(dictionaries.min_class_size).unwrap_or(0) {
-            cleanup(self);
-            return;
+
+        let target = usize::try_from(dictionaries.max_dict_size).unwrap_or(65_536);
+        let min_class = usize::try_from(dictionaries.min_class_size).unwrap_or(0);
+
+        // Allocate dict ids: 0 = text (Text/Code/Sparse), 1 = binary.
+        // Compressed/Media/Incompressible don't accumulate samples
+        // (their drops aren't ZSTD) so we don't train for them.
+        let text_classes = [
+            crate::classifier::Class::Text,
+            crate::classifier::Class::Code,
+            crate::classifier::Class::Sparse,
+        ];
+        let binary_classes = [crate::classifier::Class::Binary];
+
+        // Train text dict from text-like classes' samples combined.
+        let text_samples: Vec<&[u8]> = text_classes
+            .iter()
+            .flat_map(|c| self.dict_samples_by_class.get(c).into_iter().flatten())
+            .map(Vec::as_slice)
+            .collect();
+        if text_samples.len() >= min_class {
+            if let Some(dict) = crate::dictionary::train_zstd(0, &text_samples, target) {
+                self.trained_dicts_by_class
+                    .insert(crate::classifier::Class::Text, dict);
+            }
+        }
+        let binary_samples: Vec<&[u8]> = binary_classes
+            .iter()
+            .flat_map(|c| self.dict_samples_by_class.get(c).into_iter().flatten())
+            .map(Vec::as_slice)
+            .collect();
+        if binary_samples.len() >= min_class {
+            if let Some(dict) = crate::dictionary::train_zstd(1, &binary_samples, target) {
+                self.trained_dicts_by_class
+                    .insert(crate::classifier::Class::Binary, dict);
+            }
         }
 
-        // Train one dictionary (id 0) from all collected samples.
-        let samples: Vec<&[u8]> = self.dict_samples.iter().map(Vec::as_slice).collect();
-        let target = usize::try_from(dictionaries.max_dict_size).unwrap_or(65_536);
-        let Some(dict) = crate::dictionary::train_zstd(0, &samples, target) else {
-            cleanup(self);
-            return;
-        };
-
-        // Re-compress each ZSTD drop where we retained plaintext.
+        // Re-compress each ZSTD drop with the dict for its class.
         // Keep the smaller representation.
         for d in self.drops.iter_mut() {
             if d.codec != limnifs_core::codec::CODEC_ZSTD {
                 continue;
             }
-            let Some(plaintext) = d.plaintext.as_ref() else {
+            let Some(plaintext) = d.plaintext.clone() else {
                 continue;
             };
-            let Ok(dict_compressed) = dict.compress(plaintext) else {
+            let class = self.classifier.classify(&plaintext);
+            let dict_class = if text_classes.contains(&class) {
+                crate::classifier::Class::Text
+            } else if binary_classes.contains(&class) {
+                crate::classifier::Class::Binary
+            } else {
+                continue;
+            };
+            let Some(dict) = self.trained_dicts_by_class.get(&dict_class) else {
+                continue;
+            };
+            let Ok(dict_compressed) = dict.compress(&plaintext) else {
                 continue;
             };
             if dict_compressed.len() < d.compressed.len() {
@@ -782,7 +834,6 @@ impl WriteContext {
             }
         }
 
-        self.trained_dict = Some(dict);
         cleanup(self);
     }
 
@@ -950,20 +1001,24 @@ impl WriteContext {
         }
         let profile_desc_end = manifest.len();
 
-        // DictionarySection (optional — emitted when a dictionary
-        // was trained during the post-parallel pass). Contains the
+        // DictionarySection (optional — emitted when dictionaries
+        // were trained during the post-parallel pass). Contains the
         // `(codec_id, class_id, data)` triples referenced by drop
-        // records' `dict_id` field. We use `class_id = 0` for the
-        // single all-ZSTD-drops dictionary; per-class split is a
-        // future enhancement.
-        if let Some(dict) = &self.trained_dict {
+        // records' `dict_id` field. One entry per class with enough
+        // samples to train: text (id 0), binary (id 1).
+        if !self.trained_dicts_by_class.is_empty() {
+            let dicts: Vec<_> = self
+                .trained_dicts_by_class
+                .values()
+                .map(|d| limnifs_core::dictionary_section::Dictionary {
+                    codec_id: d.codec,
+                    class_id: d.id,
+                    data: d.content.clone(),
+                })
+                .collect();
             let section = limnifs_core::dictionary_section::DictionarySection {
                 version: limnifs_core::dictionary_section::DICTIONARY_SECTION_VERSION,
-                dicts: vec![limnifs_core::dictionary_section::Dictionary {
-                    codec_id: dict.codec,
-                    class_id: dict.id,
-                    data: dict.content.clone(),
-                }],
+                dicts,
             };
             limnifs_core::dictionary_section::encode_dictionary_section(&section, &mut manifest);
         }

@@ -5,6 +5,32 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.7] — 2026-08-04
+
+### Changed
+
+- **Per-class dictionary split** — writer now trains two ZSTD
+  dictionaries instead of one when `dictionaries.enabled` is true:
+  - **id 0 (text)**: trained from Text/Code/Sparse class samples
+    combined.
+  - **id 1 (binary)**: trained from Binary class samples.
+
+  Drops are re-compressed with their own class's dict; the
+  `dictionary_section` carries both entries. Mixed content
+  (source + binary executables) now gets two specialised dicts
+  instead of one shared one — meaningfully better ratio on
+  mixed-content images.
+
+### Compatibility
+
+- Reader code from v0.2.4+ already handles multiple dicts in the
+  section; no reader-side changes needed.
+
+### Test count
+
+569 (unchanged — existing dict round-trip integration test still
+passes; the new path activates when binary samples accumulate).
+
 ## [0.2.6] — 2026-08-04
 
 ### Changed
@@ -189,6 +215,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.7]: https://github.com/limnifs/limnifs/releases/tag/v0.2.7
 [0.2.6]: https://github.com/limnifs/limnifs/releases/tag/v0.2.6
 [0.2.5]: https://github.com/limnifs/limnifs/releases/tag/v0.2.5
 [0.2.4]: https://github.com/limnifs/limnifs/releases/tag/v0.2.4
