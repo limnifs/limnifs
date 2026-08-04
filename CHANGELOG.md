@@ -5,6 +5,20 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.6] — 2026-08-04
+
+### Changed
+
+- **omnizip 0.14.1 → 0.14.4** — picks up 6 libdeflate LZ77+Huffman
+  encoder bug fixes (hash-before-search, bit-writer byte extraction,
+  HuffmanTable u8→u16, distance_to_sym offset, distance code
+  double-reversal, lazy look-ahead off-by-one). 831 omnizip tests
+  pass; 0 ignored; 0 unsafe code.
+
+### Test count
+
+569 (unchanged).
+
 ## [0.2.5] — 2026-08-04
 
 ### Added
@@ -175,6 +189,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.6]: https://github.com/limnifs/limnifs/releases/tag/v0.2.6
 [0.2.5]: https://github.com/limnifs/limnifs/releases/tag/v0.2.5
 [0.2.4]: https://github.com/limnifs/limnifs/releases/tag/v0.2.4
 [0.2.3]: https://github.com/limnifs/limnifs/releases/tag/v0.2.3
