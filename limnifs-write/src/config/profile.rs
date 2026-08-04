@@ -88,6 +88,7 @@ pub fn max_ratio() -> WriteConfig {
         },
         categorizers: crate::config::defaults::all_v0_1(),
         chunking: ChunkingConfig {
+            name: "fastcdc".into(),
             avg_chunk_size: 65_536,
             min_chunk_size: 8192,
             max_chunk_size: 262_144,
@@ -161,6 +162,7 @@ pub fn max_speed() -> WriteConfig {
         },
         categorizers: vec![],
         chunking: ChunkingConfig {
+            name: "fastcdc".into(),
             avg_chunk_size: 4096,
             min_chunk_size: 512,
             max_chunk_size: 16_384,
@@ -211,6 +213,7 @@ pub fn balanced() -> WriteConfig {
         },
         categorizers: crate::config::defaults::all_v0_1(),
         chunking: ChunkingConfig {
+            name: "fastcdc".into(),
             avg_chunk_size: 16_384,
             min_chunk_size: 2048,
             max_chunk_size: 65_536,
@@ -258,6 +261,7 @@ pub fn competitive() -> WriteConfig {
         },
         categorizers: crate::config::defaults::all_v0_1(),
         chunking: ChunkingConfig {
+            name: "fastcdc".into(),
             avg_chunk_size: 8192,
             min_chunk_size: 1024,
             max_chunk_size: 65_536,
@@ -311,6 +315,7 @@ pub fn max_read() -> WriteConfig {
         },
         categorizers: crate::config::defaults::all_v0_1(),
         chunking: ChunkingConfig {
+            name: "fastcdc".into(),
             avg_chunk_size: 65_536,
             min_chunk_size: 8192,
             max_chunk_size: 262_144,
@@ -368,6 +373,7 @@ pub fn max_write() -> WriteConfig {
         },
         categorizers: vec![],
         chunking: ChunkingConfig {
+            name: "fastcdc".into(),
             avg_chunk_size: 131_072,
             min_chunk_size: 16_384,
             max_chunk_size: 524_288,
@@ -413,6 +419,7 @@ pub fn max_write_rw() -> WriteConfig {
         },
         categorizers: vec![],
         chunking: ChunkingConfig {
+            name: "fastcdc".into(),
             avg_chunk_size: 131_072,
             min_chunk_size: 16_384,
             max_chunk_size: 524_288,
@@ -458,6 +465,7 @@ pub fn max_read_rw() -> WriteConfig {
         },
         categorizers: crate::config::defaults::all_v0_1(),
         chunking: ChunkingConfig {
+            name: "fastcdc".into(),
             avg_chunk_size: 65_536,
             min_chunk_size: 8192,
             max_chunk_size: 262_144,
@@ -508,6 +516,7 @@ pub fn balanced_rw() -> WriteConfig {
         },
         categorizers: crate::config::defaults::all_v0_1(),
         chunking: ChunkingConfig {
+            name: "fastcdc".into(),
             avg_chunk_size: 16_384,
             min_chunk_size: 2048,
             max_chunk_size: 65_536,

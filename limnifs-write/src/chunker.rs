@@ -41,6 +41,33 @@ pub const DEFAULT_MAX_SIZE: usize = 1024 * 1024;
 /// Read buffer size when pulling from a `Read`.
 const READ_BUFFER_SIZE: usize = 64 * 1024;
 
+/// Behaviour every content-defined chunker implements.
+///
+/// Adding a new chunker (Gear+SIMD, leap-based parallel CDC, etc.)
+/// is one `impl Chunker for ...` — the writer pipeline never
+/// changes (OCP). Today only [`FastCDC`] implements this; the
+/// trait exists so future variants slot in behind the same shape
+/// and so `WriteConfig::chunking.name` can dispatch at build time.
+///
+/// `Send + Sync` so the chunker can be shared across rayon workers.
+pub trait Chunker: Send + Sync {
+    /// Split `data` into content-defined chunks. The concatenation
+    /// of the returned slices equals `data`.
+    fn chunk_slice<'a>(&self, data: &'a [u8]) -> Vec<&'a [u8]>;
+
+    /// Split a `Read` stream into content-defined chunks, returning
+    /// each chunk as an owned `Vec<u8>`. Constant memory bounded by
+    /// the chunker's max chunk size plus one read buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying `std::io::Error` if `reader` fails.
+    fn chunk_reader<R: Read>(&self, reader: R) -> std::io::Result<Vec<Vec<u8>>>;
+
+    /// Target average chunk size.
+    fn avg_chunk_size(&self) -> usize;
+}
+
 /// A content-defined chunker that splits a byte stream at boundaries
 /// determined by the content itself.
 ///
@@ -222,6 +249,20 @@ impl FastCDC {
             i += 1;
         }
         max_end
+    }
+}
+
+impl Chunker for FastCDC {
+    fn chunk_slice<'a>(&self, data: &'a [u8]) -> Vec<&'a [u8]> {
+        FastCDC::chunk_slice(self, data)
+    }
+
+    fn chunk_reader<R: Read>(&self, reader: R) -> std::io::Result<Vec<Vec<u8>>> {
+        FastCDC::chunk_reader(self, reader)
+    }
+
+    fn avg_chunk_size(&self) -> usize {
+        self.avg_size
     }
 }
 

@@ -144,11 +144,24 @@ fn default_true() -> bool {
 }
 
 /// `FastCDC` parameters.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ChunkingConfig {
+    /// Algorithm name. Defaults to `"fastcdc"`. Reserved for future
+    /// chunkers (`"gear-simd"`, `"leap-cdc"`, etc.) — today only
+    /// `FastCDC` is wired. The writer ignores unknown values today;
+    /// a `chunker_from_config` factory lands with the second chunker.
+    #[serde(default = "default_chunker_name")]
+    pub name: String,
+    #[serde(default)]
     pub avg_chunk_size: u32,
+    #[serde(default)]
     pub min_chunk_size: u32,
+    #[serde(default)]
     pub max_chunk_size: u32,
+}
+
+fn default_chunker_name() -> String {
+    "fastcdc".into()
 }
 
 /// Compression tournament settings.
@@ -334,6 +347,7 @@ impl WriteConfig {
             },
             categorizers: Vec::new(),
             chunking: ChunkingConfig {
+                name: "fastcdc".into(),
                 avg_chunk_size: DEFAULT_AVG_CHUNK_SIZE,
                 min_chunk_size: DEFAULT_MIN_CHUNK_SIZE,
                 max_chunk_size: DEFAULT_MAX_CHUNK_SIZE,
