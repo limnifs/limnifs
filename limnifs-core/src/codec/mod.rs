@@ -94,6 +94,10 @@ pub const CODEC_DEFLATE64: u8 = 0x11;
 /// Codec id 0x12: PPMd8 (RESTART + RLE, user-tunable memory budget).
 pub const CODEC_PPMD8: u8 = 0x12;
 
+/// Codec id 0x13: LZ4 HC (hash-chain match finder + lazy parsing).
+/// Real encoder from omnizip-lz4 0.14.1; was a stub in 0.13.1.
+pub const CODEC_LZ4_HC: u8 = 0x13;
+
 /// Codec id 0x20: BCJ-x86 filter + LZ4. For x86/x86_64 executables.
 pub const CODEC_BCJ_X86_LZ4: u8 = 0x20;
 /// Codec id 0x21: BCJ-x86 filter + ZSTD.
@@ -320,6 +324,7 @@ impl Default for CodecRegistry {
         let mut registry = Self::new();
         registry.register(Box::new(store::StoreCodec));
         registry.register(Box::new(lz4::Lz4Codec));
+        registry.register(Box::new(lz4::Lz4HcCodec));
         registry.register(Box::new(zstd::ZstdCodec));
         registry.register(Box::new(xz::XzCodec));
         registry.register(Box::new(brotli::BrotliCodec));
