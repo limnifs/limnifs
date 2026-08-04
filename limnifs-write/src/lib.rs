@@ -25,6 +25,7 @@ pub mod classifier;
 pub mod compaction;
 pub mod config;
 pub mod delta_builder;
+pub mod dictionary;
 pub mod file_categorizer;
 pub mod flatten;
 pub mod rw;
