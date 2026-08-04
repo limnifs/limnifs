@@ -5,6 +5,22 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.5] — 2026-08-04
+
+### Added
+
+- **End-to-end dictionary round-trip integration test** — new
+  `limnifs-write/tests/dict_round_trip.rs` writes an image with
+  `dictionaries.enabled`, parses the manifest (including
+  `dictionary_section`), constructs a `SlabStore`, calls
+  `set_dictionaries`, and verifies every file's plaintext matches
+  the original. Proves the v0.2.3 + v0.2.4 writer+reader dict
+  pipeline works end-to-end on real content.
+
+### Test count
+
+568 → **569** (+1 integration test).
+
 ## [0.2.4] — 2026-08-04
 
 ### Added
@@ -159,6 +175,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.5]: https://github.com/limnifs/limnifs/releases/tag/v0.2.5
 [0.2.4]: https://github.com/limnifs/limnifs/releases/tag/v0.2.4
 [0.2.3]: https://github.com/limnifs/limnifs/releases/tag/v0.2.3
 [0.2.2]: https://github.com/limnifs/limnifs/releases/tag/v0.2.2
