@@ -5,6 +5,36 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.16] — 2026-08-04
+
+### Changed
+
+- **omnizip 0.14.4 → 0.14.6** — ZSTD hash-chain walking fix
+  (Lazy strategy walks 16 chain entries at levels 6-7; Lazy2 walks
+  512 at levels 8-22; Fast/Greedy unchanged).
+- **Benchmark uses `balanced()` profile** instead of `max_write()`.
+  The previous profile had empty categorizers, producing 98-100%
+  ratio on FITS and WAV datasets. With `balanced()`, categorizers
+  route FITS to ricepp and WAV to FLAC, producing correct results.
+
+### Benchmark highlights (balanced profile, vs DwarFS/SquashFS)
+
+| Dataset | LimniFS ratio | DwarFS ratio | SquashFS ratio | Winner |
+|---|---:|---:|---:|---|
+| FITS | **32.08%** | 46.29% | 90.18% | **LimniFS** (31% better than DwarFS) |
+| WAV | **0.02%** | 0.10% | 3.39% | **LimniFS** (5× better than DwarFS) |
+| CSV | **3.57%** | 3.59% | 16.35% | **LimniFS ties DwarFS** |
+| Repetitive | **0.01%** | 0.06% | 0.05% | **LimniFS ties tar** |
+
+### Added
+
+- `docs/launch-readiness-2026-08-04.md` — full benchmark analysis,
+  win/loss matrix, launch verdict, and recommended launch message.
+
+### Test count
+
+575 (default); unchanged from v0.2.15.
+
 ## [0.2.15] — 2026-08-04
 
 ### Added
@@ -403,6 +433,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.16]: https://github.com/limnifs/limnifs/releases/tag/v0.2.16
 [0.2.15]: https://github.com/limnifs/limnifs/releases/tag/v0.2.15
 [0.2.14]: https://github.com/limnifs/limnifs/releases/tag/v0.2.14
 [0.2.13]: https://github.com/limnifs/limnifs/releases/tag/v0.2.13
