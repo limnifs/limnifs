@@ -168,6 +168,28 @@ impl SlabStore {
                 ),
             })?;
 
+            // Hint the kernel to prefetch the slab pages. On first
+            // access the page cache is cold; without this hint, each
+            // page faults individually. MADV_WILLNEED triggers
+            // readahead so pages are resident by the time we access
+            // them.
+            //
+            // SAFETY: mmap is a valid read-only mapping of the slab
+            // file. madvise with MADV_WILLNEED is a hint, not a
+            // mutation; it cannot corrupt the mapping. The pointer
+            // and length are derived from the Mmap which is valid.
+            #[allow(unsafe_code)]
+            {
+                let ptr = mmap.as_ref().as_ptr() as *mut libc::c_void;
+                let len = mmap.as_ref().len();
+                // SAFETY: ptr and len describe the valid read-only
+                // mmap region above. madvise with MADV_WILLNEED is a
+                // prefetch hint — no mutation, no UB.
+                unsafe {
+                    let _ = libc::madvise(ptr, len, libc::MADV_WILLNEED);
+                }
+            }
+
             let view = parse_slab(&mmap[..])?;
             for record in view.drop_records() {
                 drop_index.insert(*record.drop_id.as_bytes(), ordinal);

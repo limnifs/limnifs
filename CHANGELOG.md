@@ -5,6 +5,33 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.19] — 2026-08-05
+
+### Added
+
+- **madvise(MADV_WILLNEED) prefetch** — `SlabStore::load_mmap` now
+  hints the kernel to prefetch slab pages after mmap. On cold cache,
+  pages are readahead'd in parallel rather than faulted one at a
+  time. Closes TODO.perf/05.
+
+- **skip_chunking field** — `WriteConfig::skip_chunking: bool`
+  (default false). When true, `process_file` compresses each file
+  as a single drop without FastCDC hashing — **19–28% faster
+  create** on incompressible/large data. `max_write()` and
+  `max_write_rw()` profiles set it to true. Balanced/max-ratio
+  profiles keep it false (chunking enables dedup).
+
+### Benchmark impact (max_write + skip_chunking vs previous)
+
+| Dataset | Before | After | Speedup |
+|---|---:|---:|---:|
+| Random (100 MB) | 0.289s | 0.235s | **19%** |
+| Zeros (100 MB) | 0.148s | 0.106s | **28%** |
+
+### Test count
+
+575 (unchanged).
+
 ## [0.2.18] — 2026-08-04
 
 ### Changed
@@ -496,6 +523,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.19]: https://github.com/limnifs/limnifs/releases/tag/v0.2.19
 [0.2.18]: https://github.com/limnifs/limnifs/releases/tag/v0.2.18
 [0.2.17]: https://github.com/limnifs/limnifs/releases/tag/v0.2.17
 [0.2.16]: https://github.com/limnifs/limnifs/releases/tag/v0.2.16

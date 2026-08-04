@@ -97,6 +97,11 @@ pub struct WriteConfig {
     /// compaction triggers (RW mode only). 0 = manual turnover only.
     #[serde(default)]
     pub turnover_threshold: u32,
+    /// Skip FastCDC chunking; compress each file as a single drop.
+    /// Trades dedup granularity for create speed. Recommended for
+    /// `max-write` profile where speed >> ratio.
+    #[serde(default)]
+    pub skip_chunking: bool,
     /// Encryption configuration.
     pub encryption: EncryptionConfig,
     /// ZSTD dictionary configuration.
@@ -388,6 +393,7 @@ impl WriteConfig {
             mode: ImageMode::ReadOnly,
             write_codec: default_write_codec(),
             turnover_threshold: 0,
+            skip_chunking: false,
         }
     }
 
