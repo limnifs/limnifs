@@ -45,6 +45,7 @@ x25519-dalek = { workspace = true, optional = true }
 [features]
 default = []
 http = []
+io-uring = []
 key-wrap = ["dep:hkdf", "dep:rand_core", "dep:sha2", "dep:x25519-dalek"]
 signing = ["dep:ed25519-dalek", "dep:rand_core"]
 
