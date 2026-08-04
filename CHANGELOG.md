@@ -5,6 +5,30 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] — 2026-08-04
+
+### Added
+
+- **ZSTD dictionary writer pipeline integration** — when
+  `WriteConfig::dictionaries.enabled` is true, the writer now:
+  1. Retains plaintext for ZSTD-compressed drops during the parallel
+     compress phase (memory cost bounded by `MAX_DICT_SAMPLES = 1000`).
+  2. After the parallel phase, trains one ZSTD dictionary via the
+     `omnizip_zstd` FrequencyTrainer.
+  3. Re-compresses each ZSTD drop with the dictionary; keeps the
+     smaller of the two representations.
+  4. Populates `DropRecord::dict_id` for re-compressed drops.
+  5. Emits a `dictionary_section` in the manifest containing the
+     trained dictionary.
+
+  Closes `TODO.impl/04-writer-pipeline/04-zstd-dictionary-training.md`
+  (single-dictionary, single-class variant). Per-class split and
+  FastCover trainer are follow-ups.
+
+### Test count
+
+567 → **568** (+1 dict pipeline behavioural test).
+
 ## [0.2.2] — 2026-08-04
 
 ### Added
@@ -95,6 +119,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.3]: https://github.com/limnifs/limnifs/releases/tag/v0.2.3
 [0.2.2]: https://github.com/limnifs/limnifs/releases/tag/v0.2.2
 [0.2.1]: https://github.com/limnifs/limnifs/releases/tag/v0.2.1
 [0.2.0]: https://github.com/limnifs/limnifs/releases/tag/v0.2.0
