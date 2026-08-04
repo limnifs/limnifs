@@ -61,9 +61,9 @@ pub mod header;
 pub mod history;
 #[cfg(feature = "http")]
 pub mod http_locator;
+pub mod inode;
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 pub mod iouring_slab_source;
-pub mod inode;
 #[cfg(feature = "http")]
 pub mod ipfs_locator;
 #[cfg(feature = "key-wrap")]
