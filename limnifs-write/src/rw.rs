@@ -391,23 +391,76 @@ impl RwImage {
 
     /// Persist the produced manifest + slabs to disk, replacing the
     /// previous files at the same paths.
+    /// Persist the produced manifest + slabs to disk atomically.
+    ///
+    /// Files are written to `<manifest_path>.new/` then renamed into
+    /// place. `rename(2)` is atomic for a single file on POSIX
+    /// filesystems (APFS, ext4, btrfs, xfs); ordering the renames
+    /// sidecar → slabs → manifest means a reader opening the manifest
+    /// always sees a consistent snapshot (referenced slabs already
+    /// exist).
+    ///
+    /// A crash mid-sequence leaves `<manifest_path>.new/` on disk;
+    /// the next `RwImage::open` could detect and clean it up (TODO:
+    /// `06-rw-crash-safety.md`).
     fn write_artifact(&self, artifact: &crate::WriteArtifact) -> Result<(), WriteError> {
-        std::fs::write(&self.manifest_path, &artifact.bytes).map_err(WriteError::Io)?;
         let parent = self
             .manifest_path
             .parent()
-            .unwrap_or_else(|| Path::new("."));
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let staging = parent.join(format!(
+            "{}.new",
+            self.manifest_path
+                .file_name()
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap_or("image.lim"),
+        ));
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging).map_err(WriteError::Io)?;
+
+        // Write all files into staging first.
+        let manifest_name = self
+            .manifest_path
+            .file_name()
+            .map(std::ffi::OsString::from)
+            .unwrap_or_else(|| std::ffi::OsString::from("image.lim"));
+        let manifest_staging = staging.join(&manifest_name);
+        std::fs::write(&manifest_staging, &artifact.bytes).map_err(WriteError::Io)?;
+
+        let mut slab_names: Vec<std::ffi::OsString> = Vec::new();
         for slab in &artifact.slabs {
             let name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
-            std::fs::write(parent.join(name), &slab.bytes).map_err(WriteError::Io)?;
+            let os_name = std::ffi::OsString::from(name);
+            std::fs::write(staging.join(&os_name), &slab.bytes).map_err(WriteError::Io)?;
+            slab_names.push(os_name);
         }
-        if let Some(sidecar) = &artifact.metadata_sidecar {
-            let name = sidecar
-                .locator
-                .strip_prefix("file:")
-                .unwrap_or(&sidecar.locator);
-            std::fs::write(parent.join(name), &sidecar.bytes).map_err(WriteError::Io)?;
+        let sidecar_name: Option<std::ffi::OsString> =
+            if let Some(sidecar) = &artifact.metadata_sidecar {
+                let name = sidecar
+                    .locator
+                    .strip_prefix("file:")
+                    .unwrap_or(&sidecar.locator);
+                let os_name = std::ffi::OsString::from(name);
+                std::fs::write(staging.join(&os_name), &sidecar.bytes).map_err(WriteError::Io)?;
+                Some(os_name)
+            } else {
+                None
+            };
+
+        // Rename into place: sidecar → slabs → manifest. The manifest
+        // is last so a reader never sees a manifest that references
+        // missing slabs.
+        if let Some(name) = &sidecar_name {
+            rename_or_fallback(staging.join(name), parent.join(name))?;
         }
+        for name in &slab_names {
+            rename_or_fallback(staging.join(name), parent.join(name))?;
+        }
+        rename_or_fallback(manifest_staging, self.manifest_path.clone())?;
+
+        // Cleanup staging directory (now empty).
+        let _ = std::fs::remove_dir_all(&staging);
         Ok(())
     }
 
@@ -457,6 +510,25 @@ fn normalize_path(path: &str) -> String {
 /// staging root.
 fn staging_relative(path: &str) -> &str {
     path.trim_start_matches('/')
+}
+
+/// `rename(2)` is atomic on POSIX filesystems when source and
+/// destination are on the same filesystem. If they're not (e.g.
+/// `/tmp` → `/`), `rename` fails with `EXDEV` — fall back to
+/// `write` + `remove` so we still get the final state, just without
+/// the cross-reader atomicity guarantee.
+fn rename_or_fallback(from: PathBuf, to: PathBuf) -> Result<(), WriteError> {
+    match std::fs::rename(&from, &to) {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(18) => {
+            // EXDEV: cross-device rename. Fall back.
+            let bytes = std::fs::read(&from).map_err(WriteError::Io)?;
+            std::fs::write(&to, &bytes).map_err(WriteError::Io)?;
+            let _ = std::fs::remove_file(&from);
+            Ok(())
+        }
+        Err(e) => Err(WriteError::Io(e)),
+    }
 }
 
 fn core_to_io(e: limnifs_core::CoreError) -> WriteError {
