@@ -1414,27 +1414,27 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
         path: dest.to_path_buf(),
         source,
     })?;
-    let root_inode = blob.inode_by_number(root_inode_number).expect("validated");
 
-    // Phase 1: walk the tree SEQUENTIALLY to create directories and
-    // collect file paths. Directory creation must be sequential to
-    // avoid races.
-    let mut file_tasks: Vec<(PathBuf, &limnifs_core::Inode)> = Vec::new();
-    let mut dir_count = 0usize;
-    extract_dir_collect(&blob, root_inode, dest, &mut file_tasks, &mut dir_count)?;
+    // Phase 1: walk the tree SEQUENTIALLY. Directory creation must
+    // be ordered (parents before children) to avoid races; the
+    // walker guarantees pre-order traversal. File inodes are cloned
+    // into `tasks` so the parallel phase can outlive the blob borrow.
+    let mut sink = limnifs_core::live_tree::ParallelExtractSink::new(dest);
+    limnifs_core::live_tree::walk_live_tree(&blob, root_inode_number, &mut sink)
+        .map_err(map_err)?;
+    drop(blob); // release the metadata borrow before parallel phase
 
     // Phase 2: load the slab store once (if any) and write files IN PARALLEL.
-    // Each file write is independent; rayon distributes them across cores.
-    // SlabStore is `Sync` (it's all `HashMap` and `Vec<u8>` under the hood)
-    // so we can share a reference across rayon workers.
     let slab_store: Option<limnifs_core::slab_store::SlabStore> = if slab_index.is_empty() {
         None
     } else {
         Some(limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?)
     };
 
-    let file_count = file_tasks.len();
-    let write_errors: Vec<Option<CliError>> = file_tasks
+    let file_count = sink.tasks.len();
+    let dir_count = sink.dir_count;
+    let write_errors: Vec<Option<CliError>> = sink
+        .tasks
         .par_iter()
         .map(|(path, inode)| extract_file(path, inode, slab_store.as_ref()).err())
         .collect();
@@ -1471,54 +1471,6 @@ fn extract_file(
             path: path.to_path_buf(),
             source,
         })?;
-    }
-    Ok(())
-}
-
-/// Walk a directory inode recursively, creating directories and
-/// collecting file extraction tasks.
-fn extract_dir_collect<'a>(
-    blob: &'a MetadataBlob,
-    dir_inode: &limnifs_core::Inode,
-    dir_path: &Path,
-    file_tasks: &mut Vec<(PathBuf, &'a limnifs_core::Inode)>,
-    dir_count: &mut usize,
-) -> Result<(), CliError> {
-    let hash = match &dir_inode.content_handle {
-        ContentHandle::Directory(h) => *h,
-        _ => return Ok(()),
-    };
-    let node = blob
-        .dir_node_by_hash(&hash)
-        .ok_or_else(|| CliError::FormatFailed {
-            path: dir_path.to_path_buf(),
-            source: CoreError::Corrupt {
-                reason: "directory node not found in blob".into(),
-            },
-        })?;
-    for entry in &node.entries {
-        let entry_path = dir_path.join(&entry.name);
-        let child_inode =
-            blob.inode_by_number(entry.inode_number)
-                .ok_or_else(|| CliError::FormatFailed {
-                    path: dir_path.to_path_buf(),
-                    source: CoreError::Corrupt {
-                        reason: format!("inode {} missing", entry.inode_number),
-                    },
-                })?;
-        match &child_inode.content_handle {
-            ContentHandle::Directory(_) => {
-                *dir_count += 1;
-                std::fs::create_dir_all(&entry_path).map_err(|source| CliError::ReadFailed {
-                    path: entry_path.clone(),
-                    source,
-                })?;
-                extract_dir_collect(blob, child_inode, &entry_path, file_tasks, dir_count)?;
-            }
-            _ => {
-                file_tasks.push((entry_path, child_inode));
-            }
-        }
     }
     Ok(())
 }
