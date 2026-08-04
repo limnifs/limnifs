@@ -1,64 +1,60 @@
-# 04 — LZ4 HC wiring (when omnizip publishes the real encoder)
+# 04 — LZ4 HC wiring
 
-- **Status:** in_progress (encoder landed locally in omnizip-rs; pending crates.io publication)
+- **Status:** DONE (2026-08-04, omnizip 0.14.1 published)
 - **Phase:** 2
 - **Depends on:** omnizip-lz4 release with real HC encoder
 - **Design refs:** 04-omnizip-new-algos.md finding 2, docs/omnizip-proposals/lz4-hc.md
-- **Priority:** P2
+- **Priority:** ~~P2~~ closed
 
-## Update (2026-08-04)
+## Resolution
 
-The omnizip-rs maintainers accepted LimniFS's LZ4 HC proposal #1
-and implemented a real HC encoder:
+omnizip-rs accepted LimniFS's LZ4 HC proposal #1 and shipped a real
+hash-chain HC encoder in **omnizip-lz4 0.14.1**:
 
-- Local commit: `2d883db fix(lz4): real HC encoder (LZ4 HC proposal #1)`
-- File: `omnizip-rs/omnizip-lz4/src/hc.rs` (~200 LOC)
-- Algorithm: hash-table 16-bit hash of every 4-byte window →
-  parallel hash-chain → greedy match selection with lazy
-  look-ahead → MAX_CHAIN_LENGTH = 256 per position. Pure Rust,
-  byte-compatible with the fast decoder (lz4_flex::decompress_size_prepended).
+- File: `omnizip-rs/omnizip-lz4/src/hc.rs` (~200 LOC).
+- Algorithm: 16-bit hash table + parallel hash-chain + greedy match
+  selection with lazy look-ahead. `MAX_CHAIN_LENGTH = 256` per
+  position. Pure Rust, byte-compatible with the fast LZ4 decoder.
 - Deterministic, no unsafe code, no GPL.
 
-## What's left
+LimniFS action (landed in PR #141):
 
-**Publication.** The local `Cargo.toml` still says `version = "0.13.1"`
-(same as the published stub). When omnizip publishes `0.13.2` or
-`0.14.0`, LimniFS picks up the real HC automatically by bumping
-the workspace dep.
-
-LimniFS action on publication:
-
-1. Bump `omnizip-lz4 = "0.13.2"` (or whatever version) in
-   `limnifs-core/Cargo.toml`.
-2. Assign codec id `0x13 = CODEC_LZ4_HC` in
+1. Bumped `omnizip-lz4 = "0.14.1"` in `limnifs-core/Cargo.toml`.
+2. Assigned codec id `0x13 = CODEC_LZ4_HC` in
    `limnifs-core/src/codec/mod.rs`.
-3. Add `limnifs-core/src/codec/lz4_hc.rs` wrapping
+3. Added `limnifs-core/src/codec/lz4.rs::Lz4HcCodec` wrapping
    `omnizip_lz4::Lz4HcCodec`.
-4. Register in `CodecRegistry::default`.
-5. Add LZ4 HC to the `max-ratio` tournament list (it should beat
-   LZ4 fast on text at slower encode speed).
-6. Add a behavioural test: HC output strictly smaller than fast
-   on Calgary `paper1`.
+4. Registered in `CodecRegistry::default`.
+5. Three tests:
+   - `hc_beats_fast_on_non_rle_friendly_input` — HC strictly beats fast.
+   - `hc_decodes_through_fast_decoder` — wire format compatible.
+   - `hc_round_trips` — end-to-end.
+
+What's NOT done in this PR (filed as future work):
+- Adding LZ4 HC to profile tournament lists (`max-ratio` text path).
+- `process_file` routing binary chunks through HC when categorizer
+  hasn't claimed them. Both are profile config changes, not code.
 
 ## Original problem (preserved for context)
 
-`omnizip-lz4 0.13.1` ships `Lz4HcCodec` whose `compress` body is
-identical to `Lz4FastCodec::compress` — both call
-`lz4_flex::compress_prepend_size`. The HC match finder is never
-invoked; ratio is identical to fast LZ4. LimniFS verified this
+`omnizip-lz4 0.13.1` shipped `Lz4HcCodec` whose `compress` body was
+identical to `Lz4FastCodec::compress` — both called
+`lz4_flex::compress_prepend_size`. The HC match finder was never
+invoked; ratio was identical to fast LZ4. LimniFS verified this
 directly: 50 KB mixed input → fast=461 bytes, hc=461 bytes
-(identical). The proposed fix is a one-line change to call
+(identical). The proposed fix was a one-line change to call
 `compress_hc_prepend_size`, but omnizip-rs went further and
 implemented a real hash-chain HC encoder from scratch.
 
 ## Acceptance
 
 - [x] Upstream omnizip-rs issue filed (proposal #1, accepted).
-- [x] Real HC encoder committed locally in omnizip-rs.
-- [ ] Upstream publishes a new version of omnizip-lz4 with the encoder.
-- [ ] LimniFS bumps the dep and wires codec id `0x13`.
+- [x] Real HC encoder committed locally in omnizip-rs (`2d883db`).
+- [x] Upstream published `omnizip-lz4 0.14.1` with the encoder.
+- [x] LimniFS bumped the dep and wired codec id `0x13`.
 
 ## Related
 
 - Proposal: `docs/omnizip-proposals/lz4-hc.md`
 - Upstream commit: `omnizip-rs@2d883db`
+- Upstream release: `omnizip-rs@0.14.1`
