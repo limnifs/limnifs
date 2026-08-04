@@ -50,9 +50,25 @@ impl FileCategorizerRegistry {
     /// Consult each categorizer in registration order. Returns the
     /// first non-`None` result, or `None` if no categorizer claims
     /// the file (caller should fall back to `FastCDC`).
+    ///
+    /// **Early-exit optimisation**: categorizers that declare a
+    /// `first_byte_hint` are skipped without a function call when
+    /// `data[0]` isn't in their hint set. This saves 3 out of 4
+    /// categorizer calls on typical source files (only the CSV
+    /// categorizer runs, since it has no hint).
     #[must_use]
     pub fn categorize(&self, path: &Path, data: &[u8]) -> Option<Categorization> {
+        let first = data.first().copied();
         for c in &self.categorizers {
+            // Early-exit: if the categorizer declares a first-byte
+            // hint, check it before calling categorize().
+            if let Some(hint) = c.first_byte_hint() {
+                if let Some(byte) = first {
+                    if !hint.contains(&byte) {
+                        continue;
+                    }
+                }
+            }
             if let Some(cat) = c.categorize(path, data) {
                 return Some(cat);
             }

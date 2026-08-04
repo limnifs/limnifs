@@ -24,7 +24,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::inode::ContentHandle;
-use crate::slab_store::SlabStore;
+use crate::slab_source::SlabSource;
 use crate::{CoreError, Inode, MetadataBlob};
 
 /// Visitor callback for [`walk_live_tree`]. Each method receives the
@@ -150,7 +150,10 @@ fn hex_prefix(bytes: &[u8]) -> String {
 ///
 /// Returns [`CoreError::Corrupt`] if a slice references a drop the
 /// slab store doesn't have, or decompression fails.
-pub fn file_plaintext(inode: &Inode, slab_store: Option<&SlabStore>) -> Result<Vec<u8>, CoreError> {
+pub fn file_plaintext<S: SlabSource + ?Sized>(
+    inode: &Inode,
+    slab_store: Option<&S>,
+) -> Result<Vec<u8>, CoreError> {
     match &inode.content_handle {
         ContentHandle::InlineData(data) => Ok(data.clone()),
         ContentHandle::SliceMap(slices) => {
@@ -195,14 +198,14 @@ pub fn file_plaintext(inode: &Inode, slab_store: Option<&SlabStore>) -> Result<V
 /// parallel extraction).
 pub struct FilesystemSink<'a> {
     root: &'a Path,
-    slab_store: Option<&'a SlabStore>,
+    slab_store: Option<&'a dyn SlabSource>,
 }
 
 impl<'a> FilesystemSink<'a> {
     /// Construct a sink that writes the tree under `root`. If
     /// `slab_store` is `None`, slice-backed files fail extraction.
     #[must_use]
-    pub fn new(root: &'a Path, slab_store: Option<&'a SlabStore>) -> Self {
+    pub fn new(root: &'a Path, slab_store: Option<&'a dyn SlabSource>) -> Self {
         Self { root, slab_store }
     }
 }

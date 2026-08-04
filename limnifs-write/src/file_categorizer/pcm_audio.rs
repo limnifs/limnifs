@@ -73,6 +73,10 @@ impl FileCategorizer for PcmAudioCategorizer {
         &["pcmaudio/waveform"]
     }
 
+    fn first_byte_hint(&self) -> Option<&'static [u8]> {
+        Some(b"R")
+    }
+
     fn categorize(&self, _path: &Path, data: &[u8]) -> Option<Categorization> {
         if !FLAC_ENABLED {
             return None;

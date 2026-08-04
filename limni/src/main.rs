@@ -1455,28 +1455,27 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
         .map_err(map_err)?;
     drop(blob); // release the metadata borrow before parallel phase
 
-    // Phase 2: load the slab store once (if any) and write files IN PARALLEL.
-    let slab_store: Option<limnifs_core::slab_store::SlabStore> = if slab_index.is_empty() {
+    // Phase 2: load the slab store (cached) and write files IN PARALLEL.
+    let cached_store: Option<limnifs_core::slab_cache::CachedSlabStore> = if slab_index.is_empty() {
         None
     } else {
-        Some(
-            limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index)
-                .map_err(map_err)
-                .map(|mut s| {
-                    if let Some(d) = &_dict_section {
-                        install_dicts(&mut s, d);
-                    }
-                    s
-                })?,
-        )
+        let mut s =
+            limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?;
+        if let Some(d) = &_dict_section {
+            install_dicts(&mut s, d);
+        }
+        Some(limnifs_core::slab_cache::CachedSlabStore::with_default_capacity(s))
     };
+    let slab_ref: Option<&dyn limnifs_core::slab_source::SlabSource> = cached_store
+        .as_ref()
+        .map(|s| s as &dyn limnifs_core::slab_source::SlabSource);
 
     let file_count = sink.tasks.len();
     let dir_count = sink.dir_count;
     let write_errors: Vec<Option<CliError>> = sink
         .tasks
         .par_iter()
-        .map(|(path, inode)| extract_file(path, inode, slab_store.as_ref()).err())
+        .map(|(path, inode)| extract_file(path, inode, slab_ref).err())
         .collect();
     if let Some(Some(err)) = write_errors.into_iter().next() {
         return Err(err);
@@ -1493,7 +1492,7 @@ fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
 fn extract_file(
     path: &Path,
     inode: &limnifs_core::Inode,
-    slab_store: Option<&limnifs_core::slab_store::SlabStore>,
+    slab_store: Option<&dyn limnifs_core::slab_source::SlabSource>,
 ) -> Result<(), CliError> {
     // Delegates to limnifs_core::live_tree::file_plaintext, which
     // is the canonical place that honours SliceRef::drop_byte_start

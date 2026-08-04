@@ -306,6 +306,18 @@ impl SlabStore {
     }
 }
 
+impl crate::slab_source::SlabSource for SlabStore {
+    fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>> {
+        SlabStore::plaintext_for(self, drop_id)
+    }
+    fn slab_count(&self) -> usize {
+        self.slab_count()
+    }
+    fn drop_count(&self) -> usize {
+        self.drop_count()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

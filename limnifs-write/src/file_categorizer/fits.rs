@@ -71,6 +71,10 @@ impl FileCategorizer for FitsCategorizer {
         &["fits/image"]
     }
 
+    fn first_byte_hint(&self) -> Option<&'static [u8]> {
+        Some(b"S")
+    }
+
     fn categorize(&self, _path: &Path, data: &[u8]) -> Option<Categorization> {
         if !RICEPP_ENABLED {
             return None;
