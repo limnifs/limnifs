@@ -98,12 +98,10 @@ fn flac_corpus_within_5_percent_of_libflac() {
         let omnizip_ratio = omnizip_compressed.len() as f64 / data.len() as f64;
 
         // Compare with LZ4 and ZSTD.
-        let lz4_compressed =
-            limnifs_core::codec::compress(limnifs_core::codec::CODEC_LZ4, &data)
-                .unwrap_or_else(|_| data.clone());
-        let zstd_compressed =
-            limnifs_core::codec::compress(limnifs_core::codec::CODEC_ZSTD, &data)
-                .unwrap_or_else(|_| data.clone());
+        let lz4_compressed = limnifs_core::codec::compress(limnifs_core::codec::CODEC_LZ4, &data)
+            .unwrap_or_else(|_| data.clone());
+        let zstd_compressed = limnifs_core::codec::compress(limnifs_core::codec::CODEC_ZSTD, &data)
+            .unwrap_or_else(|_| data.clone());
 
         // FLAC should beat both for real audio.
         let beats_lz4 = omnizip_compressed.len() < lz4_compressed.len();

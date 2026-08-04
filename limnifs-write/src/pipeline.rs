@@ -122,13 +122,24 @@ pub fn write_directory_with_pipeline(
         .map(|i| {
             let data = match read_rx.recv() {
                 Ok(d) => d,
-                Err(_) => return Err(WriteError::Io(std::io::Error::other(
-                    "pipeline: read channel closed before all files processed",
-                ))),
+                Err(_) => {
+                    return Err(WriteError::Io(std::io::Error::other(
+                        "pipeline: read channel closed before all files processed",
+                    )))
+                }
             };
             let pf = &pending[i];
             let chunker: &FastCDC = &chunker;
-            process_file_inline(pf, &data, chunker, classifier, text_codec, binary_codec, &tunables, use_categorizers)
+            process_file_inline(
+                pf,
+                &data,
+                chunker,
+                classifier,
+                text_codec,
+                binary_codec,
+                &tunables,
+                use_categorizers,
+            )
         })
         .collect::<Result<Vec<_>, _>>()?;
 
