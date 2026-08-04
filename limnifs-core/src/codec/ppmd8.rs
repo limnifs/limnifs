@@ -8,13 +8,29 @@
 //! - Built-in RLE for runs of identical bytes
 //! - Trie pruning for bounded memory usage
 
-use crate::codec::{Codec, CodecTunables, CODEC_PPMD8};
+use crate::codec::{Codec, CodecTunables, PerCodecTunables, CODEC_PPMD8};
 use crate::error::CoreError;
 
 /// Default PPMd8 memory budget: 64 MB.
 pub const DEFAULT_PPMD8_BUDGET: usize = 64 * 1024 * 1024;
 /// Default PPMd8 context order.
 pub const DEFAULT_PPMD8_ORDER: u8 = 6;
+
+/// Strongly-typed PPMd8 tunables. Mirrors the PPMd7 pattern.
+#[derive(Clone, Debug)]
+pub struct Ppmd8Tunables {
+    pub order: u8,
+    pub budget: usize,
+}
+
+impl Default for Ppmd8Tunables {
+    fn default() -> Self {
+        Self {
+            order: DEFAULT_PPMD8_ORDER,
+            budget: DEFAULT_PPMD8_BUDGET,
+        }
+    }
+}
 
 pub struct Ppmd8Codec {
     order: u8,
@@ -101,6 +117,22 @@ impl Codec for Ppmd8Codec {
     }
 }
 
+impl PerCodecTunables for Ppmd8Codec {
+    type Tunables = Ppmd8Tunables;
+
+    fn compress_with_owned_tunables(
+        &self,
+        plaintext: &[u8],
+        t: &Self::Tunables,
+    ) -> Result<Vec<u8>, CoreError> {
+        omnizip_ppmd::ppmd8::compress_with_budget(plaintext, t.order, t.budget).map_err(|e| {
+            CoreError::Corrupt {
+                reason: format!("ppmd8 compress: {e}"),
+            }
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +146,19 @@ mod tests {
             .decompress(&compressed, input.len() as u32)
             .expect("decompress");
         assert_eq!(decompressed, input);
+    }
+
+    #[test]
+    fn owned_tunables_round_trips() {
+        let input = b"the quick brown fox jumps over the lazy dog. ".repeat(50);
+        let codec = Ppmd8Codec::new();
+        let t = Ppmd8Tunables::default();
+        let compressed = codec
+            .compress_with_owned_tunables(&input, &t)
+            .expect("compress");
+        let recovered = codec
+            .decompress(&compressed, input.len() as u32)
+            .expect("decompress");
+        assert_eq!(recovered, input);
     }
 }

@@ -13,8 +13,22 @@
 //! reference; switching gives us levels 1, 3, 6, 12, 22 with no
 //! quality regression.
 
-use crate::codec::{Codec, CodecTunables};
+use crate::codec::{Codec, CodecTunables, PerCodecTunables};
 use crate::error::CoreError;
+
+/// Strongly-typed ZSTD tunables.
+#[derive(Clone, Debug)]
+pub struct ZstdTunables {
+    /// ZSTD compression level (mapped to omnizip_zstd::ZstdLevel).
+    pub quality: u8,
+}
+
+impl Default for ZstdTunables {
+    fn default() -> Self {
+        // quality 6..=11 → ZstdLevel::Default (omnizip's default).
+        Self { quality: 6 }
+    }
+}
 
 /// ZSTD codec. Encode at `Default` (L6); decode at any level.
 pub struct ZstdCodec;
@@ -66,6 +80,27 @@ impl Codec for ZstdCodec {
             }
         } else {
             omnizip_zstd::ZstdLevel::Default
+        };
+        omnizip_zstd::compress(plaintext, level).map_err(|e| CoreError::Corrupt {
+            reason: format!("zstd compress (level {level}) failed: {e}"),
+        })
+    }
+}
+
+impl PerCodecTunables for ZstdCodec {
+    type Tunables = ZstdTunables;
+
+    fn compress_with_owned_tunables(
+        &self,
+        plaintext: &[u8],
+        t: &Self::Tunables,
+    ) -> Result<Vec<u8>, CoreError> {
+        let level = match t.quality {
+            0..=2 => omnizip_zstd::ZstdLevel::Fastest,
+            3..=5 => omnizip_zstd::ZstdLevel::Fast,
+            6..=11 => omnizip_zstd::ZstdLevel::Default,
+            12..=21 => omnizip_zstd::ZstdLevel::Better,
+            _ => omnizip_zstd::ZstdLevel::Best,
         };
         omnizip_zstd::compress(plaintext, level).map_err(|e| CoreError::Corrupt {
             reason: format!("zstd compress (level {level}) failed: {e}"),

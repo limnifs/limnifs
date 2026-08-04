@@ -11,7 +11,7 @@
 
 use std::io::Cursor;
 
-use crate::codec::{Codec, CodecTunables};
+use crate::codec::{Codec, CodecTunables, PerCodecTunables};
 use crate::error::CoreError;
 
 /// Brotli quality 5 — fast mode, the right default for the per-chunk
@@ -19,6 +19,21 @@ use crate::error::CoreError;
 /// archival use; the codec registry's default encoder uses this
 /// constant.
 pub(crate) const DEFAULT_QUALITY: i32 = 5;
+
+/// Strongly-typed Brotli tunables.
+#[derive(Clone, Debug)]
+pub struct BrotliTunables {
+    /// Quality 0..=11 (higher = better ratio, slower).
+    pub quality: i32,
+}
+
+impl Default for BrotliTunables {
+    fn default() -> Self {
+        Self {
+            quality: DEFAULT_QUALITY,
+        }
+    }
+}
 
 /// Brotli codec. Encode at quality 11; decode at any quality.
 pub struct BrotliCodec;
@@ -68,6 +83,18 @@ impl Codec for BrotliCodec {
             DEFAULT_QUALITY
         };
         compress(plaintext, q)
+    }
+}
+
+impl PerCodecTunables for BrotliCodec {
+    type Tunables = BrotliTunables;
+
+    fn compress_with_owned_tunables(
+        &self,
+        plaintext: &[u8],
+        t: &Self::Tunables,
+    ) -> Result<Vec<u8>, CoreError> {
+        compress(plaintext, t.quality.clamp(0, 11))
     }
 }
 

@@ -6,11 +6,26 @@
 
 use omnizip_codecs::{Codec as OmnizipCodec, CompressionLevel};
 
-use crate::codec::{Codec, CodecTunables, CODEC_BZIP2};
+use crate::codec::{Codec, CodecTunables, PerCodecTunables, CODEC_BZIP2};
 use crate::error::CoreError;
 
 /// Default `BZip2` compression level (1..=9, higher = better ratio).
 const DEFAULT_BZIP2_LEVEL: u8 = 9;
+
+/// Strongly-typed BZip2 tunables.
+#[derive(Clone, Debug)]
+pub struct Bzip2Tunables {
+    /// Block size in KB (100..=900). Maps to level 1..=9.
+    pub block_kb: u32,
+}
+
+impl Default for Bzip2Tunables {
+    fn default() -> Self {
+        Self {
+            block_kb: u32::from(DEFAULT_BZIP2_LEVEL) * 100,
+        }
+    }
+}
 
 pub struct Bzip2Codec {
     level: CompressionLevel,
@@ -76,6 +91,21 @@ impl Codec for Bzip2Codec {
         } else {
             self.level
         };
+        let codec = omnizip_bzip2::Bzip2Codec::new();
+        OmnizipCodec::compress(&codec, plaintext, level).map_err(bzip2_err)
+    }
+}
+
+impl PerCodecTunables for Bzip2Codec {
+    type Tunables = Bzip2Tunables;
+
+    fn compress_with_owned_tunables(
+        &self,
+        plaintext: &[u8],
+        t: &Self::Tunables,
+    ) -> Result<Vec<u8>, CoreError> {
+        let kb = t.block_kb.clamp(100, 900);
+        let level = CompressionLevel::from(((kb + 99) / 100) as u8);
         let codec = omnizip_bzip2::Bzip2Codec::new();
         OmnizipCodec::compress(&codec, plaintext, level).map_err(bzip2_err)
     }

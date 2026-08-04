@@ -5,6 +5,28 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.12] — 2026-08-04
+
+### Added
+
+- **PPMd8, Brotli, ZSTD, Bzip2 migrate to PerCodecTunables** —
+  all four major tunable codecs now have strongly-typed
+  `Tunables` structs alongside PPMd7 (v0.2.11):
+  - `Ppmd8Tunables { order, budget }`.
+  - `BrotliTunables { quality }`.
+  - `ZstdTunables { quality }`.
+  - `Bzip2Tunables { block_kb }`.
+  - Each codec implements `PerCodecTunables` with
+    `compress_with_owned_tunables`.
+
+  The flat `CodecTunables` struct remains as the dispatch entry
+  point for callers that want a single uniform knob set; codecs
+  that want clean OCP can be invoked via their own `Tunables` type.
+
+### Test count
+
+573 → **574** (+1 PPMd8 owned-tunables test).
+
 ## [0.2.11] — 2026-08-04
 
 ### Added
@@ -302,6 +324,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.12]: https://github.com/limnifs/limnifs/releases/tag/v0.2.12
 [0.2.11]: https://github.com/limnifs/limnifs/releases/tag/v0.2.11
 [0.2.10]: https://github.com/limnifs/limnifs/releases/tag/v0.2.10
 [0.2.9]: https://github.com/limnifs/limnifs/releases/tag/v0.2.9
