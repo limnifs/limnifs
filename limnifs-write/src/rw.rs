@@ -94,6 +94,14 @@ impl RwImage {
     /// Returns [`WriteError`] if the manifest cannot be parsed or
     /// the slab files cannot be opened.
     pub fn open(path: &Path, config: WriteConfig) -> Result<Self, WriteError> {
+        // Crash recovery: if a previous commit was interrupted
+        // mid-swap, `<path>.new/` may still exist. The previous
+        // manifest at `path` is intact (atomic swap was incomplete);
+        // the `.new/` directory is garbage. Clean it up before
+        // proceeding so the next commit's `write_artifact` doesn't
+        // trip over a stale directory.
+        cleanup_stale_swap_dir(path);
+
         let manifest_bytes = std::fs::read(path).map_err(WriteError::Io)?;
 
         let mut cursor = ManifestCursor::new(&manifest_bytes);
@@ -535,10 +543,77 @@ fn core_to_io(e: limnifs_core::CoreError) -> WriteError {
     WriteError::Io(std::io::Error::other(format!("{e}")))
 }
 
+/// Detect and remove a stale `<path>.new/` directory left behind by
+/// an interrupted commit. The previous manifest at `path` is intact
+/// (atomic swap is incomplete by construction — `write_artifact`
+/// renames the manifest last); the `.new/` is garbage.
+///
+/// Logs nothing on success; silently ignores missing directory. If
+/// the directory exists but cannot be removed (e.g. permissions),
+/// the next commit's `write_artifact` will fail with a clearer
+/// error when it tries to recreate the directory.
+fn cleanup_stale_swap_dir(path: &Path) {
+    let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
+        return;
+    };
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let stale = parent.join(format!("{name}.new"));
+    if stale.is_dir() {
+        let _ = std::fs::remove_dir_all(&stale);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::profile;
+
+    #[test]
+    fn open_cleans_up_stale_new_directory() {
+        // Simulate a crashed previous commit: image exists, plus a
+        // stale <image>.new/ directory. RwImage::open must remove
+        // the stale directory so the next commit doesn't trip.
+        let workdir = std::env::temp_dir().join(format!(
+            "limnifs-crash-recovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0),
+        ));
+        let _ = std::fs::remove_dir_all(&workdir);
+        std::fs::create_dir_all(&workdir).expect("mkdir");
+
+        // Write a minimal valid image.
+        std::fs::write(workdir.join("data.txt"), b"alpha").expect("src");
+        let manifest = workdir.join("image.lim");
+        let artifact =
+            crate::write_directory_with_config(&workdir, &profile::balanced()).expect("write");
+        std::fs::write(&manifest, &artifact.bytes).expect("manifest");
+        for slab in &artifact.slabs {
+            let name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+            std::fs::write(workdir.join(name), &slab.bytes).expect("slab");
+        }
+        if let Some(sidecar) = &artifact.metadata_sidecar {
+            let name = sidecar
+                .locator
+                .strip_prefix("file:")
+                .unwrap_or(&sidecar.locator);
+            std::fs::write(workdir.join(name), &sidecar.bytes).expect("sidecar");
+        }
+
+        // Simulate a crash: create <image>.new/ with garbage.
+        let stale = workdir.join("image.lim.new");
+        std::fs::create_dir_all(&stale).expect("mkdir stale");
+        std::fs::write(stale.join("partial.lim"), b"garbage from crashed commit").expect("garbage");
+        assert!(stale.is_dir(), "stale dir exists before open");
+
+        // Open should clean it up.
+        let _image = RwImage::open(&manifest, profile::balanced()).expect("open");
+        assert!(!stale.exists(), "stale dir removed by open");
+
+        let _ = std::fs::remove_dir_all(&workdir);
+    }
 
     #[test]
     fn rw_image_create_and_add() {
