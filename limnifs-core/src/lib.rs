@@ -66,6 +66,7 @@ pub mod inode;
 pub mod ipfs_locator;
 #[cfg(feature = "key-wrap")]
 pub mod key_wrap;
+pub mod live_tree;
 pub mod locator;
 pub mod merkle;
 pub mod metadata;

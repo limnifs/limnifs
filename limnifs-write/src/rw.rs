@@ -379,81 +379,14 @@ impl RwImage {
     }
 
     /// Recursively walk the live tree and write each entry under
-    /// `staging`. Inline files are written directly; slice-backed
-    /// files are reconstructed from the slab store.
+    /// `staging`. Delegates to the shared
+    /// [`limnifs_core::live_tree::walk_live_tree`] with a
+    /// [`FilesystemSink`].
     fn write_live_tree(&self, state: &OpenState, staging: &Path) -> Result<(), WriteError> {
-        let root = state
-            .blob
-            .inode_by_number(state.root_inode)
-            .ok_or_else(|| WriteError::Io(std::io::Error::other("root inode missing")))?;
-        let mut visited = Vec::new();
-        self.write_live_dir(
-            &state.blob,
-            root,
-            staging,
-            &mut visited,
-            state.slab_store.as_ref(),
-        )
-    }
-
-    fn write_live_dir(
-        &self,
-        blob: &MetadataBlob,
-        dir_inode: &limnifs_core::Inode,
-        dir_path: &Path,
-        visited: &mut Vec<u64>,
-        slab_store: Option<&SlabStore>,
-    ) -> Result<(), WriteError> {
-        let hash = match &dir_inode.content_handle {
-            ContentHandle::Directory(h) => *h,
-            _ => return Ok(()),
-        };
-        if visited.contains(&dir_inode.number) {
-            return Ok(());
-        }
-        visited.push(dir_inode.number);
-        let node = blob.dir_node_by_hash(&hash).ok_or_else(|| {
-            WriteError::Io(std::io::Error::other("directory node not found in blob"))
-        })?;
-        for entry in &node.entries {
-            let entry_path = dir_path.join(&entry.name);
-            let child = blob
-                .inode_by_number(entry.inode_number)
-                .ok_or_else(|| WriteError::Io(std::io::Error::other("child inode missing")))?;
-            match &child.content_handle {
-                ContentHandle::Directory(_) => {
-                    std::fs::create_dir_all(&entry_path).map_err(WriteError::Io)?;
-                    self.write_live_dir(blob, child, &entry_path, visited, slab_store)?;
-                }
-                ContentHandle::InlineData(data) => {
-                    std::fs::write(&entry_path, data).map_err(WriteError::Io)?;
-                }
-                ContentHandle::SliceMap(slices) => {
-                    let store = slab_store.ok_or_else(|| {
-                        WriteError::Io(std::io::Error::other(
-                            "live tree: slice-backed file but no slab store",
-                        ))
-                    })?;
-                    let mut data = Vec::new();
-                    for slice in slices {
-                        let plaintext = store
-                            .plaintext_for(slice.drop_id.as_bytes())
-                            .ok_or_else(|| {
-                                WriteError::Io(std::io::Error::other("drop not in any slab"))
-                            })?
-                            .map_err(core_to_io)?;
-                        data.extend_from_slice(&plaintext);
-                    }
-                    std::fs::write(&entry_path, &data).map_err(WriteError::Io)?;
-                }
-                _ => {
-                    // Symlinks / devices / pipes are skipped; the
-                    // turnover caller would need a richer writer
-                    // for them. Documented limitation.
-                }
-            }
-        }
-        Ok(())
+        let mut sink =
+            limnifs_core::live_tree::FilesystemSink::new(staging, state.slab_store.as_ref());
+        limnifs_core::live_tree::walk_live_tree(&state.blob, state.root_inode, &mut sink)
+            .map_err(core_to_io)
     }
 
     /// Persist the produced manifest + slabs to disk, replacing the

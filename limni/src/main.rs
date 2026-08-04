@@ -1455,42 +1455,22 @@ fn extract_file(
     inode: &limnifs_core::Inode,
     slab_store: Option<&limnifs_core::slab_store::SlabStore>,
 ) -> Result<(), CliError> {
-    match &inode.content_handle {
-        ContentHandle::InlineData(data) => {
-            std::fs::write(path, data).map_err(|source| CliError::ReadFailed {
-                path: path.to_path_buf(),
-                source,
-            })?;
+    // Delegates to limnifs_core::live_tree::file_plaintext, which
+    // is the canonical place that honours SliceRef::drop_byte_start
+    // and drop_byte_len. The previous inline copy ignored those
+    // fields, which worked only because the writer today always
+    // emits slices spanning the whole drop.
+    let data = limnifs_core::live_tree::file_plaintext(inode, slab_store).map_err(|source| {
+        CliError::FormatFailed {
+            path: path.to_path_buf(),
+            source,
         }
-        ContentHandle::SliceMap(slices) => {
-            let store = slab_store.ok_or_else(|| CliError::FormatFailed {
-                path: path.to_path_buf(),
-                source: CoreError::Corrupt {
-                    reason: "extract: file references drops but slab store is missing".into(),
-                },
-            })?;
-            let mut data = Vec::new();
-            for slice in slices {
-                let plaintext = store
-                    .plaintext_for(slice.drop_id.as_bytes())
-                    .ok_or_else(|| CliError::FormatFailed {
-                        path: path.to_path_buf(),
-                        source: CoreError::Corrupt {
-                            reason: "slab: drop not found in any slab".into(),
-                        },
-                    })?
-                    .map_err(|e| CliError::FormatFailed {
-                        path: path.to_path_buf(),
-                        source: e,
-                    })?;
-                data.extend_from_slice(&plaintext);
-            }
-            std::fs::write(path, &data).map_err(|source| CliError::ReadFailed {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        }
-        _ => {}
+    })?;
+    if !data.is_empty() || inode.is_regular() {
+        std::fs::write(path, &data).map_err(|source| CliError::ReadFailed {
+            path: path.to_path_buf(),
+            source,
+        })?;
     }
     Ok(())
 }
