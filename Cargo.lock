@@ -561,7 +561,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 
 [[package]]
 name = "limni"
-version = "0.2.12"
+version = "0.2.14"
 dependencies = [
  "clap",
  "fuser",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "limnifs-bench"
-version = "0.2.12"
+version = "0.2.14"
 dependencies = [
  "clap",
  "libc",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "limnifs-conformance"
-version = "0.2.12"
+version = "0.2.14"
 dependencies = [
  "limnifs-core",
  "limnifs-format",
@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "limnifs-core"
-version = "0.2.12"
+version = "0.2.14"
 dependencies = [
  "aes-gcm",
  "blake3",
@@ -633,11 +633,11 @@ dependencies = [
 
 [[package]]
 name = "limnifs-format"
-version = "0.2.12"
+version = "0.2.14"
 
 [[package]]
 name = "limnifs-ocb3"
-version = "0.2.12"
+version = "0.2.14"
 dependencies = [
  "aes",
  "cipher",
@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "limnifs-write"
-version = "0.2.12"
+version = "0.2.14"
 dependencies = [
  "crossbeam-channel",
  "limnifs-core",

@@ -5,6 +5,27 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.14] — 2026-08-04
+
+### Added
+
+- **Cross-image sparse index (opt-in)** — new
+  `limnifs_write::sparse_index` module behind the `sparse-index`
+  feature flag. Bloom filter of DropIds with configurable FPP
+  (default 1%): `SparseIndexWriter` builds, `SparseIndexReader`
+  queries `probably_contains(drop_id)`. File format: 20-byte
+  header (num_bits, k, entry_count, fpp) + bitmap. Standalone
+  today (no writer integration); a follow-up wires it into the
+  writer so re-compression can skip drops already present in a
+  referenced image.
+  - SplitMix64 double-hashing avoids pathological inputs.
+  - 4 tests: insert/find, empty reader, FPP within 5% bound
+    (verified at 1% target), file round-trip.
+
+### Test count
+
+574 → **578** when `--features sparse-index` enabled (+4 tests).
+
 ## [0.2.13] — 2026-08-04
 
 ### Added
@@ -350,6 +371,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.14]: https://github.com/limnifs/limnifs/releases/tag/v0.2.14
 [0.2.13]: https://github.com/limnifs/limnifs/releases/tag/v0.2.13
 [0.2.12]: https://github.com/limnifs/limnifs/releases/tag/v0.2.12
 [0.2.11]: https://github.com/limnifs/limnifs/releases/tag/v0.2.11

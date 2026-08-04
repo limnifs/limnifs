@@ -28,7 +28,11 @@ pub mod delta_builder;
 pub mod dictionary;
 pub mod file_categorizer;
 pub mod flatten;
+#[cfg(feature = "pipeline-parallelism")]
+pub mod pipeline;
 pub mod rw;
+#[cfg(feature = "sparse-index")]
+pub mod sparse_index;
 pub mod turnover;
 
 pub use config::{

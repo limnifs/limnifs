@@ -25,6 +25,11 @@ default = []
 # the simple `par_iter().map(process_file)` shape is faster on
 # warm cache. Enable for cold-cache or network-attached workloads.
 pipeline-parallelism = ["dep:crossbeam-channel"]
+# Opt-in: cross-image Bloom-filter dedup index. Standalone today
+# (no writer integration); emit `<image>.sparse` alongside
+# `<image>.lim` so consumers can ask "is this drop already in
+# image X?" without scanning the slabs.
+sparse-index = []
 
 [lints]
 workspace = true
