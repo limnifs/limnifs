@@ -141,6 +141,7 @@ pub fn max_ratio() -> WriteConfig {
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
         turnover_threshold: 0,
+        skip_chunking: false,
     }
 }
 
@@ -194,6 +195,7 @@ pub fn max_speed() -> WriteConfig {
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
         turnover_threshold: 0,
+        skip_chunking: false,
     }
 }
 
@@ -246,6 +248,7 @@ pub fn balanced() -> WriteConfig {
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
         turnover_threshold: 0,
+        skip_chunking: false,
     }
 }
 
@@ -295,6 +298,7 @@ pub fn competitive() -> WriteConfig {
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
         turnover_threshold: 0,
+        skip_chunking: false,
     }
 }
 
@@ -355,6 +359,7 @@ pub fn max_read() -> WriteConfig {
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
         turnover_threshold: 0,
+        skip_chunking: false,
     }
 }
 
@@ -403,6 +408,7 @@ pub fn max_write() -> WriteConfig {
         mode: crate::config::ImageMode::ReadOnly,
         write_codec: "lz4".into(),
         turnover_threshold: 0,
+        skip_chunking: true,
     }
 }
 
@@ -440,6 +446,7 @@ pub fn max_write_rw() -> WriteConfig {
         mode: crate::config::ImageMode::ReadWrite(crate::config::RWMode::CopyOnWrite),
         write_codec: "lz4".into(),
         turnover_threshold: 500,
+        skip_chunking: true,
         encryption: EncryptionConfig {
             aead: "chacha20-poly1305".into(),
             key_wrap: "x25519-hkdf".into(),
@@ -493,6 +500,7 @@ pub fn max_read_rw() -> WriteConfig {
         mode: crate::config::ImageMode::ReadWrite(crate::config::RWMode::UpdateInPlace),
         write_codec: "zstd".into(),
         turnover_threshold: 1000,
+        skip_chunking: false,
         encryption: EncryptionConfig {
             aead: "chacha20-poly1305".into(),
             key_wrap: "x25519-hkdf".into(),
@@ -545,6 +553,7 @@ pub fn balanced_rw() -> WriteConfig {
         mode: crate::config::ImageMode::ReadWrite(crate::config::RWMode::UpdateInPlace),
         write_codec: "zstd".into(),
         turnover_threshold: 1000,
+        skip_chunking: false,
         encryption: EncryptionConfig {
             aead: "chacha20-poly1305".into(),
             key_wrap: "x25519-hkdf".into(),

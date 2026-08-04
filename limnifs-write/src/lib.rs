@@ -227,6 +227,7 @@ pub fn write_directory_with_config(
         let binary_codec = config.binary_codec_id().unwrap_or(0x01);
         let tunables = config.to_core_tunables();
         let use_categorizers = !config.categorizers.is_empty();
+        let skip_chunking = config.skip_chunking;
         let results: Vec<ChunkedFileResult> = pending
             .par_iter()
             .map(|pf| {
@@ -238,6 +239,7 @@ pub fn write_directory_with_config(
                     binary_codec,
                     &tunables,
                     use_categorizers,
+                    skip_chunking,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -344,9 +346,38 @@ fn process_file(
     binary_codec: u8,
     tunables: &limnifs_core::codec::CodecTunables,
     use_categorizers: bool,
+    skip_chunking: bool,
 ) -> Result<ChunkedFileResult, WriteError> {
     let data = std::fs::read(&pf.path)?;
     let file_len = data.len();
+
+    // Skip FastCDC chunking entirely; compress the whole file as
+    // one drop. Trades dedup granularity for create speed. Used by
+    // the max-write profile where speed >> ratio. The per-file LZ4
+    // compress at ~1 GB/s is faster than FastCDC hashing overhead
+    // for all but the largest multi-GB files (where rayon parallelism
+    // across chunks would help).
+    if skip_chunking && file_len > INLINE_THRESHOLD {
+        let drop_id = hash_section(&data);
+        let class = classifier.classify(&data);
+        let preferred_codec = match class {
+            classifier::Class::Binary => binary_codec,
+            _ => text_codec,
+        };
+        let (codec_id, compressed) =
+            match limnifs_core::codec::compress_with_tunables(preferred_codec, &data, tunables) {
+                Ok(c) if c.len() < data.len() => (preferred_codec, c),
+                _ => (limnifs_core::codec::CODEC_STORE, data.clone()),
+            };
+        return Ok(ChunkedFileResult {
+            drops: vec![(drop_id, data, compressed, codec_id)],
+            slices: vec![PendingSlice {
+                drop_id,
+                file_byte_start: 0,
+                file_byte_end: file_len as u64,
+            }],
+        });
+    }
 
     if use_categorizers {
         if let Some(cat) = file_categorizer::default_registry().categorize(&pf.path, &data) {
