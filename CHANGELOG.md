@@ -5,6 +5,38 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.15] — 2026-08-04
+
+### Added
+
+- **IoUringSlabSource stub (Linux-only)** —
+  `limnifs_core::iouring_slab_source` module behind
+  `cfg(all(target_os = "linux", feature = "io-uring"))`. Compiles
+  only on Linux with the `io-uring` feature flag. Body is `todo!()`
+  — the actual io_uring crate integration requires Linux CI to
+  validate. The module exists so downstream code can reference
+  the type behind `#[cfg(...)]` guards.
+  - Unblocks: Linux CI can now implement `plaintext_for` via
+    batched `io_uring` submissions without touching the trait.
+  - Closes `TODO.impl/03-core-reader/03-async-slab-source.md`
+    (trait + sync impl + Linux stub all land).
+- **FLAC LPC corpus fetcher + differential harness** —
+  `tests/audio_corpus/fetch_flac_corpus.sh` downloads public-domain
+  audio from MusOpen, LibriSpeech, FMA, and Internet Archive. Also
+  generates synthetic swept-sine / white-noise / pink-noise WAV
+  fixtures locally. `limnifs-conformance/tests/flac_corpus_differential.rs`
+  is a `#[ignore]`d integration test that compares omnizip-flac vs
+  libFLAC CLI on the corpus.
+  - Run with: `./tests/audio_corpus/fetch_flac_corpus.sh /tmp/corpus && \
+    cargo test -p limnifs-conformance --test flac_corpus_differential -- --ignored`.
+  - Unblocks: omnizip TODO 105 (FLAC corpus) — the corpus work was
+    LimniFS's responsibility per omnizip-rs's final report.
+
+### Test count
+
+574 (unchanged — io_uring stub doesn't compile on macOS; FLAC test
+is `#[ignore]`d).
+
 ## [0.2.14] — 2026-08-04
 
 ### Added
@@ -371,6 +403,7 @@ correctness, codec framework maturation, DRY refactors, omnizip
 Initial public release. Wire format pivot: custom everywhere,
 Merkle B-tree, `.lim` extension, multi-file spec.
 
+[0.2.15]: https://github.com/limnifs/limnifs/releases/tag/v0.2.15
 [0.2.14]: https://github.com/limnifs/limnifs/releases/tag/v0.2.14
 [0.2.13]: https://github.com/limnifs/limnifs/releases/tag/v0.2.13
 [0.2.12]: https://github.com/limnifs/limnifs/releases/tag/v0.2.12
