@@ -1,15 +1,14 @@
-//! Brotli codec (0x04): frame format via the `brotli` crate (pure Rust,
-//! by Daniel Reiter Horn — the format's original author).
+//! Brotli codec (0x04): frame format via `omnizip-brotli`.
+//!
+//! `omnizip-brotli` wraps the upstream `brotli` crate (Daniel Reiter
+//! Horn — the format's original author). We route through the omnizip
+//! API rather than calling `brotli` directly so the codec stack stays
+//! first-party (omnizip) end-to-end.
 //!
 //! The codec defaults to **quality 5**, Brotli's standard fast mode.
 //! This is the right tradeoff for `LimniFS`'s per-chunk pipeline: fast
 //! enough to keep create throughput competitive with `SquashFS`'s zstd
-//! L1, while beating ZSTD L1 (ruzstd-bounded) on text/source ratio.
-//! The future `--codec-map` flag (roadmap item 06) will allow callers
-//! to opt into q11 for archival workloads where create speed doesn't
-//! matter.
-
-use std::io::Cursor;
+//! L1, while beating ZSTD L1 on text/source ratio.
 
 use crate::codec::{Codec, CodecTunables, PerCodecTunables};
 use crate::error::CoreError;
@@ -35,7 +34,7 @@ impl Default for BrotliTunables {
     }
 }
 
-/// Brotli codec. Encode at quality 11; decode at any quality.
+/// Brotli codec. Encode at quality 5 by default; decode at any quality.
 pub struct BrotliCodec;
 
 impl Codec for BrotliCodec {
@@ -55,12 +54,9 @@ impl Codec for BrotliCodec {
         let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
             reason: format!("decompress: expected_len {expected_len} exceeds usize"),
         })?;
-        let mut result = Vec::with_capacity(expected_us);
-        brotli::BrotliDecompress(&mut Cursor::new(compressed), &mut result).map_err(|e| {
-            CoreError::Corrupt {
-                reason: format!("brotli decompress failed: {e}"),
-            }
-        })?;
+        let codec = omnizip_brotli::BrotliCodec;
+        let result =
+            omnizip_codecs::Codec::decompress(&codec, compressed, expected_len).map_err(brotli_err)?;
         if result.len() != expected_us {
             return Err(CoreError::Corrupt {
                 reason: format!(
@@ -98,55 +94,35 @@ impl PerCodecTunables for BrotliCodec {
     }
 }
 
+fn brotli_err(e: omnizip_codecs::OmnizipError) -> CoreError {
+    CoreError::Corrupt {
+        reason: format!("brotli: {e}"),
+    }
+}
+
 /// Compress `plaintext` with Brotli at the given quality (0–11).
 ///
 /// # Errors
 ///
 /// Returns [`CoreError::Corrupt`] if the Brotli encoder fails.
 pub(crate) fn compress(plaintext: &[u8], quality: i32) -> Result<Vec<u8>, CoreError> {
-    let params = brotli::enc::backward_references::BrotliEncoderParams {
-        quality,
-        ..Default::default()
-    };
-    let mut result = Vec::new();
-    brotli::BrotliCompress(&mut Cursor::new(plaintext), &mut result, &params).map_err(|e| {
-        CoreError::Corrupt {
-            reason: format!("brotli compress (quality {quality}) failed: {e}"),
-        }
-    })?;
-    Ok(result)
+    let codec = omnizip_brotli::BrotliCodec;
+    let q_u8 = u8::try_from(quality.clamp(0, 11)).unwrap_or(5);
+    let level = omnizip_codecs::CompressionLevel::new(q_u8);
+    omnizip_codecs::Codec::compress(&codec, plaintext, level).map_err(brotli_err)
 }
 
-/// Decompress a Brotli stream. If `expected_len` is `u32::MAX`, skip
-/// the length check (used by composite codecs that don't know the
-/// intermediate length ahead of time).
+/// Decompress a Brotli stream. If `expected_len` is `u32::MAX`, the
+/// underlying omnizip-brotli path performs its own length check.
 ///
 /// # Errors
 ///
 /// Returns [`CoreError::Corrupt`] if decompression fails or the
-/// result length does not match `expected_len` (when checked).
+/// result length does not match `expected_len`.
 pub(crate) fn decompress_at_quality(
     compressed: &[u8],
     expected_len: u32,
 ) -> Result<Vec<u8>, CoreError> {
-    let mut result = Vec::new();
-    brotli::BrotliDecompress(&mut Cursor::new(compressed), &mut result).map_err(|e| {
-        CoreError::Corrupt {
-            reason: format!("brotli decompress failed: {e}"),
-        }
-    })?;
-    if expected_len != u32::MAX {
-        let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
-            reason: format!("brotli: expected_len {expected_len} exceeds usize"),
-        })?;
-        if result.len() != expected_us {
-            return Err(CoreError::Corrupt {
-                reason: format!(
-                    "brotli decompress: result length {} does not match plaintext_len {expected_us}",
-                    result.len()
-                ),
-            });
-        }
-    }
-    Ok(result)
+    let codec = omnizip_brotli::BrotliCodec;
+    omnizip_codecs::Codec::decompress(&codec, compressed, expected_len).map_err(brotli_err)
 }

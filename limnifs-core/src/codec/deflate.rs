@@ -1,8 +1,13 @@
-//! DEFLATE codec (0x05): RFC 1951 via `miniz_oxide` (pure Rust).
+//! DEFLATE codec (0x05): RFC 1951 via `omnizip-deflate` (pure Rust).
 //!
-//! Encodes raw DEFLATE streams (no zlib/gzip container) at levels 0–9.
-//! Universal compatibility: gzip, zlib, PNG, HTTP content-encoding.
-//! Lower ratio than ZSTD/Brotli/LZMA but universally interoperable.
+//! Encodes zlib-framed DEFLATE streams (RFC 1950 wrapper around RFC 1951
+//! body) at levels 0–9. Universal compatibility: gzip, zlib, PNG, HTTP
+//! content-encoding. Lower ratio than ZSTD/Brotli/LZMA but universally
+//! interoperable.
+//!
+//! `omnizip-deflate` wraps `miniz_oxide` internally. We go through the
+//! omnizip API rather than calling `miniz_oxide` directly so the codec
+//! stack stays first-party (omnizip) end-to-end.
 
 use crate::codec::Codec;
 use crate::error::CoreError;
@@ -11,7 +16,7 @@ use crate::error::CoreError;
 /// Level 6 is `miniz_oxide`'s default and `zlib`'s default.
 pub(crate) const DEFAULT_LEVEL: u8 = 6;
 
-/// DEFLATE codec. Raw RFC 1951 streams, no container.
+/// DEFLATE codec. Zlib-framed RFC 1951 streams.
 pub struct DeflateCodec;
 
 impl Codec for DeflateCodec {
@@ -31,11 +36,9 @@ impl Codec for DeflateCodec {
         let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
             reason: format!("decompress: expected_len {expected_len} exceeds usize"),
         })?;
-        let result = miniz_oxide::inflate::decompress_to_vec_zlib(compressed).map_err(|e| {
-            CoreError::Corrupt {
-                reason: format!("deflate decompress failed: {e:?}"),
-            }
-        })?;
+        let codec = omnizip_deflate::DeflateCodec::new();
+        let result =
+            omnizip_codecs::Codec::decompress(&codec, compressed, expected_len).map_err(deflate_err)?;
         if result.len() != expected_us {
             return Err(CoreError::Corrupt {
                 reason: format!(
@@ -48,6 +51,12 @@ impl Codec for DeflateCodec {
     }
 }
 
+fn deflate_err(e: omnizip_codecs::OmnizipError) -> CoreError {
+    CoreError::Corrupt {
+        reason: format!("deflate: {e}"),
+    }
+}
+
 /// Compress `plaintext` with DEFLATE at the given level (0–9).
 ///
 /// The output is a zlib-framed DEFLATE stream (RFC 1950 2-byte header +
@@ -56,19 +65,20 @@ impl Codec for DeflateCodec {
 ///
 /// # Errors
 ///
-/// Returns [`CoreError::Corrupt`] if the encoder fails (rare; `miniz_oxide`
-/// is infallible in practice).
+/// Returns [`CoreError::Corrupt`] if the encoder fails (rare; the
+/// underlying `miniz_oxide` encoder is infallible in practice).
 #[allow(clippy::unnecessary_wraps)]
 pub(crate) fn compress(plaintext: &[u8], level: u8) -> Result<Vec<u8>, CoreError> {
-    let miniz_level = level_to_miniz(level);
-    Ok(miniz_oxide::deflate::compress_to_vec_zlib(
-        plaintext,
-        miniz_level,
-    ))
+    let codec = omnizip_deflate::DeflateCodec::new();
+    let omnizip_level = omnizip_codecs::CompressionLevel::new(level_to_omnizip(level));
+    omnizip_codecs::Codec::compress(&codec, plaintext, omnizip_level).map_err(deflate_err)
 }
 
-/// Map `LimniFS`'s 0–9 level to `miniz_oxide`'s compression level enum.
-fn level_to_miniz(level: u8) -> u8 {
+/// Map LimniFS's 0–9 level to omnizip-deflate's compression level enum.
+/// omnizip-deflate delegates to miniz_oxide, which accepts 1–9 (with 0
+/// treated as no-compression stored blocks in some versions; we clamp
+/// to 1 to be safe).
+fn level_to_omnizip(level: u8) -> u8 {
     match level {
         0 => 1,
         1..=9 => level,

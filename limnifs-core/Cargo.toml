@@ -12,34 +12,31 @@ limnifs-format = { path = "../limnifs-format", version = "0.2.0" }
 limnifs-ocb3 = { path = "../limnifs-ocb3", version = "0.2.0" }
 aes-gcm.workspace = true
 blake3.workspace = true
-brotli.workspace = true
 chacha20poly1305.workspace = true
 memmap2.workspace = true
 ed25519-dalek = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
-lz4_flex.workspace = true
 libc = "0.2"
-miniz_oxide.workspace = true
-omnizip-blosc = "0.14.10"
-omnizip-brotli = "0.14.10"
-omnizip-bzip2 = "0.14.10"
-omnizip-codecs = "0.14.10"
-omnizip-deflate = "0.14.10"
-omnizip-deflate64 = "0.14.10"
-omnizip-filters = "0.14.10"
-omnizip-flac = "0.14.10"
-omnizip-fsst = "0.14.10"
-omnizip-glza = "0.14.10"
-omnizip-lz4 = "0.14.10"
-omnizip-lzma = "0.14.10"
-omnizip-ppmd = "0.14.10"
-omnizip-ricepp = "0.14.10"
-omnizip-snappy = "0.14.10"
-omnizip-zpaq = "0.14.10"
-omnizip-zstd = "0.14.10"
+omnizip-blosc = "0.14.11"
+omnizip-brotli = "0.14.11"
+omnizip-bzip2 = "0.14.11"
+omnizip-codecs = "0.14.11"
+omnizip-deflate = "0.14.11"
+omnizip-deflate64 = "0.14.11"
+omnizip-filters = "0.14.11"
+omnizip-flac = "0.14.11"
+omnizip-fsst = "0.14.11"
+omnizip-glza = "0.14.11"
+omnizip-libdeflate = "0.14.6"
+omnizip-lz4 = "0.14.11"
+omnizip-lzma = "0.14.11"
+omnizip-ppmd = "0.14.11"
+omnizip-ricepp = "0.14.11"
+omnizip-snappy = "0.14.11"
+omnizip-zpaq = "0.14.11"
+omnizip-zstd = "0.14.11"
 rand_core = { workspace = true, optional = true }
 rayon.workspace = true
-ruzstd.workspace = true
 sha2 = { workspace = true, optional = true }
 x25519-dalek = { workspace = true, optional = true }
 
