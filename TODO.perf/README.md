@@ -18,8 +18,8 @@ omnizip-side items are in separate files (prefixed `omnizip-`).
 | 03 | [Multi-profile benchmark](03-multi-profile-benchmark.md) | P0 | 3h | Benchmarking | Done (v0.2.20) |
 | 04 | [Per-profile inline_threshold](04-inline-threshold-tuning.md) | P1 | 1h | Ratio (tiny-files) | Tested, reverted (no gain) |
 | 05 | [posix_fadvise prefetch on slab files](05-slab-prefetch.md) | P1 | 2h | Read speed | Done (v0.2.19, madvise on macOS) |
-| 06 | [FastCDC SIMD gear hash](06-fastcdc-simd.md) | P1 | 3d | Create speed | Pending |
-| 07 | [Parallel slab assembly](07-parallel-slab-assembly.md) | P2 | 2d | Create speed | Pending |
+| 06 | [FastCDC SIMD gear hash](06-fastcdc-simd.md) | P1 | 3d | Create speed | Done (v0.2.24, 4× unroll; full SIMD requires algo change) |
+| 07 | [Parallel slab assembly](07-parallel-slab-assembly.md) | P2 | 2d | Create speed | Done (v0.2.24) |
 | 08 | [Categorizer early-exit optimisation](08-categorizer-early-exit.md) | P1 | 1h | Create speed | Done (v0.2.18) |
 | 14 | [Tournament short-circuit](14-tournament-short-circuit.md) | P1 | 3h | Create speed | Done (v0.2.22) |
 

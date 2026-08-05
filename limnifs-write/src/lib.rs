@@ -1306,26 +1306,42 @@ fn pack_slabs(drops: &[PendingDrop]) -> Vec<SlabArtifact> {
     }
 
     let max_content = MAX_SLAB_TOTAL_BYTES.saturating_sub(SLAB_HEADER_LEN);
-    let mut slabs: Vec<SlabArtifact> = Vec::new();
+
+    // Phase 1 (sequential): scan drops and partition into slab groups.
+    // Each slab group is the list of drops that will share a slab window.
+    // The grouping depends on per-drop compressed size + record overhead
+    // — this is a sequential scan with a running size budget.
+    let mut slab_groups: Vec<Vec<&PendingDrop>> = Vec::new();
     let mut current: Vec<&PendingDrop> = Vec::new();
     let mut current_size: usize = 0;
 
     for drop in drops {
         let footprint = drop.slab_footprint();
         if !current.is_empty() && current_size + footprint > max_content {
-            let ordinal = u64::try_from(slabs.len()).expect("slab count fits u64");
-            slabs.push(encode_slab(ordinal, &current));
-            current.clear();
+            slab_groups.push(std::mem::take(&mut current));
             current_size = 0;
         }
         current.push(drop);
         current_size += footprint;
     }
     if !current.is_empty() {
-        let ordinal = u64::try_from(slabs.len()).expect("slab count fits u64");
-        slabs.push(encode_slab(ordinal, &current));
+        slab_groups.push(current);
     }
-    slabs
+
+    // Phase 2 (parallel): encode each slab independently. Slab encoding
+    // has no cross-slab state — each slab's `offset_in_window` starts
+    // at 0, its hash is over its own content, its ordinal is its index
+    // in the slab_groups vector. Rayon parallelises across slabs;
+    // large images with many slabs get N-core speedup on this phase.
+    use rayon::prelude::*;
+    slab_groups
+        .par_iter()
+        .enumerate()
+        .map(|(ordinal, group)| {
+            let ordinal_u64 = u64::try_from(ordinal).expect("slab count fits u64");
+            encode_slab(ordinal_u64, group)
+        })
+        .collect()
 }
 
 /// Encode a single slab from a non-empty slice of drops. Per-slab
