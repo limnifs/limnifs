@@ -5,6 +5,40 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.31] — 2026-08-05
+
+### Changed
+
+- **omnizip 0.14.16** — bumped all 17 omnizip-* crates from 0.14.14 to
+  0.14.16. Three upstream releases absorbed:
+
+  - **0.14.15: Snappy from-spec encoder + LZMA match-finder reuse**.
+    `CODEC_SNAPPY` (0x06) was decode-only in earlier LimniFS releases;
+    the existing tests asserted round-trip but the encoder was a stub
+    that produced near-incompressible output. Now the from-spec port
+    produces real Snappy streams (verified by the existing
+    `snappy_compresses_repetitive_data` test which asserts compressed
+    output is smaller than input on highly repetitive data).
+  - **0.14.16: Snappy snap-compat (full wire-format compatibility)**.
+    Snappy output is now byte-compatible with Google's `snappy` CLI
+    and the upstream C++ reference.
+  - **LZMA match-finder reuse** — `LzmaCompressor` (which our
+    `XzCodec` already uses via thread-local since v0.2.26) now
+    amortizes match-finder state across calls. Real encoder-state
+    reuse lands automatically; no LimniFS-side change required.
+
+### Effect on profiles
+
+`CODEC_SNAPPY` is registered but not in any default profile's
+tournament — its primary use case is round-trip with externally
+produced Snappy streams (Parquet, ORC, Avro, SQLite WAL). Users who
+want Snappy output can add it to a custom profile's tournament list.
+
+The LZMA match-finder reuse benefits the `max-ratio` profile (where
+XZ/LZMA is in the tournament). Single-iteration benchmark shows
+run-to-run noise dominates the measurement; medians over 3+ runs
+recommended for any regression check.
+
 ## [0.2.30] — 2026-08-05
 
 ### Added
