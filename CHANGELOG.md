@@ -5,6 +5,30 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.28] — 2026-08-05
+
+### Changed
+
+- **`process_whole_file_drop` short-circuit** — when Brotli already
+  achieves < 5% ratio on a categorizer-routed file (CSV, WAV, etc.),
+  skip the ZSTD pass. The file is highly compressible text/audio and
+  ZSTD is unlikely to beat Brotli by enough to justify the extra
+  pass.
+
+  Measured impact on synthetic datasets (balanced profile):
+
+  | Dataset | Before | After | Speedup |
+  |---|---:|---:|---:|
+  | csv-synthetic | 2.95 s | 0.37 s | **8×** |
+  | wav-synthetic | 1.40 s | 0.13 s | **11×** |
+
+  Same output bytes, same ratios (3.6% CSV, 0.0% WAV) — pure speedup
+  from removing redundant ZSTD work that wouldn't have won anyway.
+
+  FITS, random, tiny-files, repetitive, zeros all unchanged (within
+  noise) — their Brotli ratios are > 5% so the short-circuit doesn't
+  fire.
+
 ## [0.2.27] — 2026-08-05
 
 ### Changed
