@@ -5,6 +5,30 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.34] — 2026-08-05
+
+### Changed
+
+- **omnizip 0.14.19** — bumped all 17 omnizip-* crates from
+  0.14.17/0.14.18 to 0.14.19. Headline: **omnizip-lz4 from-spec
+  encoder bug fixed** (omnizip-rs PR #115 — the LimniFS-discovered
+  extension-byte bug at the LZ4 code-nibble-15 boundary).
+
+  The Cargo.lock pin to omnizip-lz4 0.14.17 (workaround from v0.2.33)
+  is **removed**. The from-spec encoder is now the only LZ4
+  implementation in the dep tree.
+
+### Removed
+
+- **lz4_flex transitive dependency eliminated.** omnizip-blosc and
+  omnizip-filters previously pulled lz4_flex for their LZ4 paths;
+  both now use the in-house omnizip-lz4 from-spec encoder. LimniFS's
+  dep tree is one step closer to fully first-party.
+
+  Only one external codec dep remains anywhere in the omnizip
+  stack: `brotli` (used by omnizip-brotli, awaiting Phase C of the
+  full in-house port — omnizip TODO 151).
+
 ## [0.2.33] — 2026-08-05
 
 ### Changed
