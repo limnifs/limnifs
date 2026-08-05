@@ -45,36 +45,7 @@ impl Codec for FsstBrotliCodec {
     }
 
     fn compress(&self, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
-        // Skip FSST for tiny inputs — dictionary overhead exceeds gain.
-        if plaintext.len() < 1024 {
-            // Fall back to plain Brotli with a "no FSST" length prefix.
-            let brotli_compressed = brotli::compress(plaintext, DEFAULT_QUALITY)?;
-            return Ok(pack_no_fsst(&brotli_compressed));
-        }
-
-        // Try FSST + Brotli. If it doesn't beat plain Brotli, fall back.
-        let fsst_compressed = omnizip_fsst::compress(plaintext).map_err(fsst_err)?;
-        let brotli_input = &fsst_compressed[..];
-        let brotli_compressed = brotli::compress(brotli_input, DEFAULT_QUALITY)?;
-
-        let composite_len = 4 + brotli_compressed.len() + fsst_compressed.len();
-        let plain_brotli = brotli::compress(plaintext, DEFAULT_QUALITY)?;
-        if composite_len >= plain_brotli.len() {
-            // Plain Brotli wins; emit the no-FSST form.
-            return Ok(pack_no_fsst(&plain_brotli));
-        }
-
-        let mut out = Vec::with_capacity(composite_len);
-        let fsst_len = u32::try_from(fsst_compressed.len()).map_err(|_| CoreError::Corrupt {
-            reason: format!(
-                "fsst+brotli: fsst_compressed length {} exceeds u32",
-                fsst_compressed.len()
-            ),
-        })?;
-        out.extend_from_slice(&fsst_len.to_le_bytes());
-        out.extend_from_slice(&fsst_compressed);
-        out.extend_from_slice(&brotli_compressed);
-        Ok(out)
+        compress_with_baseline(plaintext, None)
     }
 
     fn decompress(&self, compressed: &[u8], _expected_len: u32) -> Result<Vec<u8>, CoreError> {
@@ -124,6 +95,65 @@ fn fsst_err(e: omnizip_codecs::OmnizipError) -> CoreError {
     CoreError::Corrupt {
         reason: format!("fsst: {e}"),
     }
+}
+
+/// Compress with an optional pre-computed Brotli baseline.
+///
+/// Callers that already ran Brotli on `plaintext` (e.g.
+/// `process_whole_file_drop`, which compresses every categorizer-routed
+/// file with Brotli first) can pass `Some(brotli_c)` to skip the
+/// redundant Brotli pass that FSST+Brotli would otherwise run for
+/// comparison. The baseline is used as-is — no recompression.
+///
+/// When `baseline` is `None`, the function runs Brotli on `plaintext`
+/// internally (matching the v0.1 behaviour).
+///
+/// # Errors
+///
+/// Returns [`CoreError::Corrupt`] if FSST or Brotli encoding fails.
+pub fn compress_with_baseline(
+    plaintext: &[u8],
+    baseline: Option<&[u8]>,
+) -> Result<Vec<u8>, CoreError> {
+    // Resolve the plain-Brotli baseline: use the caller-provided bytes
+    // if present, else compute it inline.
+    let owned_baseline: Option<Vec<u8>>;
+    let plain_brotli: &[u8] = match baseline {
+        Some(b) => b,
+        None => {
+            owned_baseline = Some(brotli::compress(plaintext, DEFAULT_QUALITY)?);
+            owned_baseline.as_deref().unwrap_or_default()
+        }
+    };
+
+    // Skip FSST for tiny inputs — dictionary overhead exceeds gain.
+    if plaintext.len() < 1024 {
+        return Ok(pack_no_fsst(plain_brotli));
+    }
+
+    // Try FSST + Brotli. If it doesn't beat the plain baseline, fall back.
+    let fsst_compressed = omnizip_fsst::compress(plaintext).map_err(fsst_err)?;
+    let brotli_input = &fsst_compressed[..];
+    let brotli_compressed = brotli::compress(brotli_input, DEFAULT_QUALITY)?;
+
+    let composite_len = 4 + brotli_compressed.len() + fsst_compressed.len();
+    if composite_len >= plain_brotli.len() {
+        // Plain Brotli wins; emit the no-FSST form. Clone the baseline
+        // bytes so we own the output regardless of caller lifetime.
+        return Ok(pack_no_fsst(plain_brotli));
+    }
+
+    let mut out = Vec::with_capacity(composite_len);
+    let fsst_len = u32::try_from(fsst_compressed.len()).map_err(|_| CoreError::Corrupt {
+        reason: format!(
+            "fsst+brotli: fsst_compressed length {} exceeds u32",
+            fsst_compressed.len()
+        ),
+    })?;
+    out.extend_from_slice(&fsst_len.to_le_bytes());
+    out.extend_from_slice(&fsst_compressed);
+    out.extend_from_slice(&brotli_compressed);
+    Ok(out)
 }
 
 #[cfg(test)]

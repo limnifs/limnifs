@@ -28,7 +28,7 @@ mod composite;
 mod deflate;
 mod deflate64;
 mod flac;
-mod fsst_brotli;
+pub mod fsst_brotli;
 mod glza;
 mod libdeflate;
 mod lz4;

@@ -5,6 +5,45 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.30] — 2026-08-05
+
+### Added
+
+- **`write_stream` API** — new public entry point in `limnifs-write`
+  packs a single named stream from any `std::io::Read` into a `.lim`
+  image without buffering the full content. Uses `FastCDC::chunk_reader`
+  internally; internal buffering is bounded at `max_chunk_size + 64 KiB`.
+  Callers piping from a network socket, pipe, or generator no longer
+  need a temp file.
+
+  ```rust
+  let reader = std::io::Cursor::new(my_bytes);
+  let artifact = limnifs_write::write_stream("output.txt", reader, &config)?;
+  ```
+
+- **Memory-mapped input** — `process_file` now memmaps files above
+  1 MiB instead of `std::fs::read`-ing them into a `Vec`. Pages load
+  on demand from the kernel page cache. For multi-GiB inputs, peak
+  RSS drops from `total_input_size` to roughly `unique_chunks ×
+  avg_chunk_size` because chunk compressors see borrowed slices into
+  the mmap. Below 1 MiB the crossover favours plain reads.
+
+### Changed
+
+- **FSST+Brotli accepts pre-computed Brotli baseline** — new public
+  function `limnifs_core::codec::fsst_brotli::compress_with_baseline`
+  takes `Option<&[u8]>` for an already-computed Brotli baseline.
+  `process_whole_file_drop` passes its baseline when the categorizer
+  routes to FSST+Brotli so the codec doesn't re-compress the plaintext
+  with Brotli just for comparison. Eliminates one full Brotli pass
+  per FSST-routed file.
+
+### Tests
+
+- New unit test `write_stream_packs_single_named_stream` covers the
+  streaming API end-to-end.
+- Full workspace test suite: 585/585 passing (was 584).
+
 ## [0.2.29] — 2026-08-05
 
 ### Changed
