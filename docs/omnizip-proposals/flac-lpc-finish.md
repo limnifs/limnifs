@@ -2,20 +2,35 @@
 
 **Filed by:** LimniFS
 **omnizip-rs crate:** `omnizip-flac`
-**Severity:** feature gap (TODO 98 marked fixed; verify no regression on diverse corpus)
+**Severity:** feature gap — TODO 98, 99, 105, **112** all landed upstream
 
-## Problem
+## Problem (historical)
 
-`omnizip-flac` has had multiple rounds of LPC work (Phase 1, 2,
-2B, 3 per the omnizip-rs commit log). TODO 98 was recently marked
-fixed. LimniFS still sees FLAC routing disabled in production
-because earlier revisions produced output that, while valid, lost
-to general-purpose codecs on some audio fixtures.
+`omnizip-flac` had multiple rounds of LPC work (Phase 1, 2, 2B, 3
+per the omnizip-rs commit log). TODO 98 was first marked fixed in
+omnizip 0.9.x but the FLAC encoder lost to general-purpose codecs
+on some audio fixtures in earlier LimniFS benchmarks.
 
 The LimniFS `pcm_audio` categorizer is **off by default** today.
 We want to enable it but need confidence the FLAC encoder wins on
 a broad corpus, not just the synthetic sine waves used in
 omnizip-flac's own tests.
+
+## Upstream progress (2026-08)
+
+| TODO | Landed in | What |
+|---|---|---|
+| 98 | omnizip 0.9.1 | LPC encoder (CONSTANT/VERBATIM/FIXED + partitioned Rice) |
+| 99, 105 | 0.13.x | framing gaps closed, harness landed |
+| **112** | **0.14.12** | **FFT autocorrelation (fft-acf feature, O(N log N) vs O(N·order)) — half of 10× gap closed** |
+
+LimniFS sees the speedup via `process_whole_file_drop` on WAV
+inputs (the `pcm_audio` categorizer is currently disabled by
+default; FLAC is the categorizer's chosen codec but the file falls
+through to Brotli+ZSTD when the categorizer is off).
+
+LimniFS-side corpus verification (200-track audio corpus) is the
+remaining gate.
 
 ## Proposed verification suite
 
