@@ -5,6 +5,28 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.33] — 2026-08-05
+
+### Changed
+
+- **omnizip 0.14.18** — bumped 16 of 17 omnizip-* crates from 0.14.17
+  to 0.14.18. **`omnizip-lz4` is pinned to 0.14.17** because the new
+  from-spec LZ4 encoder (omnizip-rs TODO 132) produces output its own
+  decoder rejects on inputs above ~64 bytes. See
+  `docs/omnizip-proposals/lz4-from-spec-broken.md` for the bug report
+  and acceptance criteria.
+
+  Other 0.14.18 changes are absorbed cleanly: omnizip-lzma's
+  `ResetMode::Warm` (third reset tier beyond `Full` and `ReuseState`),
+  continued Brotli Phase C work, and ongoing CI/determinism hardening.
+
+### Workaround
+
+`Cargo.lock` pins `omnizip-lz4` to 0.14.17 (which uses the
+`lz4_flex` wrap, works correctly). All other omnizip-* crates are at
+0.14.18. When omnizip ships the LZ4 from-spec encoder fix, remove the
+pin via `cargo update -p omnizip-lz4`.
+
 ## [0.2.32] — 2026-08-05
 
 ### Changed
