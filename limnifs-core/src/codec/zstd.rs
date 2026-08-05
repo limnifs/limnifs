@@ -1,16 +1,12 @@
-//! Zstandard codec (0x02): pure Rust via `omnizip-zstd` 0.14.8.
+//! Zstandard codec (0x02): pure Rust via `omnizip-zstd` 0.14.10.
 //!
-//! `omnizip-zstd` 0.14.8 ships a real encoder and decoder. The
-//! `Default` (L6) and higher levels have an upstream regression on
-//! some inputs (highly-repetitive text, small binary patterns) where
-//! they produce 500× larger output and run 70,000× slower than
-//! `Fast` (L3). See `docs/omnizip-proposals/zstd-default-broken.md`
-//! for the bug report and acceptance criteria.
-//!
-//! As a temporary workaround we cap all quality levels at `Fast`
-//! (L3). Decompression is unaffected — ZSTD's wire format is
-//! level-independent. When the upstream fix lands, restore the
-//! `Default`/`Better`/`Best` mapping in `level_for_quality`.
+//! `omnizip-zstd` 0.14.10 ships a real encoder and decoder. The
+//! `Default` (L6), `Better` (L12), and `Best` (L22) levels had a
+//! regression in 0.14.8 on highly-repetitive inputs (50 KB output
+//! and 14+ s runtime for 90 KB of repeated text). The 0.14.10 fix
+//! (omnizip-rs PR #90) restores correct level differentiation; see
+//! `docs/omnizip-proposals/zstd-default-broken.md` for the original
+//! report.
 
 use crate::codec::{Codec, CodecTunables, PerCodecTunables};
 use crate::error::CoreError;
@@ -24,28 +20,23 @@ pub struct ZstdTunables {
 
 impl Default for ZstdTunables {
     fn default() -> Self {
-        // quality 3 → ZstdLevel::Fast (omnizip's L3).
-        // We pin to L3 because omnizip-zstd 0.14.8's Default (L6) is
-        // broken on some inputs. Restore to 6 when upstream fixes.
-        Self { quality: 3 }
+        // quality 6 → ZstdLevel::Default (libzstd's default).
+        Self { quality: 6 }
     }
 }
 
 /// Map a per-codec quality value to an `omnizip_zstd::ZstdLevel`.
-///
-/// **Workaround:** upper levels (`Default`, `Better`, `Best`) are
-/// capped to `Fast` because omnizip-zstd 0.14.8 has a regression on
-/// those levels for highly-repetitive inputs. `Fastest` and `Fast`
-/// are unaffected. When the upstream fix lands, restore the
-/// `6..=11 → Default`, `12..=21 → Better`, `22+ → Best` branches.
 fn level_for_quality(quality: u8) -> omnizip_zstd::ZstdLevel {
     match quality {
         0..=2 => omnizip_zstd::ZstdLevel::Fastest,
-        _ => omnizip_zstd::ZstdLevel::Fast,
+        3..=5 => omnizip_zstd::ZstdLevel::Fast,
+        6..=11 => omnizip_zstd::ZstdLevel::Default,
+        12..=21 => omnizip_zstd::ZstdLevel::Better,
+        _ => omnizip_zstd::ZstdLevel::Best,
     }
 }
 
-/// ZSTD codec. Encode at `Fast` (L3); decode at any level.
+/// ZSTD codec. Encode at `Default` (L6); decode at any level.
 pub struct ZstdCodec;
 
 impl Codec for ZstdCodec {
@@ -85,7 +76,7 @@ impl Codec for ZstdCodec {
         plaintext: &[u8],
         t: &CodecTunables,
     ) -> Result<Vec<u8>, CoreError> {
-        let quality = if t.quality > 0 { t.quality } else { 3 };
+        let quality = if t.quality > 0 { t.quality } else { 6 };
         let level = level_for_quality(quality);
         omnizip_zstd::compress(plaintext, level).map_err(|e| CoreError::Corrupt {
             reason: format!("zstd compress (level {level}) failed: {e}"),
@@ -108,22 +99,24 @@ impl PerCodecTunables for ZstdCodec {
     }
 }
 
-/// Compress with Zstandard at `Fast` (level 3). Decompression is
-/// level-independent so this only affects what we produce, not what
-/// we can read.
+/// Compress with Zstandard at `Default` (level 6). This matches
+/// libzstd's CLI default and gives the right speed/ratio balance
+/// for source code, CSV, and general text.
 ///
 /// # Errors
 ///
 /// Returns [`CoreError::Corrupt`] only on internal encoder failure.
 #[allow(clippy::unnecessary_wraps)]
 pub(crate) fn compress(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
-    omnizip_zstd::compress(plaintext, omnizip_zstd::ZstdLevel::Fast).map_err(|e| CoreError::Corrupt {
-        reason: format!("zstd compress failed: {e}"),
+    omnizip_zstd::compress(plaintext, omnizip_zstd::ZstdLevel::Default).map_err(|e| {
+        CoreError::Corrupt {
+            reason: format!("zstd compress failed: {e}"),
+        }
     })
 }
 
 /// Compress at an explicit level. Used by callers that want a
-/// different speed/ratio tradeoff than the default L3.
+/// different speed/ratio tradeoff than the default L6.
 #[allow(dead_code)]
 pub(crate) fn compress_at_level(
     plaintext: &[u8],

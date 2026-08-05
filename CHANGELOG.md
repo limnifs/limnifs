@@ -5,6 +5,29 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.23] — 2026-08-05
+
+### Changed
+
+- **omnizip 0.14.10** — all 17 omnizip-* crates bumped from 0.14.8 to
+  0.14.10. omnizip-rs PR #90 fixes the ZSTD Default/L6+ regression
+  on highly-repetitive inputs that LimniFS 0.2.21 had to work around.
+
+### Restored
+
+- **ZSTD full level mapping** — `level_for_quality` in
+  `limnifs-core/src/codec/zstd.rs` no longer caps at `Fast` (L3).
+  The original `6..=11 → Default, 12..=21 → Better, 22+ → Best`
+  mapping is restored. Profiles that requested `quality: 11` (max-ratio,
+  max-read) now actually get ZSTD L6 as intended.
+- **L1-vs-L6 regression test** —
+  `zstd_higher_levels_compress_better_than_lower` compares Default
+  (L6) vs Fastest (L1) again. The L1-vs-L3 variant that got us
+  through the 0.14.8/0.14.9 regression window is reverted.
+
+  See `docs/omnizip-proposals/zstd-default-broken.md` for the full
+  incident timeline.
+
 ## [0.2.22] — 2026-08-05
 
 ### Added
