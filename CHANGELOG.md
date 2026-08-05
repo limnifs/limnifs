@@ -5,6 +5,30 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.29] — 2026-08-05
+
+### Changed
+
+- **omnizip 0.14.14** — bumped all 17 omnizip-* crates from 0.14.12 to
+  0.14.14. Headline upstream change: **omnizip-rs TODO 152 closed —
+  ZSTD Huffman encode table cache, 7.5× ZSTD encode speedup**. Also
+  ships Brotli Phase C (TODO 117 further along) and continued
+  FLAC/ricepp improvements.
+
+### Benchmark impact (synthetic, balanced profile)
+
+| Dataset | 0.14.12 | 0.14.14 | Speedup |
+|---|---:|---:|---:|
+| fits-synthetic | 26.94 s | 3.68 s | **7.3×** |
+| tiny-files (max-ratio) | 1.93 s | 1.07 s | 1.8× |
+| csv-synthetic (max-ratio) | 33.12 s | 29.72 s | 1.1× |
+| fits-synthetic (max-ratio) | 189.45 s | 97.75 s | 1.9× |
+
+ZSTD is in 4 of 9 LimniFS profiles (max-read, max-read-rw, balanced-rw
+text path, max-ratio tournament). The 7.5× ZSTD encode speedup moves
+benchmark numbers across many datasets — FITS sees the biggest gain
+because its 47 MB payload runs through ZSTD L6 baseline.
+
 ## [0.2.28] — 2026-08-05
 
 ### Changed
