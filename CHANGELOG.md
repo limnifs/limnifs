@@ -5,6 +5,38 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.21] — 2026-08-05
+
+### Changed
+
+- **omnizip 0.14.8** — all 17 omnizip-* crates bumped from 0.14.6 to
+  0.14.8. Brings the ZSTD backward-extension infinite-loop fix
+  (omnizip-rs PR #85) and the FLAC LPC + ricepp speed improvements
+  (omnizip-rs PR #84). The stale `omnizip-flac = "0.10"` entry in
+  `limnifs-write/Cargo.toml` is now `0.14.8`, eliminating the
+  duplicate-version split.
+
+### Fixed
+
+- **ZSTD correctness regression** — three ZSTD tests
+  (`zstd_higher_levels_compress_better_than_lower`,
+  `zstd_compresses_binary_data`,
+  `zstd_compresses_better_than_lz4_on_text`) had been silently
+  hanging or producing pathological output because omnizip 0.14.6/0.14.8
+  has a regression at `ZstdLevel::Default` (L6) and higher on
+  highly-repetitive inputs. The encoder produces 50 KB of effectively
+  uncompressed output for 90 KB of repeated text that L1 compresses
+  to 74 bytes, and takes 14+ seconds to do it.
+
+  LimniFS now caps the ZSTD level at `Fast` (L3) — see
+  `docs/omnizip-proposals/zstd-default-broken.md` for the upstream
+  bug report and acceptance criteria. Decompression is unaffected
+  (ZSTD's wire format is level-independent). When omnizip fixes L6,
+  restore the `6..=11 → Default, 12..=21 → Better, 22+ → Best`
+  mapping in `limnifs-core/src/codec/zstd.rs::level_for_quality`.
+
+  Workspace test suite runtime: 367 s → 8 s (45× faster).
+
 ## [0.2.20] — 2026-08-05
 
 ### Added
