@@ -332,6 +332,7 @@ fn process_whole_file_drop(
 ) -> Result<ChunkedFileResult, WriteError> {
     let _ = pf;
     let drop_id = hash_section(data);
+    let file_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
 
     let brotli_c = limnifs_core::codec::compress_with_tunables(
         limnifs_core::codec::CODEC_BROTLI,
@@ -340,22 +341,29 @@ fn process_whole_file_drop(
     )
     .map_err(|e| WriteError::Io(std::io::Error::other(format!("brotli compress: {e}"))))?;
 
-    let zstd_c = limnifs_core::codec::compress_with_tunables(
-        limnifs_core::codec::CODEC_ZSTD,
-        data,
-        tunables,
-    )
-    .unwrap_or_default();
+    let mut best_codec = limnifs_core::codec::CODEC_BROTLI;
+    let mut best_compressed = brotli_c;
 
-    let (mut best_codec, mut best_compressed) = if brotli_c.len() <= zstd_c.len() {
-        (limnifs_core::codec::CODEC_BROTLI, brotli_c)
-    } else {
-        (limnifs_core::codec::CODEC_ZSTD, zstd_c)
-    };
+    // Short-circuit: if Brotli already achieves < 5% ratio, the input
+    // is highly compressible and ZSTD is unlikely to beat it by enough
+    // to justify the extra pass. Skip ZSTD on this fast path.
+    let brotli_ratio = best_compressed.len() as f64 / data.len() as f64;
+    if brotli_ratio > 0.05 {
+        if let Ok(zstd_c) =
+            limnifs_core::codec::compress_with_tunables(limnifs_core::codec::CODEC_ZSTD, data, tunables)
+        {
+            if zstd_c.len() < best_compressed.len() {
+                best_codec = limnifs_core::codec::CODEC_ZSTD;
+                best_compressed = zstd_c;
+            }
+        }
+    }
 
     // Only try the specialized codec if the general-purpose ratio
     // is poor (>15%) — otherwise the specialized codec is unlikely
-    // to help and may be very slow (FLAC, FSST).
+    // to help and may be very slow (FLAC, FSST). RICEPP is always
+    // tried because it can win big on FITS even when general-purpose
+    // ratios look acceptable.
     let general_ratio = best_compressed.len() as f64 / data.len() as f64;
     if general_ratio > 0.15 || cat.codec_id == limnifs_core::codec::CODEC_RICEPP {
         if let Ok(spec_c) = limnifs_core::codec::compress(cat.codec_id, data) {
@@ -366,7 +374,6 @@ fn process_whole_file_drop(
         }
     }
 
-    let file_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
     Ok(ChunkedFileResult {
         drops: vec![(drop_id, data.to_vec(), best_compressed, best_codec)],
         slices: vec![PendingSlice {
