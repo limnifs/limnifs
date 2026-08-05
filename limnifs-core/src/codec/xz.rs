@@ -122,10 +122,29 @@ impl PerCodecTunables for XzCodec {
 /// `LzmaOptions` struct (the four fields omnizip doesn't overwrite:
 /// lc, lp, pb, dict_size_mb). Level re-derives the other three fields
 /// per call inside `LzmaCompressor::compress`.
+///
+/// The thread-local defaults to `ResetMode::Full` for run-to-run
+/// output determinism. Set the `LIMNIFS_XZ_REUSE_STATE` environment
+/// variable to opt into `ResetMode::ReuseState` for batch workloads
+/// where determinism doesn't matter (faster, ~5-10% on max-ratio).
 fn compress_at_level(plaintext: &[u8], level: u8) -> Result<Vec<u8>, CoreError> {
     thread_local! {
-        static COMPRESSOR: std::cell::RefCell<omnizip_lzma::LzmaCompressor> =
-            std::cell::RefCell::new(omnizip_lzma::LzmaCompressor::new());
+        static COMPRESSOR: std::cell::RefCell<omnizip_lzma::LzmaCompressor> = {
+            let c = omnizip_lzma::LzmaCompressor::new();
+            // Opt-in: probability-model reuse across calls. Trades
+            // run-to-run output determinism for ~5-10% encode speedup
+            // on max-ratio batch workloads. Output round-trips fine —
+            // each call's LZMA2 chunk headers carry their own reset
+            // markers — but the same input compressed in different
+            // runs may produce different bytes (state inheritance
+            // depends on prior calls on the same thread).
+            if std::env::var_os("LIMNIFS_XZ_REUSE_STATE").is_some() {
+                c.with_reset_mode(omnizip_lzma::ResetMode::ReuseState)
+            } else {
+                c
+            }
+            .into()
+        };
     }
     COMPRESSOR.with(|c| {
         let mut borrowed = c.borrow_mut();

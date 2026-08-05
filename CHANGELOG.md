@@ -5,6 +5,30 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.32] — 2026-08-05
+
+### Changed
+
+- **omnizip 0.14.17** — bumped all 17 omnizip-* crates from 0.14.16 to
+  0.14.17. Brings the LZMA `ResetMode` API (omnizip-rs TODO 165
+  closed). `LzmaCompressor::with_reset_mode(ResetMode::ReuseState)`
+  carries probability-model adaptation across compress calls, skipping
+  the per-call state reset. ~5–10% encode speedup on `max-ratio` batch
+  workloads where output determinism across runs doesn't matter.
+
+### Added
+
+- **`LIMNIFS_XZ_REUSE_STATE` env var** — opt into `ResetMode::ReuseState`
+  for the thread-local `LzmaCompressor` in `limnifs-core::codec::xz`.
+  Default behaviour (deterministic `ResetMode::Full`) is unchanged;
+  users who don't care about run-to-run byte-determinism can set the
+  env var for faster LZMA encode in the `max-ratio` profile tournament.
+
+  Round-trip safety is unaffected — each compressed blob carries its
+  own LZMA2 chunk-header reset markers. What changes is that the same
+  input compressed in different runs may produce different bytes
+  (state inheritance depends on prior calls on the same thread).
+
 ## [0.2.31] — 2026-08-05
 
 ### Changed
