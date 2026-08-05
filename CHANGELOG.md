@@ -5,6 +5,31 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.27] — 2026-08-05
+
+### Changed
+
+- **omnizip 0.14.12** — bumped all 17 omnizip-* crates from 0.14.11
+  to 0.14.12. Brings:
+  - **FLAC FFT autocorrelation** (omnizip-rs TODO 112 — `fft-acf`
+    feature, O(N log N) vs O(N·order)). Half of the 10× FLAC LPC
+    speed gap closed.
+  - **ricepp SIMD delta** (omnizip-rs TODO 113 — `simd-delta`
+    feature with `wide::u64x4`). Half of the 6× ricepp speed gap
+    closed.
+
+  Updated `docs/omnizip-proposals/flac-lpc-finish.md` and
+  `docs/omnizip-proposals/ricepp-simd-delta.md` with the new
+  status. FLAC categorizer remains off-by-default pending
+  LimniFS-side corpus verification; ricepp speedup is automatic
+  (LimniFS doesn't own the encoder).
+
+  Measured impact on synthetic `fits-synthetic` (47 MB,
+  balanced profile): create time 25.2 s → 23.6 s (~6% faster). The
+  remaining gap vs ZSTD is the encoding decision itself (ricepp
+  is a specialised integer-pixel codec; ZSTD has a richer
+  general-purpose model).
+
 ## [0.2.26] — 2026-08-05
 
 ### Added
