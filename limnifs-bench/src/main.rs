@@ -52,6 +52,12 @@ enum Command {
         datasets: Option<Vec<String>>,
         #[arg(long, default_value = "3")]
         iterations: usize,
+        /// Comma-separated list of LimniFS profile names to exercise
+        /// (e.g., `balanced,max-write,max-ratio`). Each profile runs
+        /// its own create/verify/extract pass; external formats run
+        /// once per dataset.
+        #[arg(long, value_delimiter = ',')]
+        profile: Option<Vec<String>>,
     },
 }
 
@@ -97,9 +103,10 @@ fn main() {
             category,
             datasets: ds_names,
             iterations,
+            profile,
         } => {
             run_benchmarks(
-                &workspace, &paths, all, quick, category, ds_names, iterations,
+                &workspace, &paths, all, quick, category, ds_names, iterations, profile,
             );
         }
     }
@@ -113,6 +120,7 @@ fn run_benchmarks(
     category: Option<String>,
     ds_names: Option<Vec<String>>,
     iterations: usize,
+    profiles: Option<Vec<String>>,
 ) {
     let iters = if quick { 1 } else { iterations };
 
@@ -182,40 +190,60 @@ fn run_benchmarks(
         let ds_work = paths.work_dir.join(ds.name);
         std::fs::create_dir_all(&ds_work).expect("create work dir");
 
-        // LimniFS create (library call)
-        print!("  [LimniFS] create… ");
-        let results = runners::limnifs_create(&source_dir, &ds_work, iters);
-        if let Some(s) =
-            metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size)
-        {
-            println!(
-                "{:.3}s, {:.1} MB, {:.1}%",
-                s.median_seconds, s.output_size_mb, s.ratio_percent
-            );
-            all_summaries.push(s);
-        } else {
-            println!("FAILED");
-        }
+        // Resolve LimniFS profiles to exercise. Default = ["balanced"].
+        let profile_names: Vec<String> = match &profiles {
+            Some(p) if !p.is_empty() => p.clone(),
+            _ => vec!["balanced".to_string()],
+        };
 
-        // LimniFS verify + extract (subprocess)
-        let limni_image = ds_work.join("limnifs.lim");
-        if limni_image.exists() {
-            print!("  [LimniFS] verify… ");
-            let results = runners::limnifs_verify(&limni_image, iters);
-            if let Some(s) =
-                metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size)
-            {
-                println!("{:.3}s", s.median_seconds);
+        let primary_profile = profile_names[0].clone();
+
+        // LimniFS create + verify + extract, once per requested profile.
+        for profile_name in &profile_names {
+            println!("\n  --- profile: {profile_name} ---");
+            print!("  [limnifs:{profile_name}] create… ");
+            let results = runners::limnifs_create(&source_dir, &ds_work, iters, profile_name);
+            if let Some(s) = metrics::BenchmarkSummary::from_results(
+                ds.name,
+                ds.category,
+                &results,
+                input_size,
+            ) {
+                println!(
+                    "{:.3}s, {:.1} MB, {:.1}%",
+                    s.median_seconds, s.output_size_mb, s.ratio_percent
+                );
                 all_summaries.push(s);
+            } else {
+                println!("FAILED");
             }
 
-            print!("  [LimniFS] extract… ");
-            let results = runners::limnifs_extract(&limni_image, &ds_work, iters, input_size);
-            if let Some(s) =
-                metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size)
-            {
-                println!("{:.3}s ({:.0} MB/s)", s.median_seconds, s.throughput_mbps);
-                all_summaries.push(s);
+            let limni_image = ds_work.join(format!("limnifs-{profile_name}.lim"));
+            if limni_image.exists() {
+                print!("  [limnifs:{profile_name}] verify… ");
+                let results = runners::limnifs_verify(&limni_image, iters, profile_name);
+                if let Some(s) = metrics::BenchmarkSummary::from_results(
+                    ds.name,
+                    ds.category,
+                    &results,
+                    input_size,
+                ) {
+                    println!("{:.3}s", s.median_seconds);
+                    all_summaries.push(s);
+                }
+
+                print!("  [limnifs:{profile_name}] extract… ");
+                let results =
+                    runners::limnifs_extract(&limni_image, &ds_work, iters, input_size, profile_name);
+                if let Some(s) = metrics::BenchmarkSummary::from_results(
+                    ds.name,
+                    ds.category,
+                    &results,
+                    input_size,
+                ) {
+                    println!("{:.3}s ({:.0} MB/s)", s.median_seconds, s.throughput_mbps);
+                    all_summaries.push(s);
+                }
             }
         }
 
@@ -327,7 +355,7 @@ fn run_benchmarks(
             // Build per-format image path map.
             let mut images: std::collections::HashMap<&str, std::path::PathBuf> =
                 std::collections::HashMap::new();
-            let limnifs_img = ds_work.join("limnifs.lim");
+            let limnifs_img = ds_work.join(format!("limnifs-{primary_profile}.lim"));
             let dwarfs_img = ds_work.join("test.dwarfs");
             let squashfs_img = ds_work.join("squashfs.squashfs");
             let tar_img = ds_work.join("test.tar.zst");

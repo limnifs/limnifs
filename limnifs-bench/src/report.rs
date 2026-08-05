@@ -116,7 +116,7 @@ fn category_title(c: Category) -> &'static str {
 // Markdown renderer.
 // ---------------------------------------------------------------------------
 
-const FORMATS: &[&str] = &["limnifs", "dwarfs", "squashfs", "tar+zstd"];
+const EXTERNAL_FORMATS: &[&str] = &["dwarfs", "squashfs", "tar+zstd"];
 const OPERATIONS: &[&str] = &[
     "create",
     "extract",
@@ -126,15 +126,55 @@ const OPERATIONS: &[&str] = &[
     "read_random",
 ];
 
+/// Build the format list dynamically from the results. LimniFS profiles
+/// (any format starting with `limnifs`) sort first in stable order,
+/// then the external formats in canonical order. This lets multi-profile
+/// runs render one row per profile without hardcoding.
+fn derive_formats(results: &[BenchmarkSummary]) -> Vec<String> {
+    let mut limnifs_profiles: Vec<String> = results
+        .iter()
+        .filter(|r| r.format.starts_with("limnifs"))
+        .map(|r| r.format.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    // Ensure `limnifs` (legacy / single-file ops) sorts before
+    // `limnifs:balanced` etc. BTreeSet gives lexicographic order, and
+    // ':' (0x3A) < letters, so `limnifs:...` < `limnifs` would be wrong
+    // — but `limnifs` has no ':' so it sorts AFTER colon-suffixed
+    // entries. Reverse so plain `limnifs` (if present) leads.
+    limnifs_profiles.sort_by(|a, b| {
+        match (a.starts_with("limnifs:"), b.starts_with("limnifs:")) {
+            (false, true) => std::cmp::Ordering::Less,
+            (true, false) => std::cmp::Ordering::Greater,
+            _ => a.cmp(b),
+        }
+    });
+
+    let mut out = limnifs_profiles;
+    for f in EXTERNAL_FORMATS {
+        if results.iter().any(|r| r.format == *f) {
+            out.push((*f).to_string());
+        }
+    }
+    out
+}
+
 struct MarkdownRenderer<'a> {
     report: &'a FullReport,
     categories: Vec<CategoryView>,
+    formats: Vec<String>,
 }
 
 impl<'a> MarkdownRenderer<'a> {
     fn new(report: &'a FullReport) -> Self {
         let categories = group(&report.results);
-        Self { report, categories }
+        let formats = derive_formats(&report.results);
+        Self {
+            report,
+            categories,
+            formats,
+        }
     }
 
     fn render(&self) -> String {
@@ -182,7 +222,7 @@ impl<'a> MarkdownRenderer<'a> {
         let any = cv
             .datasets
             .iter()
-            .any(|dv| FORMATS.iter().any(|f| dv.get(f, op).is_some()));
+            .any(|dv| self.formats.iter().any(|f| dv.get(f, op).is_some()));
         if !any {
             return;
         }
@@ -191,7 +231,7 @@ impl<'a> MarkdownRenderer<'a> {
         md.push_str("| Dataset | Format | Median (s) | CPU user+sys (s) | Peak RSS (MiB) | Throughput (MB/s) | Output (MB) | Ratio (%) |\n");
         md.push_str("|---|---|---:|---:|---:|---:|---:|---:|\n");
         for dv in &cv.datasets {
-            for f in FORMATS {
+            for f in &self.formats {
                 if let Some(s) = dv.get(f, op) {
                     let cpu_total = s.cpu_user_secs + s.cpu_system_secs;
                     let rss_mib = s.peak_rss_bytes as f64 / (1024.0 * 1024.0);
@@ -217,15 +257,23 @@ impl<'a> MarkdownRenderer<'a> {
         // (lower = better). Mark each format W (winner), = (tie within 5%),
         // L (loss), · (not measured).
         md.push_str("Winner per (dataset × operation) by **median time** (lower is better).\n\n");
-        md.push_str("| Dataset | Operation | limnifs | dwarfs | squashfs | tar+zstd |\n");
-        md.push_str("|---|---|:---:|:---:|:---:|:---:|\n");
+        let header_formats: Vec<String> = self.formats.clone();
+        let header_row: String = header_formats.join(" | ");
+        md.push_str(&format!("| Dataset | Operation | {header_row} |\n"));
+        let sep: String = header_formats
+            .iter()
+            .map(|_| ":---:")
+            .collect::<Vec<_>>()
+            .join(" | ");
+        md.push_str(&format!("|---|---|{sep} |\n"));
 
         for cv in &self.categories {
             for dv in &cv.datasets {
                 for op in OPERATIONS {
-                    let measured: Vec<(&str, f64)> = FORMATS
+                    let measured: Vec<(&str, f64)> = self
+                        .formats
                         .iter()
-                        .filter_map(|f| dv.get(f, op).map(|s| (*f, s.median_seconds)))
+                        .filter_map(|f| dv.get(f, op).map(|s| (f.as_str(), s.median_seconds)))
                         .collect();
                     if measured.is_empty() {
                         continue;
@@ -234,7 +282,8 @@ impl<'a> MarkdownRenderer<'a> {
                         .iter()
                         .map(|(_, t)| *t)
                         .fold(f64::INFINITY, f64::min);
-                    let cells: Vec<String> = FORMATS
+                    let cells: Vec<String> = self
+                        .formats
                         .iter()
                         .map(|f| match dv.get(f, op) {
                             None => "·".to_string(),
@@ -248,9 +297,10 @@ impl<'a> MarkdownRenderer<'a> {
                             }
                         })
                         .collect();
+                    let cells_row = cells.join(" | ");
                     md.push_str(&format!(
-                        "| {} | {} | {} | {} | {} | {} |\n",
-                        dv.name, op, cells[0], cells[1], cells[2], cells[3],
+                        "| {} | {} | {cells_row} |\n",
+                        dv.name, op,
                     ));
                 }
             }
@@ -261,13 +311,14 @@ impl<'a> MarkdownRenderer<'a> {
         md.push_str("### Win Count\n\n");
         md.push_str("| Format | Wins (lowest median time) |\n");
         md.push_str("|---|---:|\n");
-        let mut wins: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut wins: BTreeMap<String, usize> = BTreeMap::new();
         for cv in &self.categories {
             for dv in &cv.datasets {
                 for op in OPERATIONS {
-                    let measured: Vec<(&str, f64)> = FORMATS
+                    let measured: Vec<(&str, f64)> = self
+                        .formats
                         .iter()
-                        .filter_map(|f| dv.get(f, op).map(|s| (*f, s.median_seconds)))
+                        .filter_map(|f| dv.get(f, op).map(|s| (f.as_str(), s.median_seconds)))
                         .collect();
                     if measured.is_empty() {
                         continue;
@@ -278,17 +329,17 @@ impl<'a> MarkdownRenderer<'a> {
                         .fold(f64::INFINITY, f64::min);
                     for (f, t) in &measured {
                         if (t - best).abs() / best.max(1e-9) < 0.05 {
-                            *wins.entry(f).or_insert(0) += 1;
+                            *wins.entry((*f).to_string()).or_insert(0) += 1;
                         }
                     }
                 }
             }
         }
-        for f in FORMATS {
+        for f in &self.formats {
             md.push_str(&format!(
                 "| {} | {} |\n",
                 f,
-                wins.get(*f).copied().unwrap_or(0)
+                wins.get(f).copied().unwrap_or(0)
             ));
         }
     }

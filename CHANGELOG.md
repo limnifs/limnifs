@@ -5,6 +5,21 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.20] — 2026-08-05
+
+### Added
+
+- **Multi-profile benchmark** — `limnifs-bench run --profile
+  balanced,max-write,max-ratio` exercises the full benchmark matrix
+  for each requested LimniFS profile. Each profile produces separate
+  rows in the report (format tag `limnifs:{profile}`). External
+  formats (DwarFS, SquashFS, tar+zstd) run once per dataset. Closes
+  TODO.perf/03.
+
+  The report renderer now derives the format list dynamically from
+  results, so future profiles appear in tables and the win/loss
+  matrix without code changes.
+
 ## [0.2.19] — 2026-08-05
 
 ### Added
