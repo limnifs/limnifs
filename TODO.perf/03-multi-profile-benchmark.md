@@ -25,6 +25,27 @@ in the markdown output.
 
 ## Acceptance
 
-- [ ] `limnifs-bench run --profile max-write,balanced,max-ratio`
+- [x] `limnifs-bench run --profile max-write,balanced,max-ratio`
       produces a multi-profile report.
-- [ ] Each profile appears as a separate row in the report.
+- [x] Each profile appears as a separate row in the report.
+
+## Implementation notes (2026-08-05)
+
+Shipped in v0.2.20.
+
+- `runners::limnifs_create/verify/extract` take `profile_name: &str`
+  and resolve the `WriteConfig` via `limnifs_write::profile::select`.
+  Format tag becomes `limnifs:{profile}` so summaries are
+  distinguishable in the report.
+- Each profile writes to `limnifs-{profile}.lim` in the dataset work
+  directory so multi-profile runs do not collide. External formats
+  (DwarFS, SquashFS, tar+zstd) run once per dataset — they do not
+  depend on LimniFS profile choice.
+- `report::derive_formats` discovers the format list from results.
+  LimniFS profiles sort first (plain `limnifs` before `limnifs:*`
+  variants, then by name), then external formats in canonical order.
+  Win/loss matrix and per-operation tables both use the dynamic list.
+- Single-file ops (`extract_one`, `locate_one`, `read_random`) run
+  against the primary profile's image (first in the `--profile` list,
+  defaulting to `balanced`). These operations measure CLI overhead
+  more than codec choice, so running them once is sufficient.

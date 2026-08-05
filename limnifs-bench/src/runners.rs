@@ -29,15 +29,33 @@ impl WorkspacePaths {
 /// Writes the manifest, all slabs, and the optional metadata sidecar
 /// to `work`, mirroring what the `limni limn` CLI does. Without these
 /// on disk, downstream extract/verify would fail.
-pub fn limnifs_create(source: &Path, work: &Path, iterations: usize) -> Vec<OperationResult> {
+///
+/// `profile_name` selects the built-in `WriteConfig` from
+/// `limnifs_write::profile::select`. The format string emitted on
+/// every `OperationResult` is `limnifs:{profile_name}` so multi-
+/// profile reports can distinguish rows. The image filename is
+/// `limnifs-{profile_name}.lim` so profiles do not collide.
+pub fn limnifs_create(
+    source: &Path,
+    work: &Path,
+    iterations: usize,
+    profile_name: &str,
+) -> Vec<OperationResult> {
     let mut results = Vec::with_capacity(iterations);
-    let image = work.join("limnifs.lim");
+    let image = work.join(format!("limnifs-{profile_name}.lim"));
+    let format_tag = format!("limnifs:{profile_name}");
+    let config = match limnifs_write::profile::select(profile_name) {
+        Some(c) => c,
+        None => {
+            eprintln!("  [limnifs:{profile_name}] unknown profile");
+            return results;
+        }
+    };
 
     for i in 0..iterations {
         let _ = std::fs::remove_file(&image);
         let before = ResourceSnapshot::now();
         let start = Instant::now();
-        let config = limnifs_write::profile::balanced();
         let artifact = limnifs_write::write_directory_with_config(source, &config);
         let elapsed = start.elapsed();
         let after = ResourceSnapshot::now();
@@ -51,8 +69,8 @@ pub fn limnifs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Oper
                     let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
                     let slab_path = work.join(slab_name);
                     if let Err(e) = std::fs::write(&slab_path, &slab.bytes) {
-                        eprintln!("  [limnifs] create iteration {i}: slab write failed: {e}");
-                        results.push(OperationResult::failure("limnifs", "create", elapsed));
+                        eprintln!("  [{format_tag}] create iteration {i}: slab write failed: {e}");
+                        results.push(OperationResult::failure(&format_tag, "create", elapsed));
                         continue;
                     }
                     total_size += slab.bytes.len() as u64;
@@ -66,9 +84,9 @@ pub fn limnifs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Oper
                     let sidecar_path = work.join(name);
                     if let Err(e) = std::fs::write(&sidecar_path, &sidecar.bytes) {
                         eprintln!(
-                            "  [limnifs] create iteration {i}: metadata sidecar write failed: {e}"
+                            "  [{format_tag}] create iteration {i}: metadata sidecar write failed: {e}"
                         );
-                        results.push(OperationResult::failure("limnifs", "create", elapsed));
+                        results.push(OperationResult::failure(&format_tag, "create", elapsed));
                         continue;
                     }
                     total_size += sidecar.bytes.len() as u64;
@@ -76,12 +94,12 @@ pub fn limnifs_create(source: &Path, work: &Path, iterations: usize) -> Vec<Oper
 
                 let _ = std::fs::write(&image, &a.bytes);
                 results.push(OperationResult::measure(
-                    "limnifs", "create", before, after, elapsed, total_size, 1,
+                    &format_tag, "create", before, after, elapsed, total_size, 1,
                 ));
             }
             Err(e) => {
-                eprintln!("  [limnifs] create iteration {i} failed: {e}");
-                results.push(OperationResult::failure("limnifs", "create", elapsed));
+                eprintln!("  [{format_tag}] create iteration {i} failed: {e}");
+                results.push(OperationResult::failure(&format_tag, "create", elapsed));
             }
         }
     }
@@ -94,14 +112,16 @@ pub fn limnifs_extract(
     work: &Path,
     iterations: usize,
     input_size: u64,
+    profile_name: &str,
 ) -> Vec<OperationResult> {
     let limni = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("limni")))
         .unwrap_or_else(|| PathBuf::from("limni"));
 
+    let format_tag = format!("limnifs:{profile_name}");
     let mut results = Vec::with_capacity(iterations);
-    let dest = work.join("extract_limnifs");
+    let dest = work.join(format!("extract_limnifs_{profile_name}"));
 
     for _ in 0..iterations {
         let _ = std::fs::remove_dir_all(&dest);
@@ -126,7 +146,7 @@ pub fn limnifs_extract(
                     + (after_children.system_secs - before_children.system_secs);
                 let rss = after.rss_bytes.max(after_children.rss_bytes);
                 let mut r = OperationResult::measure(
-                    "limnifs", "extract", before, after, elapsed, input_size, 1,
+                    &format_tag, "extract", before, after, elapsed, input_size, 1,
                 );
                 r.cpu_user_secs = user.max(0.0);
                 r.cpu_system_secs = sys.max(0.0);
@@ -134,7 +154,7 @@ pub fn limnifs_extract(
                 results.push(r);
             }
             _ => {
-                results.push(OperationResult::failure("limnifs", "extract", elapsed));
+                results.push(OperationResult::failure(&format_tag, "extract", elapsed));
             }
         }
     }
@@ -142,12 +162,13 @@ pub fn limnifs_extract(
 }
 
 /// Run `LimniFS` verify via the limni binary.
-pub fn limnifs_verify(image: &Path, iterations: usize) -> Vec<OperationResult> {
+pub fn limnifs_verify(image: &Path, iterations: usize, profile_name: &str) -> Vec<OperationResult> {
     let limni = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("limni")))
         .unwrap_or_else(|| PathBuf::from("limni"));
 
+    let format_tag = format!("limnifs:{profile_name}");
     let mut results = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let start = Instant::now();
@@ -155,9 +176,9 @@ pub fn limnifs_verify(image: &Path, iterations: usize) -> Vec<OperationResult> {
         let elapsed = start.elapsed();
         match status {
             Ok(s) if s.success() => {
-                results.push(OperationResult::success("limnifs", "verify", elapsed, 0));
+                results.push(OperationResult::success(&format_tag, "verify", elapsed, 0));
             }
-            _ => results.push(OperationResult::failure("limnifs", "verify", elapsed)),
+            _ => results.push(OperationResult::failure(&format_tag, "verify", elapsed)),
         }
     }
     results
