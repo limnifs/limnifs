@@ -543,6 +543,7 @@ impl WriteConfig {
         registry.insert("bitshuffle+lz4", 0x0F);
         registry.insert("bzip2", 0x10);
         registry.insert("deflate64", 0x11);
+        registry.insert("libdeflate", 0x14);
 
         if !registry.contains_name(&self.defaults.text_codec) {
             return Err(ConfigError::UnknownCodec(self.defaults.text_codec.clone()));
