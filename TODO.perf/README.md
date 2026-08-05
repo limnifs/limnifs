@@ -21,6 +21,7 @@ omnizip-side items are in separate files (prefixed `omnizip-`).
 | 06 | [FastCDC SIMD gear hash](06-fastcdc-simd.md) | P1 | 3d | Create speed | Pending |
 | 07 | [Parallel slab assembly](07-parallel-slab-assembly.md) | P2 | 2d | Create speed | Pending |
 | 08 | [Categorizer early-exit optimisation](08-categorizer-early-exit.md) | P1 | 1h | Create speed | Done (v0.2.18) |
+| 14 | [Tournament short-circuit](14-tournament-short-circuit.md) | P1 | 3h | Create speed | Done (v0.2.22) |
 
 ## Omnizip-side items (filed as proposals)
 

@@ -172,12 +172,31 @@ fn default_chunker_name() -> String {
 /// Compression tournament settings.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TournamentConfig {
-    /// Codecs to try in the tournament (ordered).
+    /// Codecs to try in the tournament (ordered fast → slow).
+    /// The writer iterates these in order and stops early when
+    /// `short_circuit_threshold` is met.
     pub codecs: Vec<String>,
     /// Minimum chunk size for the tournament to try a codec.
     pub min_size_threshold: u32,
     /// Skip tournament for binary class (use `binary_codec` directly).
     pub skip_for_binary: bool,
+    /// Short-circuit the tournament once a codec achieves this ratio
+    /// or better. Stored as per-mille (parts per 1000) so it serialises
+    /// as an integer — 250 means "accept the moment a codec reaches
+    /// 25% of original size". 0 disables short-circuit (try every codec).
+    ///
+    /// For example, on a highly-compressible CSV chunk, LZ4 typically
+    /// reaches ~10% ratio in microseconds; the short-circuit lets us
+    /// accept that and skip the much-slower Brotli pass we would
+    /// otherwise run for ratio parity. On hard-to-compress text where
+    /// LZ4 only reaches ~40%, the tournament continues to Brotli to
+    /// preserve ratio.
+    #[serde(default = "default_short_circuit_threshold")]
+    pub short_circuit_threshold: u32,
+}
+
+fn default_short_circuit_threshold() -> u32 {
+    250
 }
 
 /// Encryption configuration.
@@ -378,6 +397,7 @@ impl WriteConfig {
                 ],
                 min_size_threshold: DEFAULT_TOURNAMENT_MIN_SIZE,
                 skip_for_binary: DEFAULT_TOURNAMENT_SKIP_BINARY,
+                short_circuit_threshold: default_short_circuit_threshold(),
             },
             encryption: EncryptionConfig {
                 aead: DEFAULT_AEAD.to_string(),
@@ -475,6 +495,15 @@ impl WriteConfig {
                 reason: format!(
                     "metadata_quality ({}) out of range 1..=11",
                     self.defaults.metadata_quality
+                ),
+            });
+        }
+        if self.tournament.short_circuit_threshold > 1000 {
+            return Err(ConfigError::InvalidValue {
+                field: "tournament.short_circuit_threshold".into(),
+                reason: format!(
+                    "short_circuit_threshold ({}) out of range 0..=1000 (per-mille)",
+                    self.tournament.short_circuit_threshold
                 ),
             });
         }

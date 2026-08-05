@@ -5,6 +5,35 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.22] — 2026-08-05
+
+### Added
+
+- **Tournament short-circuit** — `process_file` now iterates
+  `WriteConfig::tournament.codecs` for every chunk above
+  `min_size_threshold` and accepts the first codec that reaches
+  `tournament.short_circuit_threshold` (per-mille, default 250 =
+  25% of original size). On compressible text chunks, LZ4 typically
+  reaches <10% ratio in microseconds — the short-circuit accepts
+  that and skips the much-slower Brotli pass we would otherwise run.
+
+  Per-profile thresholds (per-mille):
+
+  | Profile | Threshold | Behaviour |
+  |---|---:|---|
+  | `max-ratio` | 0 | Try every codec, pick smallest |
+  | `max-speed` / `max-write` / `max-write-rw` | 500 | Accept almost any codec |
+  | `balanced` / `competitive` / `balanced-rw` | 250 | Accept first codec < 25% |
+  | `max-read` / `max-read-rw` | 200 | Tighter — favor ratio |
+
+  Binary chunks with `skip_for_binary` and chunks below
+  `min_size_threshold` bypass the tournament entirely (matches
+  v0.1 behaviour). Categorizer-routed files (FLAC, RICEPP,
+  FSST+Brotli) still go through `process_whole_file_drop` and are
+  not affected.
+
+  Closes TODO.perf/14.
+
 ## [0.2.21] — 2026-08-05
 
 ### Changed

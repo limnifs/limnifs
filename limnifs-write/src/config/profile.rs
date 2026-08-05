@@ -105,6 +105,7 @@ pub fn max_ratio() -> WriteConfig {
             ],
             min_size_threshold: 256,
             skip_for_binary: false,
+            short_circuit_threshold: 0,
         },
         codec_tunables: CodecTunables {
             ppmd7: crate::config::Ppmd7Tunables {
@@ -174,6 +175,7 @@ pub fn max_speed() -> WriteConfig {
             codecs: vec!["store".into(), "lz4".into()],
             min_size_threshold: 0,
             skip_for_binary: true,
+            short_circuit_threshold: 500,
         },
         codec_tunables: CodecTunables {
             brotli: crate::config::BrotliTunables {
@@ -227,6 +229,7 @@ pub fn balanced() -> WriteConfig {
             codecs: vec!["store".into(), "lz4".into(), "brotli".into()],
             min_size_threshold: 256,
             skip_for_binary: true,
+            short_circuit_threshold: 250,
         },
         codec_tunables: CodecTunables {
             brotli: crate::config::BrotliTunables {
@@ -277,6 +280,7 @@ pub fn competitive() -> WriteConfig {
             codecs: vec!["store".into(), "lz4".into(), "brotli".into()],
             min_size_threshold: 0,
             skip_for_binary: true,
+            short_circuit_threshold: 250,
         },
         codec_tunables: CodecTunables {
             brotli: crate::config::BrotliTunables {
@@ -333,6 +337,7 @@ pub fn max_read() -> WriteConfig {
             codecs: vec!["store".into(), "lz4".into(), "zstd".into(), "brotli".into()],
             min_size_threshold: 256,
             skip_for_binary: false,
+            short_circuit_threshold: 200,
         },
         codec_tunables: CodecTunables {
             brotli: crate::config::BrotliTunables {
@@ -393,6 +398,7 @@ pub fn max_write() -> WriteConfig {
             codecs: vec!["store".into(), "lz4".into()],
             min_size_threshold: 0,
             skip_for_binary: true,
+            short_circuit_threshold: 500,
         },
         codec_tunables: CodecTunables::default(),
         encryption: EncryptionConfig {
@@ -441,6 +447,7 @@ pub fn max_write_rw() -> WriteConfig {
             codecs: vec!["store".into(), "lz4".into()],
             min_size_threshold: 0,
             skip_for_binary: true,
+            short_circuit_threshold: 500,
         },
         codec_tunables: CodecTunables::default(),
         mode: crate::config::ImageMode::ReadWrite(crate::config::RWMode::CopyOnWrite),
@@ -489,6 +496,7 @@ pub fn max_read_rw() -> WriteConfig {
             codecs: vec!["store".into(), "lz4".into(), "zstd".into(), "brotli".into()],
             min_size_threshold: 256,
             skip_for_binary: false,
+            short_circuit_threshold: 200,
         },
         codec_tunables: CodecTunables {
             brotli: crate::config::BrotliTunables {
@@ -542,6 +550,7 @@ pub fn balanced_rw() -> WriteConfig {
             codecs: vec!["store".into(), "lz4".into(), "zstd".into()],
             min_size_threshold: 256,
             skip_for_binary: true,
+            short_circuit_threshold: 250,
         },
         codec_tunables: CodecTunables {
             brotli: crate::config::BrotliTunables {

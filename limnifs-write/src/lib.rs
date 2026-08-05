@@ -228,6 +228,25 @@ pub fn write_directory_with_config(
         let tunables = config.to_core_tunables();
         let use_categorizers = !config.categorizers.is_empty();
         let skip_chunking = config.skip_chunking;
+        // Resolve tournament codec ids once at the top level so each
+        // rayon worker reuses the same Vec rather than rebuilding it
+        // per file. Unknown names are silently skipped — `validate()`
+        // already rejected unknown codecs by this point.
+        let registry = config.codec_registry().map_err(|e| {
+            WriteError::Io(std::io::Error::other(format!("codec registry: {e}")))
+        })?;
+        let tournament_codec_ids: Vec<u8> = config
+            .tournament
+            .codecs
+            .iter()
+            .filter_map(|name| registry.lookup_by_name(name))
+            .collect();
+        let tournament_spec = TournamentSpec {
+            codec_ids: tournament_codec_ids,
+            min_size: config.tournament.min_size_threshold as usize,
+            skip_for_binary: config.tournament.skip_for_binary,
+            short_circuit_permille: config.tournament.short_circuit_threshold,
+        };
         let results: Vec<ChunkedFileResult> = pending
             .par_iter()
             .map(|pf| {
@@ -240,6 +259,7 @@ pub fn write_directory_with_config(
                     &tunables,
                     use_categorizers,
                     skip_chunking,
+                    &tournament_spec,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -263,6 +283,33 @@ type RawDrop = ([u8; 32], Vec<u8>, Vec<u8>, u8);
 struct ChunkedFileResult {
     drops: Vec<RawDrop>, // (id, plaintext, compressed, codec)
     slices: Vec<PendingSlice>,
+}
+
+/// Resolved tournament configuration passed to per-chunk compression.
+///
+/// Built once at the top level from `WriteConfig::tournament` so each
+/// rayon worker reuses the same Vec rather than rebuilding it per
+/// file. Codecs are stored as numeric ids (looked up via
+/// `WriteConfig::codec_registry`) — `process_file` never sees the
+/// string form.
+struct TournamentSpec {
+    /// Codec ids to try, in declared order. `process_file` iterates
+    /// these and tracks the best compression. `CODEC_STORE` entries
+    /// are ignored (store is always the implicit fallback).
+    codec_ids: Vec<u8>,
+    /// Chunks below this many bytes get the preferred codec only
+    /// (no tournament) — the per-codec setup cost dominates at small
+    /// sizes and the ratio difference is negligible.
+    min_size: usize,
+    /// When true, binary-classified chunks skip the tournament and
+    /// use `binary_codec` directly. Matches the v0.1 behaviour where
+    /// binary chunks were never worth the tournament cost.
+    skip_for_binary: bool,
+    /// Short-circuit threshold in per-mille (0..=1000). 0 disables
+    /// short-circuit. Whenever a codec achieves compression ratio
+    /// ≤ threshold, the tournament accepts it and skips any slower
+    /// codecs later in the list.
+    short_circuit_permille: u32,
 }
 
 /// Compress a whole file as a single drop using the categorizer's
@@ -335,6 +382,92 @@ fn process_whole_file_drop(
 ///
 /// First consults the file-level categorizer registry. If a
 /// categorizer claims the file (e.g. FLAC for WAV, ricepp for FITS,
+/// Compress a single chunk via the configured tournament.
+///
+/// Iterates `tournament.codec_ids` in declared order, tracks the
+/// smallest output, and short-circuits when a codec achieves
+/// compression ratio ≤ `tournament.short_circuit_permille`.
+///
+/// Special cases:
+/// - **Binary chunks with `skip_for_binary`**: skip the tournament
+///   entirely and use `binary_codec`. Matches v0.1 behaviour.
+/// - **Chunks smaller than `min_size`**: use the class's preferred
+///   codec directly. Per-codec setup cost dominates here and the
+///   ratio difference is negligible at small sizes.
+/// - **Class unknown to writer** (Unknown / future classes): STORE.
+///
+/// The tournament never tries `CODEC_STORE` (id 0x00) — store is
+/// always the implicit fallback if every codec fails to compress.
+fn compress_chunk_with_tournament(
+    chunk: &[u8],
+    class: classifier::Class,
+    text_codec: u8,
+    binary_codec: u8,
+    tunables: &limnifs_core::codec::CodecTunables,
+    tournament: &TournamentSpec,
+) -> (u8, Vec<u8>) {
+    use classifier::Class;
+
+    let preferred = match class {
+        Class::Binary => binary_codec,
+        Class::Text | Class::Code | Class::Sparse => text_codec,
+        _ => limnifs_core::codec::CODEC_STORE,
+    };
+
+    if preferred == limnifs_core::codec::CODEC_STORE {
+        return (limnifs_core::codec::CODEC_STORE, chunk.to_vec());
+    }
+    if class == Class::Binary && tournament.skip_for_binary {
+        return compress_chunk_one(chunk, preferred, tunables);
+    }
+    if chunk.len() < tournament.min_size {
+        return compress_chunk_one(chunk, preferred, tunables);
+    }
+
+    let mut best: Option<(u8, Vec<u8>)> = None;
+    for &codec_id in &tournament.codec_ids {
+        if codec_id == limnifs_core::codec::CODEC_STORE {
+            continue;
+        }
+        let c = match limnifs_core::codec::compress_with_tunables(codec_id, chunk, tunables) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if c.len() >= chunk.len() {
+            continue;
+        }
+        let ratio_permille = (c.len() as u64 * 1000 / chunk.len() as u64) as u32;
+        let is_best_so_far = best.as_ref().map_or(true, |(_, b)| c.len() < b.len());
+        if is_best_so_far {
+            best = Some((codec_id, c));
+        } else {
+            drop(c);
+        }
+        if tournament.short_circuit_permille > 0 && ratio_permille <= tournament.short_circuit_permille
+        {
+            break;
+        }
+    }
+
+    best.unwrap_or_else(|| (limnifs_core::codec::CODEC_STORE, chunk.to_vec()))
+}
+
+/// Compress `chunk` with a single codec, falling back to STORE if
+/// the codec fails or expansion occurs.
+fn compress_chunk_one(
+    chunk: &[u8],
+    codec_id: u8,
+    tunables: &limnifs_core::codec::CodecTunables,
+) -> (u8, Vec<u8>) {
+    if codec_id == limnifs_core::codec::CODEC_STORE {
+        return (limnifs_core::codec::CODEC_STORE, chunk.to_vec());
+    }
+    match limnifs_core::codec::compress_with_tunables(codec_id, chunk, tunables) {
+        Ok(c) if c.len() < chunk.len() => (codec_id, c),
+        _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
+    }
+}
+
 /// FSST+Brotli for CSV), the whole file is compressed as a single
 /// drop with the categorizer's chosen codec + parameters. Otherwise
 /// falls through to `FastCDC` + per-chunk classify.
@@ -347,6 +480,7 @@ fn process_file(
     tunables: &limnifs_core::codec::CodecTunables,
     use_categorizers: bool,
     skip_chunking: bool,
+    tournament: &TournamentSpec,
 ) -> Result<ChunkedFileResult, WriteError> {
     let data = std::fs::read(&pf.path)?;
     let file_len = data.len();
@@ -422,22 +556,8 @@ fn process_file(
         .par_iter()
         .map(|(chunk, drop_id)| {
             let class = classifier.classify(chunk);
-            let preferred_codec = match class {
-                classifier::Class::Binary => binary_codec,
-                classifier::Class::Text | classifier::Class::Code | classifier::Class::Sparse => {
-                    text_codec
-                }
-                _ => limnifs_core::codec::CODEC_STORE,
-            };
-            let (codec_id, compressed) = if preferred_codec == limnifs_core::codec::CODEC_STORE {
-                (limnifs_core::codec::CODEC_STORE, chunk.to_vec())
-            } else {
-                match limnifs_core::codec::compress_with_tunables(preferred_codec, chunk, tunables)
-                {
-                    Ok(c) if c.len() < chunk.len() => (preferred_codec, c),
-                    _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
-                }
-            };
+            let (codec_id, compressed) =
+                compress_chunk_with_tournament(chunk, class, text_codec, binary_codec, tunables, tournament);
             (*drop_id, chunk.to_vec(), compressed, codec_id)
         })
         .collect();
@@ -1280,6 +1400,130 @@ fn pseudo_random_bytes(seed: u64, count: usize) -> Vec<u8> {
 mod tests {
     use super::*;
     use limnifs_core::ManifestCursor;
+
+    #[test]
+    fn tournament_short_circuits_on_highly_compressible_chunk() {
+        // Repetitive text compresses to <25% under LZ4. Tournament
+        // should accept LZ4 and skip the slower Brotli pass.
+        let chunk = b"hello world ".repeat(500);
+        let tunables = limnifs_core::codec::CodecTunables::default();
+        let tournament = TournamentSpec {
+            codec_ids: vec![
+                limnifs_core::codec::CODEC_LZ4,
+                limnifs_core::codec::CODEC_BROTLI,
+            ],
+            min_size: 16,
+            skip_for_binary: false,
+            short_circuit_permille: 250,
+        };
+        let (codec_id, compressed) = compress_chunk_with_tournament(
+            &chunk,
+            classifier::Class::Text,
+            limnifs_core::codec::CODEC_BROTLI,
+            limnifs_core::codec::CODEC_LZ4,
+            &tunables,
+            &tournament,
+        );
+        assert_eq!(codec_id, limnifs_core::codec::CODEC_LZ4);
+        assert!(compressed.len() < chunk.len());
+    }
+
+    #[test]
+    fn tournament_runs_all_codecs_when_short_circuit_disabled() {
+        // short_circuit_permille = 0 means "never short-circuit". The
+        // tournament must try every codec and pick the smallest.
+        let chunk = b"hello world ".repeat(500);
+        let tunables = limnifs_core::codec::CodecTunables::default();
+        let tournament = TournamentSpec {
+            codec_ids: vec![
+                limnifs_core::codec::CODEC_LZ4,
+                limnifs_core::codec::CODEC_BROTLI,
+            ],
+            min_size: 16,
+            skip_for_binary: false,
+            short_circuit_permille: 0,
+        };
+        let (codec_id, compressed) = compress_chunk_with_tournament(
+            &chunk,
+            classifier::Class::Text,
+            limnifs_core::codec::CODEC_BROTLI,
+            limnifs_core::codec::CODEC_LZ4,
+            &tunables,
+            &tournament,
+        );
+        // Brotli should beat LZ4 on repetitive text.
+        assert_eq!(codec_id, limnifs_core::codec::CODEC_BROTLI);
+        assert!(compressed.len() < chunk.len());
+    }
+
+    #[test]
+    fn tournament_skips_for_binary_when_configured() {
+        let chunk = vec![0u8; 4096];
+        let tunables = limnifs_core::codec::CodecTunables::default();
+        let tournament = TournamentSpec {
+            codec_ids: vec![limnifs_core::codec::CODEC_BROTLI],
+            min_size: 16,
+            skip_for_binary: true,
+            short_circuit_permille: 250,
+        };
+        let (codec_id, _compressed) = compress_chunk_with_tournament(
+            &chunk,
+            classifier::Class::Binary,
+            limnifs_core::codec::CODEC_BROTLI,
+            limnifs_core::codec::CODEC_LZ4,
+            &tunables,
+            &tournament,
+        );
+        // skip_for_binary → use binary_codec (LZ4) directly, never Brotli.
+        assert_eq!(codec_id, limnifs_core::codec::CODEC_LZ4);
+    }
+
+    #[test]
+    fn tournament_small_chunk_uses_preferred_codec() {
+        let chunk = b"tiny";
+        let tunables = limnifs_core::codec::CodecTunables::default();
+        let tournament = TournamentSpec {
+            codec_ids: vec![limnifs_core::codec::CODEC_BROTLI],
+            min_size: 1024,
+            skip_for_binary: false,
+            short_circuit_permille: 0,
+        };
+        let (codec_id, _compressed) = compress_chunk_with_tournament(
+            chunk,
+            classifier::Class::Text,
+            limnifs_core::codec::CODEC_BROTLI,
+            limnifs_core::codec::CODEC_LZ4,
+            &tunables,
+            &tournament,
+        );
+        // Below min_size → preferred codec (brotli for text) directly.
+        assert_eq!(codec_id, limnifs_core::codec::CODEC_STORE);
+    }
+
+    #[test]
+    fn tournament_falls_back_to_store_when_no_codec_compresses() {
+        // Random data — no codec should improve on store. We use the
+        // pseudo-random generator from the test helpers to get
+        // deterministic but incompressible bytes.
+        let chunk = pseudo_random_bytes(42, 4096);
+        let tunables = limnifs_core::codec::CodecTunables::default();
+        let tournament = TournamentSpec {
+            codec_ids: vec![limnifs_core::codec::CODEC_LZ4],
+            min_size: 16,
+            skip_for_binary: false,
+            short_circuit_permille: 0,
+        };
+        let (codec_id, compressed) = compress_chunk_with_tournament(
+            &chunk,
+            classifier::Class::Binary,
+            limnifs_core::codec::CODEC_BROTLI,
+            limnifs_core::codec::CODEC_LZ4,
+            &tunables,
+            &tournament,
+        );
+        assert_eq!(codec_id, limnifs_core::codec::CODEC_STORE);
+        assert_eq!(compressed.len(), chunk.len());
+    }
 
     #[test]
     fn dictionaries_enabled_emits_dictionary_section_when_enough_samples() {
