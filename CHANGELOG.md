@@ -5,6 +5,28 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.36] — 2026-08-05
+
+### Added
+
+- **Cross-file compress cache** — each rayon worker thread now carries
+  a thread-local `HashMap<DropId, (codec_id, compressed_bytes)>`. When
+  two files share a chunk (common in source trees, container layers,
+  build artifacts, and tiny-files benchmarks), the second file hits
+  the cache and skips the tournament compress pass entirely.
+
+  Cache is bounded at 100K entries (~16 GB worst case at 16 KB/chunk);
+  eviction is "stop inserting once full" for simplicity. Output bytes
+  are unchanged — the cache reuses the same `(codec_id, compressed)`
+  the tournament would have produced.
+
+  Most impactful on workloads with significant duplicate content.
+  Tiny-files benchmark with 50K identical 18-byte files improved
+  modestly (~7%); the dominant cost there is per-file I/O and
+  categorization, not compression. Real workloads (layered container
+  images, successive build outputs, source trees with vendored deps)
+  will see larger gains proportional to their redundancy.
+
 ## [0.2.35] — 2026-08-05
 
 ### Changed
