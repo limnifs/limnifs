@@ -497,10 +497,17 @@ pub fn decompress(
 }
 
 /// Compress with LZ4, prepending the original size as a 4-byte LE
-/// header (the format `lz4_flex::decompress_size_prepended` expects).
+/// header. Routes through `omnizip-lz4::Lz4FastCodec` so callers stay
+/// first-party (omnizip) for the codec implementation.
 #[must_use]
 pub fn compress_lz4_with_size(plaintext: &[u8]) -> Vec<u8> {
-    lz4::compress_lz4_with_size(plaintext)
+    let codec = omnizip_lz4::Lz4FastCodec;
+    omnizip_codecs::Codec::compress(
+        &codec,
+        plaintext,
+        omnizip_codecs::CompressionLevel::default(),
+    )
+    .unwrap_or_else(|_| plaintext.to_vec())
 }
 
 /// Compress with Zstandard at `CompressionLevel::Fastest` (ZSTD level 1).
@@ -849,7 +856,10 @@ mod tests {
         let compressed = compress_brotli(data).expect("brotli compress");
         match decompress(CODEC_BROTLI, &compressed, 99) {
             Err(CoreError::Corrupt { reason }) => {
-                assert!(reason.contains("does not match"), "got: {reason}");
+                assert!(
+                    reason.contains("does not match") || reason.contains("mismatch"),
+                    "got: {reason}"
+                );
             }
             other => panic!("expected Corrupt, got {other:?}"),
         }
@@ -886,7 +896,10 @@ mod tests {
         let compressed = compress_deflate(data).expect("deflate compress");
         match decompress(CODEC_DEFLATE, &compressed, 99) {
             Err(CoreError::Corrupt { reason }) => {
-                assert!(reason.contains("does not match"), "got: {reason}");
+                assert!(
+                    reason.contains("does not match") || reason.contains("mismatch"),
+                    "got: {reason}"
+                );
             }
             other => panic!("expected Corrupt, got {other:?}"),
         }

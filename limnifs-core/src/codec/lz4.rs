@@ -21,7 +21,8 @@
 use crate::codec::Codec;
 use crate::error::CoreError;
 
-/// LZ4 fast codec. Wraps `lz4_flex::compress_prepend_size`.
+/// LZ4 fast codec. Wraps `omnizip_lz4::Lz4FastCodec` (which in turn
+/// wraps `lz4_flex::compress_prepend_size`).
 pub struct Lz4Codec;
 
 impl Codec for Lz4Codec {
@@ -34,11 +35,24 @@ impl Codec for Lz4Codec {
     }
 
     fn compress(&self, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
-        Ok(compress_lz4_with_size(plaintext))
+        let codec = omnizip_lz4::Lz4FastCodec;
+        omnizip_codecs::Codec::compress(
+            &codec,
+            plaintext,
+            omnizip_codecs::CompressionLevel::default(),
+        )
+        .map_err(lz4_fast_err)
     }
 
     fn decompress(&self, compressed: &[u8], expected_len: u32) -> Result<Vec<u8>, CoreError> {
-        decompress_lz4_prepended(compressed, expected_len)
+        let codec = omnizip_lz4::Lz4FastCodec;
+        omnizip_codecs::Codec::decompress(&codec, compressed, expected_len).map_err(lz4_fast_err)
+    }
+}
+
+fn lz4_fast_err(e: omnizip_codecs::OmnizipError) -> CoreError {
+    CoreError::Corrupt {
+        reason: format!("lz4: {e}"),
     }
 }
 
@@ -71,7 +85,8 @@ impl Codec for Lz4HcCodec {
 
     fn decompress(&self, compressed: &[u8], expected_len: u32) -> Result<Vec<u8>, CoreError> {
         // Same wire format as fast LZ4.
-        decompress_lz4_prepended(compressed, expected_len)
+        let fast = omnizip_lz4::Lz4FastCodec;
+        omnizip_codecs::Codec::decompress(&fast, compressed, expected_len).map_err(lz4_hc_err)
     }
 }
 
@@ -79,34 +94,6 @@ fn lz4_hc_err(e: omnizip_codecs::OmnizipError) -> CoreError {
     CoreError::Corrupt {
         reason: format!("lz4-hc: {e}"),
     }
-}
-
-/// Decompress an LZ4 block with the 4-byte LE size prefix. Shared by
-/// fast and HC variants.
-fn decompress_lz4_prepended(compressed: &[u8], expected_len: u32) -> Result<Vec<u8>, CoreError> {
-    let expected_us = usize::try_from(expected_len).map_err(|_| CoreError::Corrupt {
-        reason: format!("decompress: expected_len {expected_len} exceeds usize"),
-    })?;
-    let result =
-        lz4_flex::decompress_size_prepended(compressed).map_err(|e| CoreError::Corrupt {
-            reason: format!("lz4 decompress failed: {e}"),
-        })?;
-    if result.len() != expected_us {
-        return Err(CoreError::Corrupt {
-            reason: format!(
-                "lz4 decompress: result length {} does not match plaintext_len {expected_us}",
-                result.len()
-            ),
-        });
-    }
-    Ok(result)
-}
-
-/// Compress with LZ4 fast, prepending the original size as a 4-byte LE
-/// header (the format `lz4_flex::decompress_size_prepended` expects).
-#[must_use]
-pub fn compress_lz4_with_size(plaintext: &[u8]) -> Vec<u8> {
-    lz4_flex::compress_prepend_size(plaintext)
 }
 
 #[cfg(test)]

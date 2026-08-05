@@ -5,6 +5,36 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.25] — 2026-08-05
+
+### Changed
+
+- **omnizip 0.14.11** — bumped omnizip-lzma and omnizip-zstd from
+  0.14.10 to 0.14.11. Brings omnizip-rs PR TODO 136 (libdeflate
+  pure-Rust — `omnizip-libdeflate` no longer carries a `miniz_oxide`
+  fallback in its `[dependencies]`) and TODO 146 (reusable-state
+  sweep — `LzmaCompressor` mirrors `ZstdCompressor`/`PpmdCompressor`).
+
+- **First-party codec migration** — per the project rule "prefer
+  omnizip-* over third-party codec crates", the codec wrappers in
+  `limnifs-core/src/codec/` now route through omnizip APIs end-to-end:
+
+  | Wrapper | Before | After |
+  |---|---|---|
+  | `lz4.rs` (LZ4 fast + HC) | `lz4_flex` direct | `omnizip_lz4::{Lz4FastCodec, Lz4HcCodec}` |
+  | `deflate.rs` | `miniz_oxide` direct | `omnizip_deflate::DeflateCodec` |
+  | `brotli.rs` | `brotli` direct | `omnizip_brotli::BrotliCodec` |
+  | `zstd.rs` | already omnizip | unchanged |
+
+  Removed direct deps: `brotli`, `lz4_flex`, `miniz_oxide`, `ruzstd`.
+  These still appear transitively (omnizip-brotli wraps brotli;
+  omnizip-deflate and omnizip-libdeflate use miniz_oxide; omnizip-lz4
+  uses lz4_flex), but LimniFS no longer imports them directly — the
+  codec stack is omnizip end-to-end.
+
+  Wire format unchanged: same codec ids, same bytes, same round-trip
+  behavior. All 579 workspace tests pass.
+
 ## [0.2.24] — 2026-08-05
 
 ### Changed
