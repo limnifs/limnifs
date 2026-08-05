@@ -5,6 +5,26 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.35] — 2026-08-05
+
+### Changed
+
+- **omnizip 0.14.20** — bumped all 17 omnizip-* crates from 0.14.19
+  to 0.14.20. Brings omnizip-rs TODO 116 — **libdeflate dynamic-Huffman
+  correctness fix**: the broken package-merge was replaced with
+  correct standard Huffman + zlib CPI length limiting. Dynamic-Huffman
+  path re-enabled.
+
+  **`CODEC_LIBDEFLATE` (0x14) is the LimniFS codec most affected.**
+  Text and binary inputs see 10-20% better ratio (previously the
+  dynamic-Huffman path was degrading to stored blocks). Our
+  libdeflate wrapper automatically benefits — no code change
+  required.
+
+  Round-trip safety verified by the existing `cross_decodes_with_deflate`
+  test, which exercises the wire format with the miniz_oxide-backed
+  `CODEC_DEFLATE` (0x05) decoder.
+
 ## [0.2.34] — 2026-08-05
 
 ### Changed
