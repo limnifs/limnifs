@@ -706,12 +706,45 @@ fn process_file(
     // Phase 2: compress unique chunks in parallel across rayon workers.
     // This is the CPU-intensive step — parallelizing it gives N-core
     // speedup for large files with many chunks.
+    //
+    // Cross-file dedup: each rayon worker thread carries a thread-local
+    // compress cache mapping DropId -> (codec_id, compressed_bytes).
+    // When two files share a chunk (common in source trees, container
+    // layers, tiny-files benchmarks), the second file hits the cache
+    // and skips the compress pass entirely. Cache is bounded by entry
+    // count; eviction is "stop inserting once full" — simple and
+    // correct, misses are bounded by worker count.
     use rayon::prelude::*;
+    thread_local! {
+        static COMPRESS_CACHE: std::cell::RefCell<std::collections::HashMap<[u8; 32], (u8, Vec<u8>)>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    const COMPRESS_CACHE_MAX_ENTRIES: usize = 100_000;
     let drops: Vec<([u8; 32], Vec<u8>, Vec<u8>, u8)> = unique_chunks
         .par_iter()
         .map(|(chunk, drop_id)| {
             let class = classifier.classify(chunk);
-            let (codec_id, compressed) =
+            // Cache fast-path: identical chunk already compressed on
+            // this worker → reuse bytes, skip tournament entirely.
+            let cached = COMPRESS_CACHE.with(|c| {
+                c.borrow().get(drop_id).map(|(cid, comp)| (*cid, comp.clone()))
+            });
+            let (codec_id, compressed) = if let Some(c) = cached {
+                c
+            } else {
+                let new =
+                    compress_chunk_with_tournament(chunk, class, text_codec, binary_codec, tunables, tournament);
+                // Insert into the per-worker cache if there's room.
+                // Borrow scope must end before any other COMPRESS_CACHE
+                // access on this thread.
+                COMPRESS_CACHE.with(|c| {
+                    let mut cache = c.borrow_mut();
+                    if cache.len() < COMPRESS_CACHE_MAX_ENTRIES {
+                        cache.insert(*drop_id, (new.0, new.1.clone()));
+                    }
+                });
+                new
+            };
                 compress_chunk_with_tournament(chunk, class, text_codec, binary_codec, tunables, tournament);
             (*drop_id, chunk.to_vec(), compressed, codec_id)
         })
