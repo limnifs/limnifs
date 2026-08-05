@@ -5,6 +5,42 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.26] — 2026-08-05
+
+### Added
+
+- **`CODEC_LIBDEFLATE` (0x14)** — second independent DEFLATE
+  implementation alongside `CODEC_DEFLATE` (0x05). Both are RFC 1951
+  DEFLATE wrapped in RFC 1950 zlib; `0x14` uses `omnizip-libdeflate`
+  (omnizip's pure-Rust port — LZ77 + fixed-Huffman encode, canonical
+  Huffman inflate, optimized for decode speed), `0x05` uses
+  `omnizip-deflate` (wraps `miniz_oxide`). Wire-compatible: a writer
+  using `0x14` produces output decodable by a reader using `0x05`
+  and vice versa.
+
+  **Upstream Adler-32 bug worked around.** `omnizip-libdeflate` 0.14.6
+  computes the zlib trailer's Adler-32 over the compressed stream
+  instead of the plaintext (RFC 1950 §9 violation). miniz_oxide and
+  `gzip -d` reject these streams. Our wrapper re-computes the Adler-32
+  over the plaintext and patches the trailer before returning, so
+  output is byte-compatible with `gzip`/`zlib`/0x05. Bug report and
+  acceptance criteria: `docs/omnizip-proposals/libdeflate-adler32.md`.
+
+  5 new unit tests: round-trip text, round-trip empty, cross-decode
+  with `DeflateCodec` (both directions), length-mismatch rejection,
+  Adler-32 known values.
+
+### Changed
+
+- **`XzCodec` now routes through `LzmaCompressor`** — uses omnizip-lzma
+  0.14.11's reusable-state API (per-rayon-worker thread-local
+  `LzmaCompressor`) instead of one-shot `xz_compress`. Today's
+  benefit is mainly forward compatibility — when omnizip adds real
+  per-call encoder-state reuse (TODO 146 follow-ons), our wrapper
+  picks it up automatically. Adds `compress_with_tunables` and
+  `PerCodecTunables` impls so the writer can pass level/lc/lp/pb
+  via `CodecTunables::quality`.
+
 ## [0.2.25] — 2026-08-05
 
 ### Changed

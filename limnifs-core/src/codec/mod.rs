@@ -30,6 +30,7 @@ mod deflate64;
 mod flac;
 mod fsst_brotli;
 mod glza;
+mod libdeflate;
 mod lz4;
 mod ppmd;
 mod ppmd8;
@@ -97,6 +98,19 @@ pub const CODEC_PPMD8: u8 = 0x12;
 /// Codec id 0x13: LZ4 HC (hash-chain match finder + lazy parsing).
 /// Real encoder from omnizip-lz4 0.14.1; was a stub in 0.13.1.
 pub const CODEC_LZ4_HC: u8 = 0x13;
+
+/// Codec id 0x14: libdeflate-compatible DEFLATE (pure-Rust port).
+/// Wire-compatible with `CODEC_DEFLATE` (0x05) — both are RFC 1951
+/// DEFLATE wrapped in RFC 1950 zlib. Different implementation:
+/// `omnizip-libdeflate` is omnizip's in-house pure-Rust port
+/// (LZ77 + fixed-Huffman + canonical Huffman inflate), focused on
+/// decode speed; `omnizip-deflate` (0x05) wraps `miniz_oxide`.
+///
+/// LimniFS exposes both so users can pick the implementation that
+/// wins on their workload. Round-trip is byte-compatible: a writer
+/// using 0x14 produces output decodable by a reader using 0x05 and
+/// vice versa.
+pub const CODEC_LIBDEFLATE: u8 = 0x14;
 
 /// Codec id 0x20: BCJ-x86 filter + LZ4. For x86/x86_64 executables.
 pub const CODEC_BCJ_X86_LZ4: u8 = 0x20;
@@ -359,6 +373,7 @@ impl Default for CodecRegistry {
         registry.register(Box::new(xz::XzCodec));
         registry.register(Box::new(brotli::BrotliCodec));
         registry.register(Box::new(deflate::DeflateCodec));
+        registry.register(Box::new(libdeflate::LibdeflateCodec));
         registry.register(Box::new(snappy::SnappyCodec));
         // Reserved stubs — wire-format ids exist; codecs pending omnizip ports.
         // Registered so `compress(CODEC_FLAC, ...)` surfaces a clear
