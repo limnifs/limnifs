@@ -5,6 +5,29 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.24] — 2026-08-05
+
+### Changed
+
+- **FastCDC 4× unrolled inner loops** — `find_boundary` now processes
+  4 bytes per iteration in both the mask1 and mask2 phases. The
+  four gear lookups per iteration can be hoisted into a vector load
+  by the optimiser; the four mask checks fold into a vector
+  compare. Sequential shift-and-add is unchanged — the gear hash's
+  loop-carried dependency means true SIMD requires either
+  `pclmulqdq` (nightly-only `std::simd`) or a leap-based CDC
+  rewrite (changes wire-format boundaries). See
+  `docs/fastcdc-simd-proposal.md` for the full algorithmic
+  analysis. Closes TODO.perf/06.
+
+- **Parallel slab encoding** — `pack_slabs` now has two phases:
+  sequential slab grouping (per-drop size budget — must be
+  sequential), then parallel `encode_slab` across rayon workers.
+  Cross-slab parallelism gives N-core speedup on multi-slab images.
+  Within a slab, drop records + solid window stay sequential (per-
+  slab size is bounded; cross-slab was the bigger win). Closes
+  TODO.perf/07.
+
 ## [0.2.23] — 2026-08-05
 
 ### Changed

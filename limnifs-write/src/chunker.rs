@@ -232,17 +232,84 @@ impl FastCDC {
 
         let mut fp: u64 = 0;
         let avg_end = (start + self.avg_size).min(max_end);
-        let mut i = start + self.min_size;
+        let gear = &self.gear.bytes;
 
+        // Phase 1: scan from min_size to avg_end with mask1.
+        // 4-byte unrolled inner loop: the four gear lookups can be
+        // hoisted by the optimiser into a vectorised load, and the
+        // four mask checks become a single vectorised compare. The
+        // shift-and-add per byte stays sequential (it is a true
+        // loop-carried dependency — see the proposal at
+        // docs/fastcdc-simd-proposal.md for why full SIMD requires
+        // leap-based CDC, not `wide::u64x2`).
+        let mut i = start + self.min_size;
+        let unroll_end1 = i + ((avg_end - i) / 4) * 4;
+        while i < unroll_end1 {
+            let b0 = usize::from(data[i]);
+            let b1 = usize::from(data[i + 1]);
+            let b2 = usize::from(data[i + 2]);
+            let b3 = usize::from(data[i + 3]);
+            let g0 = gear[b0];
+            let g1 = gear[b1];
+            let g2 = gear[b2];
+            let g3 = gear[b3];
+            fp = (fp << 1).wrapping_add(g0);
+            if fp & self.mask1 == 0 {
+                return i + 1;
+            }
+            fp = (fp << 1).wrapping_add(g1);
+            if fp & self.mask1 == 0 {
+                return i + 2;
+            }
+            fp = (fp << 1).wrapping_add(g2);
+            if fp & self.mask1 == 0 {
+                return i + 3;
+            }
+            fp = (fp << 1).wrapping_add(g3);
+            if fp & self.mask1 == 0 {
+                return i + 4;
+            }
+            i += 4;
+        }
         while i < avg_end {
-            fp = (fp << 1).wrapping_add(self.gear.bytes[usize::from(data[i])]);
+            fp = (fp << 1).wrapping_add(gear[usize::from(data[i])]);
             if fp & self.mask1 == 0 {
                 return i + 1;
             }
             i += 1;
         }
+
+        // Phase 2: scan from avg_end to max_end with mask2.
+        let unroll_end2 = i + ((max_end - i) / 4) * 4;
+        while i < unroll_end2 {
+            let b0 = usize::from(data[i]);
+            let b1 = usize::from(data[i + 1]);
+            let b2 = usize::from(data[i + 2]);
+            let b3 = usize::from(data[i + 3]);
+            let g0 = gear[b0];
+            let g1 = gear[b1];
+            let g2 = gear[b2];
+            let g3 = gear[b3];
+            fp = (fp << 1).wrapping_add(g0);
+            if fp & self.mask2 == 0 {
+                return i + 1;
+            }
+            fp = (fp << 1).wrapping_add(g1);
+            if fp & self.mask2 == 0 {
+                return i + 2;
+            }
+            fp = (fp << 1).wrapping_add(g2);
+            if fp & self.mask2 == 0 {
+                return i + 3;
+            }
+            fp = (fp << 1).wrapping_add(g3);
+            if fp & self.mask2 == 0 {
+                return i + 4;
+            }
+            i += 4;
+        }
         while i < max_end {
-            fp = (fp << 1).wrapping_add(self.gear.bytes[usize::from(data[i])]);
+            fp = (fp << 1).wrapping_add(gear[usize::from(data[i])]);
             if fp & self.mask2 == 0 {
                 return i + 1;
             }
