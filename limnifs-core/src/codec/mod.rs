@@ -659,18 +659,18 @@ mod tests {
         // fix. omnizip 0.5 produced identical output for all 5 levels;
         // 0.7 must differentiate.
         //
-        // We compare Fastest (L1) vs Fast (L3) because omnizip 0.14.8
-        // has an upstream regression on Default (L6) and higher for
-        // highly-repetitive inputs — see
-        // `docs/omnizip-proposals/zstd-default-broken.md`. When that
-        // is fixed, restore the L1 vs L6 comparison.
+        // 0.14.8 had a regression where Default (L6) and higher produced
+        // pathological output on this input (50 KB+ and 14+ s). 0.14.10
+        // (omnizip-rs PR #90) fixes it; this test stays as a guard
+        // against future regressions. See
+        // `docs/omnizip-proposals/zstd-default-broken.md`.
         let input: Vec<u8> = b"The quick brown fox jumps over the lazy dog. ".repeat(2000);
         let l1 = omnizip_zstd::compress(&input, omnizip_zstd::ZstdLevel::Fastest).expect("zstd L1");
-        let l3 = omnizip_zstd::compress(&input, omnizip_zstd::ZstdLevel::Fast).expect("zstd L3");
+        let l6 = omnizip_zstd::compress(&input, omnizip_zstd::ZstdLevel::Default).expect("zstd L6");
         assert!(
-            l3.len() <= l1.len(),
-            "ZSTD L3 ({}) should beat or tie L1 ({}); level differentiation broken",
-            l3.len(),
+            l6.len() < l1.len(),
+            "ZSTD L6 ({}) should beat L1 ({}); level differentiation broken",
+            l6.len(),
             l1.len()
         );
     }

@@ -1,19 +1,28 @@
 # omnizip-zstd: Default (L6) regression on highly-repetitive inputs
 
-- **omnizip version:** 0.14.8 (all 17 crates)
-- **LimniFS version:** 0.2.21 (workaround in place)
+- **omnizip version affected:** 0.14.8, 0.14.9
+- **omnizip version fixed:** 0.14.10 (omnizip-rs PR #90)
+- **LimniFS versions affected:** 0.2.21 (workaround in place)
+- **LimniFS versions fixed:** 0.2.23 (workaround removed)
 - **Filed:** 2026-08-05
-- **Status:** Open — awaiting upstream fix
+- **Status:** **RESOLVED upstream** — 2026-08-05
 
 ## Summary
 
-`omnizip_zstd::compress` at `ZstdLevel::Default` (L6), `Better` (L12),
-and `Best` (L22) produces pathological output on highly-repetitive
-inputs: 500–700× larger than `Fastest` (L1) and 70,000× slower.
+`omnizip_zstd::compress` at `ZstdLevel::Default` (L6), `Better`
+(L12), and `Best` (L22) produced pathological output on
+highly-repetitive inputs in omnizip 0.14.8/0.14.9: 500–700× larger
+than `Fastest` (L1) and 70,000× slower.
 
-`Fastest` (L1) and `Fast` (L3) are unaffected.
+`Fastest` (L1) and `Fast` (L3) were unaffected.
 
-## Reproduction
+## Resolution
+
+omnizip-rs PR #90 (released in 0.14.10) restores correct level
+differentiation. LimniFS 0.2.23 removes the L3 cap in
+`level_for_quality` and restores the L1-vs-L6 regression test.
+
+## Historical reproduction (0.14.8)
 
 Input: `b"The quick brown fox jumps over the lazy dog. ".repeat(2000)`
 (90,000 bytes of highly-compressible text).
@@ -28,11 +37,11 @@ Better      50,842          95.74 s
 Best        (not run — killed after 2 minutes)
 ```
 
-`Default` and `Better` produce identical 50,842-byte output — strongly
-suggesting the encoder falls back to raw/uncompressed block mode for
-this input at those levels.
+`Default` and `Better` produced identical 50,842-byte output —
+strongly suggesting the encoder fell back to raw/uncompressed
+block mode for this input at those levels.
 
-## Side effects on LimniFS
+## Historical side effects on LimniFS (0.2.21)
 
 Three correctness tests in `limnifs-core/src/codec/mod.rs` failed:
 
@@ -43,27 +52,21 @@ Three correctness tests in `limnifs-core/src/codec/mod.rs` failed:
 Full workspace test suite runtime: **367 seconds** (3 ZSTD tests
 eating ~99% of wall time).
 
-## Workaround in LimniFS
+## Workaround in LimniFS 0.2.21
 
-`limnifs-core/src/codec/zstd.rs::level_for_quality` now caps every
-requested level at `Fast` (L3). The profile field
-`WriteConfig::codec_tunables.zstd_quality` still accepts 1–22 for
-forward compatibility, but anything above 3 collapses to L3 until
-upstream fixes the encoder.
+`limnifs-core/src/codec/zstd.rs::level_for_quality` capped every
+requested level at `Fast` (L3). Decompression was unaffected —
+ZSTD's wire format is level-independent.
 
-Decompression is unaffected — ZSTD's wire format is level-independent.
+## Acceptance criteria (all met)
 
-## Acceptance criteria (upstream)
+1. ✅ `omnizip_zstd::compress(input, ZstdLevel::Default)` produces
+   output ≤ `ZstdLevel::Fast` output for any input where `Fast`
+   output < input.
+2. ✅ `compress` at `Default`/`Better`/`Best` completes in ≤ 10× the
+   time of `Fast` on inputs under 1 MiB.
+3. ✅ The three LimniFS tests pass with the original L1-vs-L6
+   comparison.
 
-The fix is shipped when, on `omnizip-zstd` ≥ next minor:
-
-1. `omnizip_zstd::compress(input, ZstdLevel::Default)` produces output
-   ≤ `ZstdLevel::Fast` output for any input where `Fast` output < input.
-2. `compress` at `Default`/`Better`/`Best` completes in ≤ 10× the time
-   of `Fast` on inputs under 1 MiB.
-3. The three LimniFS tests above pass without the L1/L3 rewrite.
-
-When that lands, restore the original
-`6..=11 → Default, 12..=21 → Better, 22+ → Best` mapping in
-`level_for_quality` and the L1 vs L6 comparison in
-`zstd_higher_levels_compress_better_than_lower`.
+The L3 cap in `level_for_quality` and the L1-vs-L3 test variant
+were both reverted in LimniFS 0.2.23.
