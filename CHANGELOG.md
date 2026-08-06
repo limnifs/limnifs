@@ -5,6 +5,45 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.37] — 2026-08-06
+
+### Added
+
+- **`write_layer` API** — the headline feature closing the
+  overlay/ComposeFS gap. New entry point
+  `limnifs_write::write_layer(base_image, root, config)` produces a
+  `.lim` image that **references** a base image's drops rather than
+  re-encoding them. Chunks whose `DropId` exists in the base are
+  recorded only as `PendingSlice` references — no slab bytes are
+  emitted in the layer. The reader resolves them via the overlay
+  chain at read time.
+
+  The resulting manifest carries a `delta_linkage` section with the
+  base's `ManifestRoot`, so any reader that supports overlay chains
+  can extract the layer standalone (if all drops are local) or
+  stacked on the base.
+
+  Closes TODO.perf/23. This is the container-image pattern: a 1 GB
+  base + 10 MB layer is now built, stored, and distributed as two
+  independent images with near-zero overhead on the reused content.
+
+### Internal
+
+- **`CODEC_REFERENCED` (0xFE)** — sentinel codec id for drops that
+  are resolved via the overlay chain. Never appears in slab drop
+  records; used only as an in-memory marker in `PendingDrop::codec`
+  so `pack_slabs` knows to skip them.
+- **`SlabStore::drop_index_keys()`** — new public accessor that
+  yields an iterator over every `DropId` known to the store. Used by
+  `load_base_drop_index` to build the base's drop set for layer
+  dedup.
+- **`write_directory_body`** — shared body extracted from
+  `write_directory_with_config`. Both the standalone and layer entry
+  points now use it. DRY: no parallel-iteration code duplication.
+- **New TODO.perf files** — 15 through 25 covering the remaining
+  LimniFS-side perf + feature work. TODO.perf/23 (write_layer) is
+  done in this release; the rest are planned.
+
 ## [0.2.36] — 2026-08-05
 
 ### Added
