@@ -3,6 +3,7 @@
 - **Priority:** P1
 - **Side:** LimniFS
 - **Est. effort:** 4h
+- **Status:** Done — `limni inspect <image.lim>` already existed (prints format versions, metadata blob stats, slab layout, file/dir counts). Confirmed working in v0.2.37.
 
 ## Problem
 

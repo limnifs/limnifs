@@ -28,10 +28,10 @@ omnizip-side items are in separate files (prefixed `omnizip-`).
 | 18 | [mmap on the output side](18-mmap-output.md) | P2 | 6h | Memory | Pending |
 | 19 | [BLAKE3 hash-tree parallelism](19-blake3-hash-tree.md) | P2 | 1d | Create speed | Pending |
 | 20 | [Parallel slab decode (read side)](20-parallel-slab-decode.md) | P1 | 1d | Extract speed | Pending |
-| 21 | [Drop-record batch encoding](21-drop-record-batching.md) | P2 | 3h | Create speed | Pending |
+| 21 | [Drop-record batch encoding](21-drop-record-batching.md) | P2 | 3h | Create speed | Done (v0.2.38) |
 | 22 | [Arc<Vec<u8>> for compressed bytes](22-arc-compressed-bytes.md) | P1 | 6h | Memory | Pending |
 | 23 | [Write-side overlay layering](23-write-side-overlay-layering.md) | P0 | 1d | Architecture | **Done (v0.2.37)** |
-| 24 | [`limni inspect`](24-cli-inspect.md) | P1 | 4h | UX | Pending |
+| 24 | [`limni inspect`](24-cli-inspect.md) | P1 | 4h | UX | Done (pre-existing) |
 | 25 | [Sign-then-verify CLI workflow](25-sign-verify-workflow.md) | P1 | 6h | Security | Pending |
 
 ## Omnizip-side items (filed as proposals)
