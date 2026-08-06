@@ -3,6 +3,7 @@
 - **Priority:** P2
 - **Side:** LimniFS
 - **Est. effort:** 3h
+- **Status:** Done (v0.2.38) — pre-allocation with `drops.len() * 49` capacity
 
 ## Problem
 

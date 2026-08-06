@@ -1735,7 +1735,13 @@ fn pack_slabs(drops: &[PendingDrop]) -> Vec<SlabArtifact> {
 /// `offset_in_window` is computed fresh; there is no global offset
 /// state on `PendingDrop`.
 fn encode_slab(ordinal: u64, drops: &[&PendingDrop]) -> SlabArtifact {
-    let mut drop_records = Vec::new();
+    // Each drop record is a fixed 49-byte entry: id(32) +
+    // plaintext_len(4) + representation(3) + solid_window_index(1)
+    // + offset_in_window(4) + window_len(4) + dict_id(1). Pre-sizing
+    // the records Vec avoids per-drop realloc and amortises to a
+    // single memcpy per field rather than bounds-check per call.
+    const DROP_RECORD_LEN: usize = 49;
+    let mut drop_records = Vec::with_capacity(drops.len() * DROP_RECORD_LEN);
     let mut solid_window = Vec::new();
     let mut drop_ids = Vec::with_capacity(drops.len());
     let mut offset_in_window: u32 = 0;
