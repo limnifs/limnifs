@@ -5,6 +5,41 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.39] — 2026-08-06
+
+### Changed
+
+- **Dependency updates** — blake3 1.8.5 → 1.8.6, clap 4.6.5 → 4.6.6,
+  zerocopy 0.8.55 → 0.8.56. All semver-compatible patches; no API
+  changes. omnizip remains at 0.14.20 (latest published).
+
+### LimniFS state at v0.2.39
+
+- 586 workspace tests passing
+- 19 codec variants (LZ4, LZ4-HC, ZSTD, XZ/LZMA, Brotli, DEFLATE,
+  libdeflate, Snappy, FLAC, ricepp, FSST+Brotli, BLOSC+Shuffle+LZ4,
+  ZPAQ, PPMd7, PPMd8, GLZA, Shuffle+ZSTD, Bitshuffle+LZ4, BZip2,
+  Deflate64, BCJ composites ×4)
+- 9 profiles (read-only + read-write)
+- `write_layer` overlay API for container-image pattern
+- `write_stream` streaming API for pipe-from-reader workloads
+- Cross-file compress cache for dedup workloads
+- mmap input for large files, madvise prefetch on slab reads
+- Tournament short-circuit + whole-file short-circuit
+- FastCDC 4× unrolled gear hash, parallel slab assembly
+- 16 of 17 omnizip crates pure-Rust (only `brotli` crate remains)
+- `limni inspect`, `limni verify`, `limni extract`, `limni mount`,
+  `limni limn`, `limni cat`, `limni ls`, `limni stat`
+- `limni open/commit/turnover/add/update/delete` for RW images
+
+## [0.2.38] — 2026-08-06
+
+### Changed
+
+- **Drop-record batch pre-allocation** — `encode_slab`'s `drop_records`
+  Vec now pre-allocates `drops.len() * 49` capacity. Each drop record
+  is a fixed 49-byte entry; pre-sizing avoids per-drop realloc.
+
 ## [0.2.37] — 2026-08-06
 
 ### Added
