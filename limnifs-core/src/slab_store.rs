@@ -172,12 +172,14 @@ impl SlabStore {
             // access the page cache is cold; without this hint, each
             // page faults individually. MADV_WILLNEED triggers
             // readahead so pages are resident by the time we access
-            // them.
+            // them. POSIX only — windows has no madvise; the hint is
+            // advisory, never load-bearing.
             //
             // SAFETY: mmap is a valid read-only mapping of the slab
             // file. madvise with MADV_WILLNEED is a hint, not a
             // mutation; it cannot corrupt the mapping. The pointer
             // and length are derived from the Mmap which is valid.
+            #[cfg(unix)]
             #[allow(unsafe_code)]
             {
                 let ptr = mmap.as_ref().as_ptr() as *mut libc::c_void;
