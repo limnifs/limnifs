@@ -121,6 +121,16 @@ pub const CODEC_BCJ_ARM64_LZ4: u8 = 0x23;
 /// Codec id 0x24: BCJ-ARM64 filter + ZSTD.
 pub const CODEC_BCJ_ARM64_ZSTD: u8 = 0x24;
 
+/// Codec id 0xFE: REFERENCED. Sentinel codec id for drops that are
+/// not stored in this image's slabs — the bytes live in a base image
+/// and the reader resolves them via the overlay chain.
+///
+/// Never appears in a slab's drop records. Used as a marker in
+/// in-memory writer state (`PendingDrop::codec`) so that `pack_slabs`
+/// knows to skip the drop. Wire format is unchanged: drops absent
+/// from all slabs are simply absent from all slab index entries.
+pub const CODEC_REFERENCED: u8 = 0xFE;
+
 /// Codec-agnostic tunables. Every codec reads only the fields it
 /// understands; the rest are ignored. The struct is the
 /// single source of truth for "what knobs does the writer want to

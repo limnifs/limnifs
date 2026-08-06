@@ -45,10 +45,13 @@ use std::path::{Path, PathBuf};
 
 use crate::chunker::FastCDC;
 use limnifs_core::{
-    compute_merkle_root, hash_empty_section, hash_section, ManifestHeader, SectionHashes,
+    compute_merkle_root, hash_empty_section, hash_section, parse_manifest_header,
+    parse_slab_index, ManifestCursor, ManifestHeader, SectionHashes,
     FEATURE_FLAGS_SECTION_VERSION, HISTORY_SECTION_VERSION, INODE_FLAG_INLINE_DATA,
     INODE_FLAG_SHARED_INLINE, METADATA_REFERENCE_SECTION_VERSION_2, SLAB_INDEX_SECTION_VERSION,
 };
+use limnifs_core::codec::CODEC_REFERENCED;
+use limnifs_core::slab_store::SlabStore;
 use limnifs_format::{ManifestRoot, SlabId};
 
 /// Inline-data threshold: files at or below this size get inline data
@@ -322,13 +325,214 @@ pub fn write_stream<R: std::io::Read>(
     Ok(artifact)
 }
 
+/// Pack a directory tree as a **layer** on top of a base image.
+///
+/// Produces a `.lim` image whose drops are split into two sets:
+///
+/// - **Local drops** — chunks in `root` whose `DropId` is NOT in
+///   `base_image`'s drop set. These are compressed and stored in the
+///   layer's own slabs exactly as `write_directory_with_config`
+///   would store them.
+/// - **Referenced drops** — chunks whose `DropId` IS in the base.
+///   These are recorded only as `PendingSlice` references (so the
+///   metadata tree links them in); no slab bytes are emitted in the
+///   layer. The reader resolves them via the overlay chain.
+///
+/// The resulting manifest carries a `delta_linkage` section pointing
+/// at the base image's `ManifestRoot`, so any reader that supports
+/// overlay chains can extract the layer standalone or stacked on the
+/// base.
+///
+/// # Determinism
+///
+/// `write_layer` is deterministic given the same `base_image`, the
+/// same `root` content, and the same `config`. Two runs produce
+/// byte-identical layer images.
+///
+/// # Errors
+///
+/// Returns [`WriteError::Io`] on read failure or any writer-pipeline
+/// error.
+///
+/// # Example
+///
+/// ```no_run
+/// use limnifs_write::{write_layer, profile};
+///
+/// let base = std::path::Path::new("base.lim");
+/// let root = std::path::Path::new("./new-content");
+/// let cfg = profile::balanced();
+/// let artifact = write_layer(base, root, &cfg).expect("layer");
+/// // artifact.bytes is the layer manifest; slabs contain only NEW drops.
+/// ```
+pub fn write_layer(
+    base_image: &Path,
+    root: &Path,
+    config: &WriteConfig,
+) -> Result<WriteArtifact, WriteError> {
+    // Load the base image's drop set + manifest root.
+    let (base_drop_index, base_root) = load_base_drop_index(base_image)?;
+
+    let mut ctx = WriteContext::new();
+    ctx.categorizers_disabled = config.categorizers.is_empty();
+    ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
+    ctx.auto_turnover = config.turnover_threshold > 0;
+    ctx.collect_dict_samples = config.dictionaries.enabled;
+    ctx.base_drop_index = Some(base_drop_index);
+    ctx.base_root = Some(base_root);
+
+    // Rest is identical to write_directory_with_config.
+    let root_inode_number = ctx.walk(root)?;
+    ctx.root_inode_number = root_inode_number;
+    write_directory_body(&mut ctx, config)?;
+    Ok(ctx.assemble())
+}
+
+/// Load every DropId present in a base image's slabs + the image's
+/// `ManifestRoot`. Used by `write_layer` to decide which chunks can
+/// be referenced rather than re-encoded.
+fn load_base_drop_index(
+    base_image: &Path,
+) -> Result<(std::collections::HashSet<[u8; 32]>, [u8; 32]), WriteError> {
+    let manifest_bytes = std::fs::read(base_image)?;
+    let mut cursor = ManifestCursor::new(&manifest_bytes);
+    let _ = parse_manifest_header(&mut cursor).map_err(io_core)?;
+    // Walk sections in spec order: flags → metadata_reference → slab_index.
+    let _ = limnifs_core::parse_feature_flags_section(&mut cursor);
+    let _ = limnifs_core::parse_metadata_reference(&mut cursor);
+    let slab_index = parse_slab_index(&mut cursor).map_err(io_core)?;
+    let store = SlabStore::load_mmap(base_image, &slab_index)
+        .map_err(io_core)?;
+    let drop_set: std::collections::HashSet<[u8; 32]> = store.drop_index_keys().copied().collect();
+    // Re-derive the Merkle root from the base manifest's section
+    // bytes. The base's `ManifestRoot` is the canonical anchor for
+    // the layer's `delta_linkage.base_root` field — round-tripping
+    // through section hashes guarantees it matches what the base
+    // reported on its own assemble path.
+    let root = *compute_merkle_root_from_sections(&manifest_bytes).as_bytes();
+    Ok((drop_set, root))
+}
+
+/// Re-derive a manifest's `ManifestRoot` from its on-disk section
+/// bytes. Mirrors `flatten::compute_merkle_root_from_sections` but
+/// tolerates absent optional sections (returns hash_empty_section()
+/// for them). Used by `load_base_drop_index` to anchor a layer's
+/// `base_root` without re-instantiating a full manifest parser.
+fn compute_merkle_root_from_sections(manifest: &[u8]) -> ManifestRoot {
+    use limnifs_core::SectionHashes;
+    let mut cursor = ManifestCursor::new(manifest);
+    let header_start = 0;
+    if parse_manifest_header(&mut cursor).is_err() {
+        // Not a valid manifest; fall back to all-zero root.
+        return ManifestRoot::from_bytes([0u8; 32]);
+    }
+    let header_end = cursor.position();
+    // Optional sections — best-effort parse; failures hash as empty.
+    let flags_start = header_end;
+    let flags_end = match limnifs_core::parse_feature_flags_section(&mut cursor) {
+        Ok(_) => cursor.position(),
+        Err(_) => flags_start,
+    };
+    let meta_ref_start = flags_end;
+    let metadata_reference =
+        match limnifs_core::parse_metadata_reference(&mut cursor) {
+            Ok(m) => Some(m),
+            Err(_) => None,
+        };
+    let meta_ref_end = cursor.position();
+    let slab_index_start = meta_ref_end;
+    let _ = parse_slab_index(&mut cursor);
+    let slab_index_end = cursor.position();
+    let history_start = slab_index_end;
+    let _ = limnifs_core::parse_history(&mut cursor);
+    let history_end = cursor.position();
+
+    let hashes = SectionHashes {
+        metadata: metadata_reference.map(|m| m.metadata_hash).unwrap_or_else(hash_empty_section),
+        format_header: hash_section(&manifest[header_start..header_end]),
+        feature_flags: hash_section(&manifest[flags_start..flags_end]),
+        metadata_reference: hash_section(&manifest[meta_ref_start..meta_ref_end]),
+        slab_index: hash_section(&manifest[slab_index_start..slab_index_end]),
+        crypto_params: hash_empty_section(),
+        ec_params: hash_empty_section(),
+        dms_policy: hash_empty_section(),
+        delta_linkage: hash_empty_section(),
+        history: hash_section(&manifest[history_start..history_end]),
+    };
+    compute_merkle_root(&hashes)
+}
+
+fn io_core(e: limnifs_core::CoreError) -> WriteError {
+    WriteError::Io(std::io::Error::other(format!("base image load: {e}")))
+}
+
+/// Shared body between `write_directory_with_config` and `write_layer`.
+/// Walks `ctx.pending_files` through `process_file` in parallel and
+/// merges the results back. Caller is responsible for `walk()` and
+/// `assemble()`.
+fn write_directory_body(
+    ctx: &mut WriteContext,
+    config: &WriteConfig,
+) -> Result<(), WriteError> {
+    use rayon::prelude::*;
+
+    let pending = std::mem::take(&mut ctx.pending_files);
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let chunker = ctx.chunker.clone();
+    let classifier = ctx.classifier;
+    let text_codec = config.text_codec_id().unwrap_or(0x04);
+    let binary_codec = config.binary_codec_id().unwrap_or(0x01);
+    let tunables = config.to_core_tunables();
+    let use_categorizers = !config.categorizers.is_empty();
+    let skip_chunking = config.skip_chunking;
+    let registry = config.codec_registry().map_err(|e| {
+        WriteError::Io(std::io::Error::other(format!("codec registry: {e}")))
+    })?;
+    let tournament_codec_ids: Vec<u8> = config
+        .tournament
+        .codecs
+        .iter()
+        .filter_map(|n| registry.lookup_by_name(n))
+        .collect();
+    let tournament_spec = TournamentSpec {
+        codec_ids: tournament_codec_ids,
+        min_size: config.tournament.min_size_threshold as usize,
+        skip_for_binary: config.tournament.skip_for_binary,
+        short_circuit_permille: config.tournament.short_circuit_threshold,
+    };
+    let base_drop_index = ctx.base_drop_index.as_ref();
+    let results: Vec<ChunkedFileResult> = pending
+        .par_iter()
+        .map(|pf| {
+            process_file(
+                pf,
+                &chunker,
+                classifier,
+                text_codec,
+                binary_codec,
+                &tunables,
+                use_categorizers,
+                skip_chunking,
+                &tournament_spec,
+                base_drop_index,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for (pf, result) in pending.iter().zip(results) {
+        ctx.merge_chunked_file(pf, result);
+    }
+    ctx.train_and_apply_dictionary(&config.dictionaries);
+    Ok(())
+}
+
 /// Create an image with a custom [`WriteConfig`] (e.g. from a profile).
 pub fn write_directory_with_config(
     root: &Path,
     config: &WriteConfig,
 ) -> Result<WriteArtifact, WriteError> {
-    use rayon::prelude::*;
-
     let mut ctx = WriteContext::new();
     ctx.categorizers_disabled = config.categorizers.is_empty();
     ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
@@ -337,63 +541,8 @@ pub fn write_directory_with_config(
 
     let root_inode_number = ctx.walk(root)?;
     ctx.root_inode_number = root_inode_number;
-
-    let pending = std::mem::take(&mut ctx.pending_files);
-    if !pending.is_empty() {
-        let chunker = ctx.chunker.clone();
-        let classifier = ctx.classifier;
-        let text_codec = config.text_codec_id().unwrap_or(0x04);
-        let binary_codec = config.binary_codec_id().unwrap_or(0x01);
-        let tunables = config.to_core_tunables();
-        let use_categorizers = !config.categorizers.is_empty();
-        let skip_chunking = config.skip_chunking;
-        // Resolve tournament codec ids once at the top level so each
-        // rayon worker reuses the same Vec rather than rebuilding it
-        // per file. Unknown names are silently skipped — `validate()`
-        // already rejected unknown codecs by this point.
-        let registry = config.codec_registry().map_err(|e| {
-            WriteError::Io(std::io::Error::other(format!("codec registry: {e}")))
-        })?;
-        let tournament_codec_ids: Vec<u8> = config
-            .tournament
-            .codecs
-            .iter()
-            .filter_map(|name| registry.lookup_by_name(name))
-            .collect();
-        let tournament_spec = TournamentSpec {
-            codec_ids: tournament_codec_ids,
-            min_size: config.tournament.min_size_threshold as usize,
-            skip_for_binary: config.tournament.skip_for_binary,
-            short_circuit_permille: config.tournament.short_circuit_threshold,
-        };
-        let results: Vec<ChunkedFileResult> = pending
-            .par_iter()
-            .map(|pf| {
-                process_file(
-                    pf,
-                    &chunker,
-                    classifier,
-                    text_codec,
-                    binary_codec,
-                    &tunables,
-                    use_categorizers,
-                    skip_chunking,
-                    &tournament_spec,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        for (pf, result) in pending.iter().zip(results) {
-            ctx.merge_chunked_file(pf, result);
-        }
-    }
-
-    // Post-parallel: train one ZSTD dictionary (if enabled + enough
-    // samples) and re-compress ZSTD drops with it.
-    ctx.train_and_apply_dictionary(&config.dictionaries);
-
-    let artifact = ctx.assemble();
-    Ok(artifact)
+    write_directory_body(&mut ctx, config)?;
+    Ok(ctx.assemble())
 }
 
 /// One chunk of a file before dedup: (`drop_id`, `plaintext`, `compressed`, `codec`).
@@ -615,6 +764,7 @@ fn process_file(
     use_categorizers: bool,
     skip_chunking: bool,
     tournament: &TournamentSpec,
+    base_drop_index: Option<&std::collections::HashSet<[u8; 32]>>,
 ) -> Result<ChunkedFileResult, WriteError> {
     // For files above MMAP_READ_THRESHOLD, map them rather than reading
     // into a Vec via std::fs::read. Pages load on demand from the
@@ -723,6 +873,13 @@ fn process_file(
     let drops: Vec<([u8; 32], Vec<u8>, Vec<u8>, u8)> = unique_chunks
         .par_iter()
         .map(|(chunk, drop_id)| {
+            // Layer fast-path: chunk already exists in the base image
+            // → skip compress entirely.
+            if let Some(base) = base_drop_index {
+                if base.contains(drop_id) {
+                    return (*drop_id, Vec::new(), Vec::new(), CODEC_REFERENCED);
+                }
+            }
             let class = classifier.classify(chunk);
             // Cache fast-path: identical chunk already compressed on
             // this worker → reuse bytes, skip tournament entirely.
@@ -735,8 +892,6 @@ fn process_file(
                 let new =
                     compress_chunk_with_tournament(chunk, class, text_codec, binary_codec, tunables, tournament);
                 // Insert into the per-worker cache if there's room.
-                // Borrow scope must end before any other COMPRESS_CACHE
-                // access on this thread.
                 COMPRESS_CACHE.with(|c| {
                     let mut cache = c.borrow_mut();
                     if cache.len() < COMPRESS_CACHE_MAX_ENTRIES {
@@ -745,7 +900,6 @@ fn process_file(
                 });
                 new
             };
-                compress_chunk_with_tournament(chunk, class, text_codec, binary_codec, tunables, tournament);
             (*drop_id, chunk.to_vec(), compressed, codec_id)
         })
         .collect();
@@ -874,6 +1028,17 @@ struct WriteContext {
     /// in the manifest's `dictionary_section` with one entry per
     /// class that accumulated enough samples.
     trained_dicts_by_class: HashMap<crate::classifier::Class, crate::dictionary::TrainedDictionary>,
+    /// Drop IDs known to exist in a base image (set when this write
+    /// is producing a layer via `write_layer`). When a chunk's DropId
+    /// is in this set, the writer skips compression and emits no slab
+    /// bytes — the drop is resolved via the overlay chain at read
+    /// time. `None` for standalone (non-layer) writes.
+    base_drop_index: Option<HashSet<[u8; 32]>>,
+    /// The base image's `ManifestRoot` (set when `base_drop_index`
+    /// is `Some`). Emitted in the manifest's `delta_linkage` section
+    /// so readers know which image provides the referenced drops.
+    /// `None` for standalone writes.
+    base_root: Option<[u8; 32]>,
 }
 
 impl WriteContext {
@@ -903,6 +1068,8 @@ impl WriteContext {
             collect_dict_samples: false,
             dict_samples_by_class: HashMap::new(),
             trained_dicts_by_class: HashMap::new(),
+            base_drop_index: None,
+            base_root: None,
         }
     }
 
@@ -1368,6 +1535,29 @@ impl WriteContext {
             limnifs_core::dictionary_section::encode_dictionary_section(&section, &mut manifest);
         }
 
+        let dictionary_end = manifest.len();
+
+        // DeltaLinkage section (optional — emitted only by `write_layer`).
+        // Carries `base_root` so readers can resolve referenced drops via
+        // the overlay chain. The section's hash feeds the
+        // `SectionHashes::delta_linkage` slot, which is empty for
+        // standalone images.
+        let delta_linkage_hash = if let Some(base_root) = self.base_root {
+            let delta_start = manifest.len();
+            // Inline-encode the delta linkage section (version 1):
+            // [version:u8][base_root:32][tree_op_count:u32=0]. Tree ops
+            // are empty because the metadata blob carries the full new
+            // tree — readers see `base_root` and know to walk the
+            // overlay chain for any DropId not present in local slabs.
+            manifest.push(limnifs_core::delta_linkage::DELTA_LINKAGE_SECTION_VERSION);
+            manifest.extend_from_slice(&base_root);
+            manifest.extend_from_slice(&0u32.to_le_bytes());
+            hash_section(&manifest[delta_start..])
+        } else {
+            hash_empty_section()
+        };
+        let _ = dictionary_end;
+
         let hashes = SectionHashes {
             metadata: metadata_hash,
             format_header: hash_section(&manifest[header_start..header_end]),
@@ -1377,7 +1567,7 @@ impl WriteContext {
             crypto_params: hash_empty_section(),
             ec_params: hash_empty_section(),
             dms_policy: hash_empty_section(),
-            delta_linkage: hash_empty_section(),
+            delta_linkage: delta_linkage_hash,
             history: hash_section(&manifest[history_start..history_end]),
             // The Merkle construction doesn't currently include a
             // dictionary_section hash slot. Treat the section as
@@ -1490,7 +1680,15 @@ fn encode_dir_node(entries: &[(String, u64, u8)]) -> DirNode {
 /// still produces one slab — we cannot split a drop, and the spec
 /// permits the reader to raise its ceiling for that case.
 fn pack_slabs(drops: &[PendingDrop]) -> Vec<SlabArtifact> {
-    if drops.is_empty() {
+    // Filter out CODEC_REFERENCED sentinel drops — they exist in the
+    // writer's in-memory state for inode/slice bookkeeping but are
+    // resolved via the overlay chain at read time, never stored in
+    // this image's slabs.
+    let local_drops: Vec<&PendingDrop> = drops
+        .iter()
+        .filter(|d| d.codec != limnifs_core::codec::CODEC_REFERENCED)
+        .collect();
+    if local_drops.is_empty() {
         return Vec::new();
     }
 
@@ -1504,13 +1702,13 @@ fn pack_slabs(drops: &[PendingDrop]) -> Vec<SlabArtifact> {
     let mut current: Vec<&PendingDrop> = Vec::new();
     let mut current_size: usize = 0;
 
-    for drop in drops {
+    for drop in &local_drops {
         let footprint = drop.slab_footprint();
         if !current.is_empty() && current_size + footprint > max_content {
             slab_groups.push(std::mem::take(&mut current));
             current_size = 0;
         }
-        current.push(drop);
+        current.push(*drop);
         current_size += footprint;
     }
     if !current.is_empty() {
@@ -1634,6 +1832,73 @@ mod tests {
         // enough that round-tripping through the reader works.
         let total_drop_bytes: usize = artifact.slabs.iter().map(|s| s.bytes.len()).sum();
         assert!(total_drop_bytes > 0, "drops non-empty");
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn write_layer_references_base_drops() {
+        // Build a base image with a 1 MiB text file, then build a
+        // layer that ADDS a new file AND includes the same text file.
+        // The layer's slab bytes must be small (just the new file)
+        // because the text file's chunks hit the base's drop set and
+        // are emitted as `CODEC_REFERENCED`.
+        let temp = std::env::temp_dir().join(format!(
+            "limnifs-write-layer-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).expect("create temp dir");
+
+        // Base: 1 MiB of repetitive text + a small unique file.
+        let base_dir = temp.join("base");
+        std::fs::create_dir_all(&base_dir).expect("base dir");
+        let text = b"layer test content line\n".repeat(50_000); // ~1.15 MiB
+        std::fs::write(base_dir.join("shared.txt"), &text).expect("write shared");
+        std::fs::write(base_dir.join("base-only.txt"), b"only in base").expect("write base-only");
+
+        let config = WriteConfig::default_v0_1();
+        let base_artifact = write_directory_with_config(&base_dir, &config).expect("base");
+
+        let base_manifest = temp.join("base.lim");
+        std::fs::write(&base_manifest, &base_artifact.bytes).expect("write base manifest");
+        for slab in &base_artifact.slabs {
+            let slab_name = slab
+                .locator
+                .strip_prefix("file:")
+                .unwrap_or(&slab.locator);
+            std::fs::write(temp.join(slab_name), &slab.bytes).expect("write base slab");
+        }
+
+        // Layer: same shared.txt (must dedup against base) + a new file.
+        let layer_dir = temp.join("layer");
+        std::fs::create_dir_all(&layer_dir).expect("layer dir");
+        std::fs::write(layer_dir.join("shared.txt"), &text).expect("write shared in layer");
+        std::fs::write(layer_dir.join("new.txt"), b"fresh content in layer").expect("write new");
+
+        let layer_artifact = write_layer(&base_manifest, &layer_dir, &config).expect("layer");
+
+        // The layer's slabs should be SMALL — only the new file's
+        // content. shared.txt's chunks are referenced via the base.
+        let layer_slab_bytes: usize = layer_artifact.slabs.iter().map(|s| s.bytes.len()).sum();
+        let base_slab_bytes: usize = base_artifact.slabs.iter().map(|s| s.bytes.len()).sum();
+        assert!(
+            layer_slab_bytes < base_slab_bytes / 4,
+            "layer slabs ({}) should be much smaller than base ({}) — layering failed",
+            layer_slab_bytes,
+            base_slab_bytes
+        );
+
+        // The layer manifest must contain the base's Merkle root in
+        // its delta_linkage section.
+        let base_root = base_artifact.merkle_root.as_bytes();
+        assert!(
+            layer_artifact.bytes.windows(32).any(|w| w == base_root.as_slice()),
+            "layer manifest must contain base's ManifestRoot bytes"
+        );
 
         let _ = std::fs::remove_dir_all(&temp);
     }

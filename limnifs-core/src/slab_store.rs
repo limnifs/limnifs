@@ -241,6 +241,14 @@ impl SlabStore {
         self.drop_index.contains_key(drop_id)
     }
 
+    /// Iterator over every `DropId` known to this store. Used by
+    /// `limnifs_write::write_layer` to build the base-image drop set
+    /// so the layer can reference rather than re-encode matching chunks.
+    #[must_use]
+    pub fn drop_index_keys(&self) -> impl Iterator<Item = &[u8; 32]> {
+        self.drop_index.keys()
+    }
+
     /// Borrowed view onto a slab's bytes, regardless of storage mode.
     /// Index = slab ordinal.
     #[must_use]
