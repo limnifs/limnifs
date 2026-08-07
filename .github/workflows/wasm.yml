@@ -1,0 +1,92 @@
+# Build and publish `@limnifs/limni-wasm` to npm via **trusted publishing**.
+#
+# npm trusted publishing uses OIDC: no long-lived NPM_TOKEN secret.
+# Setup per https://docs.npmjs.com/trusted-publishers:
+#
+#   1. **First publish** is done manually by the package owner:
+#        - `wasm-pack build limnifs-wasm --target bundler --release --scope limnifs`
+#        - `cd limnifs-wasm/pkg && npm publish --access public`
+#
+#   2. **Trusted publishing setup** (one-time, on npm side) at
+#      https://www.npmjs.com/package/@limnifs/limni-wasm/access:
+#        - Organization/user: limnifs
+#        - Repository: limnifs
+#        - Workflow filename: wasm.yml
+#        - Environment: (none)
+#
+#   3. **Subsequent publishes** run from this workflow on tag push.
+#      Requires Node 22.14+ / npm 11.5.1+ for trusted-publishing auth.
+#      Provenance is generated automatically — do NOT pass --provenance.
+#
+# Triggered on release tags (v*.*.*) and via workflow_dispatch.
+
+name: Release WASM
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+
+      # Build the bundler target — produces ESM + CJS + .d.ts that npm
+      # consumers can use regardless of their bundler.
+      - name: Build WASM package
+        run: |
+          wasm-pack build limnifs-wasm \
+            --target bundler \
+            --release \
+            --scope limnifs
+
+      - name: Inspect package
+        run: ls -la limnifs-wasm/pkg/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: limnifs-wasm-pkg
+          path: limnifs-wasm/pkg/
+
+  publish-npm:
+    needs: build-wasm
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      id-token: write  # required for npm trusted publishing (OIDC)
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: limnifs-wasm-pkg
+          path: pkg/
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          # Trusted publishing requires Node 22.14+ / npm 11.5.1+.
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish to npm
+        run: npm publish --access public
+        working-directory: pkg/

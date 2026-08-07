@@ -1,0 +1,58 @@
+# End-to-end tests for the `limni` CLI.
+#
+# Exercises the full create → verify → extract → inspect pipeline
+# against synthetic and real datasets. Runs on every push and PR.
+
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  e2e:
+    name: CLI E2E
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build limni CLI
+        run: cargo build --release -p limni
+
+      - name: Create image
+        run: |
+          mkdir -p /tmp/e2e-input
+          echo "hello world" > /tmp/e2e-input/hello.txt
+          echo "test data" > /tmp/e2e-input/test.txt
+          ./target/release/limni limn /tmp/e2e-input -o /tmp/e2e-test.lim
+
+      - name: Verify image
+        run: ./target/release/limni verify /tmp/e2e-test.lim
+
+      - name: Inspect image
+        run: ./target/release/limni inspect /tmp/e2e-test.lim
+
+      - name: List files
+        run: ./target/release/limni ls /tmp/e2e-test.lim /
+
+      - name: Cat file
+        run: ./target/release/limni cat /tmp/e2e-test.lim /hello.txt
+
+      - name: Extract image
+        run: |
+          mkdir -p /tmp/e2e-output
+          ./target/release/limni extract /tmp/e2e-test.lim /tmp/e2e-output
+          diff /tmp/e2e-input/hello.txt /tmp/e2e-output/hello.txt
+          diff /tmp/e2e-input/test.txt /tmp/e2e-output/test.txt
+
+      - name: Stat file
+        run: ./target/release/limni stat /tmp/e2e-test.lim /hello.txt
