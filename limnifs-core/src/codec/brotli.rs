@@ -1,14 +1,13 @@
 //! Brotli codec (0x04): frame format via `omnizip-brotli`.
 //!
-//! `omnizip-brotli` wraps the upstream `brotli` crate (Daniel Reiter
-//! Horn — the format's original author). We route through the omnizip
-//! API rather than calling `brotli` directly so the codec stack stays
-//! first-party (omnizip) end-to-end.
+//! Routes through the omnizip API end-to-end. As of omnizip 0.14.40 the
+//! encoder is in-house (Phase C partial): quality 0–1 uses the fast
+//! vendored path; quality 2–11 uses `compress_fragment`. Intermediate
+//! quality levels do not yet differentiate ratio the way the C
+//! reference does — see `docs/omnizip-proposals/brotli-phase-c.md`.
 //!
-//! The codec defaults to **quality 5**, Brotli's standard fast mode.
-//! This is the right tradeoff for `LimniFS`'s per-chunk pipeline: fast
-//! enough to keep create throughput competitive with `SquashFS`'s zstd
-//! L1, while beating ZSTD L1 on text/source ratio.
+//! The codec defaults to **quality 5** (fast path for the per-chunk
+//! writer pipeline).
 
 use crate::codec::{Codec, CodecTunables, PerCodecTunables};
 use crate::error::CoreError;
@@ -73,11 +72,11 @@ impl Codec for BrotliCodec {
         plaintext: &[u8],
         t: &CodecTunables,
     ) -> Result<Vec<u8>, CoreError> {
-        let q = if t.quality > 0 {
-            i32::from(t.quality).clamp(0, 11)
-        } else {
-            DEFAULT_QUALITY
-        };
+        // quality is 0..=11 inclusive. Do NOT treat 0 as "unset" —
+        // 0 is a valid Brotli quality (fastest/store-ish). Callers
+        // that want the default leave CodecTunables::quality at the
+        // Brotli default (5) via from_quality / Default.
+        let q = i32::from(t.quality).clamp(0, 11);
         compress(plaintext, q)
     }
 }
