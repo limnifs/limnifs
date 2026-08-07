@@ -161,7 +161,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "omnizip 0.14.40 fast_encoder produces static dictionary refs the in-house decoder rejects"]
     fn round_trips_csv_like_input() {
         let input = b"id,name,city\n1,alice,paris\n2,bob,london\n3,carol,paris\n".repeat(200);
         let c = FsstBrotliCodec;
