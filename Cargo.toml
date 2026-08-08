@@ -47,8 +47,9 @@ sha2 = { version = "0.10", default-features = false }
 toml = "0.8"
 x25519-dalek = { version = "2.0", default-features = false, features = ["static_secrets", "getrandom"] }
 
-# Temporary: omnizip 0.14.40 published but Brotli fixes (commits
-# 91cf65c, 5fb7b7c, ba550c9) are post-tag. Remove when 0.14.41 publishes.
+# Temporary: omnizip-deflate64 0.15.0 not yet on crates.io (stuck at
+# 0.14.40). Patch all crates to local workspace for consistency.
+# Remove when omnizip-deflate64 publishes 0.15.0.
 [patch.crates-io]
 omnizip-blosc = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-blosc" }
 omnizip-brotli = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-brotli" }
