@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "omnizip-blosc"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
  "omnizip-lz4",
@@ -698,25 +698,25 @@ dependencies = [
 
 [[package]]
 name = "omnizip-brotli"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-bzip2"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-codecs"
-version = "0.14.40"
+version = "0.15.0"
 
 [[package]]
 name = "omnizip-deflate"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
  "omnizip-libdeflate",
@@ -724,91 +724,91 @@ dependencies = [
 
 [[package]]
 name = "omnizip-deflate64"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-filters"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-flac"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-fsst"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-glza"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-libdeflate"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-lz4"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-lzma"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-ppmd"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-ricepp"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-snappy"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-zpaq"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-zstd"
-version = "0.14.40"
+version = "0.15.0"
 dependencies = [
  "omnizip-codecs",
 ]
