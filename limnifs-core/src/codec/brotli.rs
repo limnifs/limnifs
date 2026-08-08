@@ -107,10 +107,7 @@ fn brotli_err(e: omnizip_codecs::OmnizipError) -> CoreError {
 pub(crate) fn compress(plaintext: &[u8], quality: i32) -> Result<Vec<u8>, CoreError> {
     let codec = omnizip_brotli::BrotliCodec;
     let q = quality.clamp(0, 11) as u8;
-    // omnizip 0.15.x maps CompressionLevel to Brotli quality via q = level / 2.
-    // Multiply by 2 so our quality N → Brotli quality N (matching the old
-    // brotli crate wrapper's direct pass-through).
-    let level = omnizip_codecs::CompressionLevel::new(q * 2);
+    let level = omnizip_codecs::CompressionLevel::new(q);
     omnizip_codecs::Codec::compress(&codec, plaintext, level).map_err(brotli_err)
 }
 
