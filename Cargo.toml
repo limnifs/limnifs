@@ -46,26 +46,3 @@ serde = { version = "1.0", features = ["derive"] }
 sha2 = { version = "0.10", default-features = false }
 toml = "0.8"
 x25519-dalek = { version = "2.0", default-features = false, features = ["static_secrets", "getrandom"] }
-
-# Temporary: omnizip-deflate64 0.15.0 not yet on crates.io (stuck at
-# 0.14.40). Patch all crates to local workspace for consistency.
-# Remove when omnizip-deflate64 publishes 0.15.0.
-[patch.crates-io]
-omnizip-blosc = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-blosc" }
-omnizip-brotli = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-brotli" }
-omnizip-bzip2 = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-bzip2" }
-omnizip-codecs = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-codecs" }
-omnizip-deflate = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-deflate" }
-omnizip-deflate64 = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-deflate64" }
-omnizip-filters = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-filters" }
-omnizip-flac = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-flac" }
-omnizip-fsst = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-fsst" }
-omnizip-glza = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-glza" }
-omnizip-libdeflate = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-libdeflate" }
-omnizip-lz4 = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-lz4" }
-omnizip-lzma = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-lzma" }
-omnizip-ppmd = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-ppmd" }
-omnizip-ricepp = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-ricepp" }
-omnizip-snappy = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-snappy" }
-omnizip-zpaq = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-zpaq" }
-omnizip-zstd = { path = "/Users/mulgogi/src/omnizip/omnizip-rs/omnizip-zstd" }

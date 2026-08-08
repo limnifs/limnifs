@@ -12,7 +12,7 @@ limnifs-format = { path = "../limnifs-format", version = "0.2.0" }
 limnifs-core = { path = "../limnifs-core", version = "0.2.0" }
 crossbeam-channel = { version = "0.5", optional = true }
 memmap2.workspace = true
-omnizip-flac = "0.15.0"
+omnizip-flac = "0.15.1"
 rayon.workspace = true
 serde.workspace = true
 thiserror = "1.0"
