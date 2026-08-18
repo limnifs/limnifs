@@ -604,15 +604,25 @@ fn process_whole_file_drop(
     let drop_id = hash_section(data);
     let file_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
 
-    let brotli_c = limnifs_core::codec::compress_with_tunables(
+    // Brotli first; if it fails (including a codec panic — the
+    // registry converts panics to Err), fall back to ZSTD, then to
+    // STORE. A broken encoder must degrade the drop's ratio, never
+    // the write itself.
+    let (mut best_codec, mut best_compressed) = match limnifs_core::codec::compress_with_tunables(
         limnifs_core::codec::CODEC_BROTLI,
         data,
         tunables,
-    )
-    .map_err(|e| WriteError::Io(std::io::Error::other(format!("brotli compress: {e}"))))?;
-
-    let mut best_codec = limnifs_core::codec::CODEC_BROTLI;
-    let mut best_compressed = brotli_c;
+    ) {
+        Ok(c) => (limnifs_core::codec::CODEC_BROTLI, c),
+        Err(_) => match limnifs_core::codec::compress_with_tunables(
+            limnifs_core::codec::CODEC_ZSTD,
+            data,
+            tunables,
+        ) {
+            Ok(c) => (limnifs_core::codec::CODEC_ZSTD, c),
+            Err(_) => (limnifs_core::codec::CODEC_STORE, data.to_vec()),
+        },
+    };
 
     // Short-circuit: if Brotli already achieves < 5% ratio, the input
     // is highly compressible and ZSTD is unlikely to beat it by enough

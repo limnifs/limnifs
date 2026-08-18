@@ -316,7 +316,7 @@ impl CodecRegistry {
     /// registered.
     pub fn compress(&self, id: u8, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
         match self.find(id) {
-            Some(codec) => codec.compress(plaintext),
+            Some(codec) => codec_call(|| codec.compress(plaintext)),
             None => Err(CoreError::UnsupportedFeature {
                 feature: format!(
                     "compress codec 0x{id:02X} (registered: {registered})",
@@ -339,7 +339,7 @@ impl CodecRegistry {
         expected_len: u32,
     ) -> Result<Vec<u8>, CoreError> {
         match self.find(id) {
-            Some(codec) => codec.decompress(compressed, expected_len),
+            Some(codec) => codec_call(|| codec.decompress(compressed, expected_len)),
             None => Err(CoreError::UnsupportedFeature {
                 feature: format!(
                     "decompress codec 0x{id:02X} (registered: {registered})",
@@ -362,7 +362,7 @@ impl CodecRegistry {
         tunables: &CodecTunables,
     ) -> Result<Vec<u8>, CoreError> {
         match self.find(id) {
-            Some(codec) => codec.compress_with_tunables(plaintext, tunables),
+            Some(codec) => codec_call(|| codec.compress_with_tunables(plaintext, tunables)),
             None => Err(CoreError::UnsupportedFeature {
                 feature: format!(
                     "compress_with_tunables codec 0x{id:02X} (registered: {registered})",
@@ -370,6 +370,42 @@ impl CodecRegistry {
                 ),
             }),
         }
+    }
+}
+
+/// Run a codec call, converting a panic into `Err(Corrupt)`.
+///
+/// A panicking codec (e.g. an omnizip encoder indexing past its
+/// internal window) must not kill the writer/reader process: the
+/// caller treats the panic as a failed candidate and moves on to
+/// the next codec or STORE. `AssertUnwindSafe` is sound here
+/// because a codec that panicked mid-flight is simply not used
+/// for that input again in the same tournament pass.
+pub(crate) fn codec_call<F>(f: F) -> Result<Vec<u8>, CoreError>
+where
+    F: FnOnce() -> Result<Vec<u8>, CoreError>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(payload) => {
+            let reason = if let Some(s) = payload.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic payload".into()
+            };
+            Err(CoreError::Corrupt {
+                reason: format!("codec panicked: {reason}"),
+            })
+        }
+    }
+}
+
+impl CodecRegistry {
+    /// Human-readable name for a registered codec id.
+    pub fn codec_name(&self, codec_id: u8) -> Option<&'static str> {
+        self.codecs.iter().find(|c| c.id() == codec_id).map(|c| c.name())
     }
 }
 
@@ -450,6 +486,12 @@ pub fn best_compressible_codec() -> u8 {
 #[must_use]
 pub fn best_binary_codec() -> u8 {
     CODEC_LZ4
+}
+
+/// Human-readable name for a registered codec id, e.g. for CLI
+/// inspection output.
+pub fn codec_name(codec_id: u8) -> Option<&'static str> {
+    default_registry().codec_name(codec_id)
 }
 
 /// Compress `plaintext` using the codec identified by `codec_id`, via
@@ -568,7 +610,8 @@ pub fn compress_brotli(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
 ///
 /// Returns [`CoreError::Corrupt`] if the Brotli encoder fails.
 pub fn compress_brotli_with_quality(plaintext: &[u8], quality: i32) -> Result<Vec<u8>, CoreError> {
-    brotli::compress(plaintext, quality)
+    let tunables = CodecTunables::from_quality(quality.clamp(0, 11) as u8);
+    default_registry().compress_with_tunables(CODEC_BROTLI, plaintext, &tunables)
 }
 
 /// Compress with DEFLATE at level 6 (default). Output is a zlib-framed
@@ -585,6 +628,37 @@ pub fn compress_deflate(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct PanickingCodec;
+
+    impl Codec for PanickingCodec {
+        fn id(&self) -> u8 {
+            0xEE
+        }
+        fn name(&self) -> &'static str {
+            "panicking-test"
+        }
+        fn compress(&self, _plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
+            panic!("simulated encoder bug");
+        }
+        fn decompress(&self, _compressed: &[u8], _expected_len: u32) -> Result<Vec<u8>, CoreError> {
+            panic!("simulated decoder bug");
+        }
+    }
+
+    #[test]
+    fn panicking_codec_returns_err_not_unwind() {
+        let mut registry = CodecRegistry::new();
+        registry.register(Box::new(PanickingCodec));
+        let err = registry.compress(0xEE, b"data").expect_err("must be Err");
+        assert!(matches!(err, CoreError::Corrupt { ref reason } if reason.contains("panicked")),
+            "got {err:?}");
+        let err = registry
+            .decompress(0xEE, b"data", 4)
+            .expect_err("must be Err");
+        assert!(matches!(err, CoreError::Corrupt { ref reason } if reason.contains("panicked")),
+            "got {err:?}");
+    }
 
     #[test]
     fn tunables_ppmd7_bigger_budget_helps_ratio() {

@@ -121,7 +121,8 @@ pub fn compress_with_baseline(
     let plain_brotli: &[u8] = match baseline {
         Some(b) => b,
         None => {
-            owned_baseline = Some(brotli::compress(plaintext, DEFAULT_QUALITY)?);
+            let c = crate::codec::codec_call(|| brotli::compress(plaintext, DEFAULT_QUALITY))?;
+            owned_baseline = Some(c);
             owned_baseline.as_deref().unwrap_or_default()
         }
     };
@@ -132,9 +133,11 @@ pub fn compress_with_baseline(
     }
 
     // Try FSST + Brotli. If it doesn't beat the plain baseline, fall back.
-    let fsst_compressed = omnizip_fsst::compress(plaintext).map_err(fsst_err)?;
+    let fsst_compressed =
+        crate::codec::codec_call(|| omnizip_fsst::compress(plaintext).map_err(fsst_err))?;
     let brotli_input = &fsst_compressed[..];
-    let brotli_compressed = brotli::compress(brotli_input, DEFAULT_QUALITY)?;
+    let brotli_compressed =
+        crate::codec::codec_call(|| brotli::compress(brotli_input, DEFAULT_QUALITY))?;
 
     let composite_len = 4 + brotli_compressed.len() + fsst_compressed.len();
     if composite_len >= plain_brotli.len() {

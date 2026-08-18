@@ -83,7 +83,14 @@ pub fn parse_slab_header_with_ceiling(
 ) -> Result<SlabHeader, CoreError> {
     let magic = cursor.read_magic()?;
     if magic != SLAB_MAGIC {
-        return Err(CoreError::BadMagic { found: magic });
+        // BadMagic's Display says "manifest"/"LMFS"; spell out the
+        // slab magic here so the message matches what was parsed.
+        return Err(CoreError::Corrupt {
+            reason: format!(
+                "bad slab magic: expected LIM1 ({:x?}), found {:x?}",
+                SLAB_MAGIC, magic
+            ),
+        });
     }
     let format_version = cursor.read_u16_le()?;
     if format_version != SLAB_FORMAT_VERSION {
@@ -190,10 +197,10 @@ mod tests {
         bytes[0] = b'X';
         let mut cursor = ManifestCursor::new(&bytes);
         match parse_slab_header(&mut cursor) {
-            Err(CoreError::BadMagic { found }) => {
-                assert_eq!(found, [b'X', b'I', b'M', b'1']);
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(reason.contains("bad slab magic"), "got {reason}");
             }
-            other => panic!("expected BadMagic, got {other:?}"),
+            other => panic!("expected Corrupt, got {other:?}"),
         }
     }
 

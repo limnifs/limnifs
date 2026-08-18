@@ -1568,11 +1568,8 @@ fn slab_cmd(slab_path: &Path) -> Result<(), CliError> {
     let mut total_pt = 0u64;
     let mut total_win = 0u64;
     for (i, record) in view.drop_records().iter().enumerate() {
-        let codec_name = match record.representation.codec {
-            limnifs_core::codec::CODEC_STORE => "store",
-            limnifs_core::codec::CODEC_LZ4 => "lz4",
-            _ => "??",
-        };
+        let codec_name =
+            limnifs_core::codec::codec_name(record.representation.codec).unwrap_or("??");
         let ratio = if record.plaintext_len > 0 {
             #[allow(clippy::cast_precision_loss)]
             {
