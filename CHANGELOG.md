@@ -5,6 +5,53 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.42] — 2026-08-19
+
+### Fixed
+
+- **Codec panics no longer kill the writer** — the codec registry's
+  dispatch (compress, compress_with_tunables, decompress) converts
+  codec panics into `Err(Corrupt)` via `catch_unwind`, and
+  `process_whole_file_drop` falls back Brotli -> ZSTD -> STORE instead
+  of propagating the error. Triggered by omnizip-brotli 0.16.62's
+  from-spec encoder, which panics past its final partial 2 MiB window
+  on ~16 MB+ inputs (BUGREPORT-brotli-tail-window-oob.md; FITS-like
+  data minimal repro: 16,976,720 bytes). Metadata-blob Brotli and
+  the FSST+Brotli composite internals route through the same guard.
+- **Slab magic errors say "slab"** — `parse_slab_header` raised
+  `BadMagic` whose message hardcodes "manifest"/"LMFS"; it now
+  reports `bad slab magic: expected LIM1`.
+
+### Added
+
+- **Offline Ed25519 sign-then-verify CLI workflow** (TODO.perf/25) —
+  `limni sign-keygen` (OpenSSL-compatible PKCS#8/SPKI PEM, verified
+  interop both directions), `limni limn --sign-key` signs the image's
+  `ManifestRoot` and writes a canonical `<image>.limsig` sidecar,
+  `limni verify-sig --pubkey` recomputes the root and checks
+  signature + signer identity against the trusted key (three
+  independent tamper checks, fully offline), `limni extract
+  --verify-key` gates extraction on the same check. Dependency-free
+  fixed-layout PEM/PKCS#8 codec in `limnifs-core::signing`.
+
+### Changed
+
+- **`Arc<[u8]>` for compressed drop bytes** (TODO.perf/22) —
+  `PendingDrop::compressed` and the cross-file compress cache share
+  bytes via Arc; cache hits are refcount bumps instead of deep Vec
+  copies. Output bytes unchanged (verified byte-identical on a
+  dedup-heavy 200-file tree).
+- `limni slab` prints real codec names for all registered codecs
+  via `codec_name()` instead of `??` beyond store/lz4.
+- Removed orphaned doc comments describing removed cosign shell-out
+  commands.
+
+### LimniFS state at v0.2.42
+
+- omnizip 0.16.62 across the board (CSV ratio back to 4.0%)
+- Quick-benchmark stable end-to-end: FITS 32.1% (ricepp), CSV 4.0%,
+  WAV 0.44%, zeros 0.01%; every verify op is a LimniFS win
+
 ## [0.2.39] — 2026-08-06
 
 ### Changed
