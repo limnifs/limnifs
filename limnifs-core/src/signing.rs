@@ -98,6 +98,224 @@ impl Signer<Signature> for SigningKeyPair {
     }
 }
 
+/// Fixed PKCS#8 v2 DER prefix for an Ed25519 private key
+/// (RFC 8410): `PrivateKeyInfo` with algorithm `id-Ed25519` and a
+/// 32-byte seed. Every Ed25519 PKCS#8 encoding (OpenSSL, cosign,
+/// `openssl genpkey`) has exactly this 16-byte prefix before the seed.
+const PKCS8_ED25519_PREFIX: [u8; 16] = [
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+    0x20,
+];
+
+/// Fixed SPKI DER prefix for an Ed25519 public key (RFC 8410):
+/// 12 bytes then the 32-byte key.
+const SPKI_ED25519_PREFIX: [u8; 12] = [
+    0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+];
+
+const PEM_PRIVATE_HEADER: &str = "-----BEGIN PRIVATE KEY-----";
+const PEM_PRIVATE_FOOTER: &str = "-----END PRIVATE KEY-----";
+const PEM_PUBLIC_HEADER: &str = "-----BEGIN PUBLIC KEY-----";
+const PEM_PUBLIC_FOOTER: &str = "-----END PUBLIC KEY-----";
+
+fn pem_wrap(label: &str, der: &[u8]) -> String {
+    // 16 bytes per base64 line is conventional enough at these sizes
+    // (48-byte DER -> 64 chars of base64 -> 4 lines).
+    let b64 = {
+        const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::with_capacity(der.len().div_ceil(3) * 4);
+        for c in der.chunks(3) {
+            let b = [c[0], *c.get(1).unwrap_or(&0), *c.get(2).unwrap_or(&0)];
+            let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+            out.push(TABLE[(n >> 18) as usize & 63] as char);
+            out.push(TABLE[(n >> 12) as usize & 63] as char);
+            out.push(if c.len() > 1 {
+                TABLE[(n >> 6) as usize & 63] as char
+            } else {
+                '='
+            });
+            out.push(if c.len() > 2 {
+                TABLE[n as usize & 63] as char
+            } else {
+                '='
+            });
+        }
+        out
+    };
+    let mut out = format!("-----BEGIN {label}-----\n");
+    for c in b64.as_bytes().chunks(64) {
+        out.push_str(std::str::from_utf8(c).unwrap_or(""));
+        out.push('\n');
+    }
+    out.push_str(&format!("-----END {label}-----\n"));
+    out
+}
+
+fn pem_unwrap(expected_header: &str, expected_footer: &str, pem: &str) -> Result<Vec<u8>, SignError> {
+    let err = |what: &str| SignError::Crypto(format!("pem: {what}"));
+    let trimmed = pem.trim();
+    if !trimmed.starts_with(expected_header) {
+        return Err(err("unexpected PEM label"));
+    }
+    let body = trimmed
+        .strip_prefix(expected_header)
+        .and_then(|r| r.strip_suffix(expected_footer))
+        .ok_or_else(|| err("missing PEM footer"))?;
+    let b64: String = body
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let mut out = Vec::with_capacity(b64.len() * 3 / 4);
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+    for c in b64.chars() {
+        let v = match c {
+            'A'..='Z' => u32::from(c) - 65,
+            'a'..='z' => u32::from(c) - 71,
+            '0'..='9' => u32::from(c) + 4,
+            '+' => 62,
+            '/' => 63,
+            '=' => break,
+            _ => return Err(err("invalid base64 character")),
+        };
+        buf = (buf << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xFF) as u8);
+        }
+    }
+    Ok(out)
+}
+
+/// Encode a 32-byte Ed25519 seed as a PKCS#8 v2 PEM
+/// (`-----BEGIN PRIVATE KEY-----`).
+#[must_use]
+pub fn encode_private_pkcs8_pem(seed: &[u8; 32]) -> String {
+    let mut der = Vec::with_capacity(PKCS8_ED25519_PREFIX.len() + 32);
+    der.extend_from_slice(&PKCS8_ED25519_PREFIX);
+    der.extend_from_slice(seed);
+    pem_wrap("PRIVATE KEY", &der)
+}
+
+/// Decode a 32-byte Ed25519 seed from a PKCS#8 v2 PEM.
+///
+/// # Errors
+///
+/// Returns [`SignError::Crypto`] if the PEM is malformed or the DER
+/// is not an Ed25519 `PrivateKeyInfo` with a 32-byte seed.
+pub fn decode_private_pkcs8_pem(pem: &str) -> Result<[u8; 32], SignError> {
+    let der = pem_unwrap(PEM_PRIVATE_HEADER, PEM_PRIVATE_FOOTER, pem)?;
+    if der.len() != PKCS8_ED25519_PREFIX.len() + 32
+        || der[..PKCS8_ED25519_PREFIX.len()] != PKCS8_ED25519_PREFIX
+    {
+        return Err(SignError::Crypto(
+            "not an Ed25519 PKCS#8 private key (unexpected DER layout)".into(),
+        ));
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&der[PKCS8_ED25519_PREFIX.len()..]);
+    Ok(seed)
+}
+
+/// Encode a 32-byte Ed25519 public key as an SPKI PEM
+/// (`-----BEGIN PUBLIC KEY-----`).
+#[must_use]
+pub fn encode_public_spki_pem(public: &[u8; 32]) -> String {
+    let mut der = Vec::with_capacity(SPKI_ED25519_PREFIX.len() + 32);
+    der.extend_from_slice(&SPKI_ED25519_PREFIX);
+    der.extend_from_slice(public);
+    pem_wrap("PUBLIC KEY", &der)
+}
+
+/// Decode a 32-byte Ed25519 public key from an SPKI PEM.
+///
+/// # Errors
+///
+/// Returns [`SignError::Crypto`] if the PEM is malformed or the DER
+/// is not an Ed25519 `SubjectPublicKeyInfo`.
+pub fn decode_public_spki_pem(pem: &str) -> Result<[u8; 32], SignError> {
+    let der = pem_unwrap(PEM_PUBLIC_HEADER, PEM_PUBLIC_FOOTER, pem)?;
+    if der.len() != SPKI_ED25519_PREFIX.len() + 32
+        || der[..SPKI_ED25519_PREFIX.len()] != SPKI_ED25519_PREFIX
+    {
+        return Err(SignError::Crypto(
+            "not an Ed25519 SPKI public key (unexpected DER layout)".into(),
+        ));
+    }
+    let mut public = [0u8; 32];
+    public.copy_from_slice(&der[SPKI_ED25519_PREFIX.len()..]);
+    Ok(public)
+}
+
+/// Magic for the `.limsig` sidecar file.
+pub const LIMSIG_MAGIC: [u8; 4] = *b"LMSG";
+/// Length of a canonical `.limsig` sidecar: magic + version + mode +
+/// root + pubkey + signature.
+pub const LIMSIG_LEN: usize = 4 + 1 + 1 + 32 + 32 + 64;
+
+impl SignatureBundle {
+    /// Encode as the canonical `.limsig` sidecar layout:
+    /// `LMSG | ver u8 | mode u8 | root [32] | pubkey [32] | sig [64]`.
+    #[must_use]
+    pub fn to_limsig(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(LIMSIG_LEN);
+        out.extend_from_slice(&LIMSIG_MAGIC);
+        out.push(1);
+        out.push(match self.mode {
+            SignMode::Keypair => 0,
+            SignMode::Keyless => 1,
+        });
+        out.extend_from_slice(&self.manifest_root);
+        out.extend_from_slice(&self.public_key);
+        out.extend_from_slice(&self.signature);
+        out
+    }
+
+    /// Decode a `.limsig` sidecar produced by [`Self::to_limsig`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignError::Crypto`] on length, magic, or version
+    /// mismatch.
+    pub fn from_limsig(bytes: &[u8]) -> Result<Self, SignError> {
+        if bytes.len() != LIMSIG_LEN {
+            return Err(SignError::Crypto(format!(
+                "limsig: expected {LIMSIG_LEN} bytes, got {}",
+                bytes.len()
+            )));
+        }
+        if bytes[..4] != LIMSIG_MAGIC {
+            return Err(SignError::Crypto("limsig: bad magic".into()));
+        }
+        if bytes[4] != 1 {
+            return Err(SignError::Crypto(format!(
+                "limsig: unsupported version {}",
+                bytes[4]
+            )));
+        }
+        let mut copy32 = |off: usize| -> [u8; 32] {
+            let mut a = [0u8; 32];
+            a.copy_from_slice(&bytes[off..off + 32]);
+            a
+        };
+        Ok(Self {
+            manifest_root: copy32(6),
+            public_key: copy32(38),
+            signature: {
+                let mut a = [0u8; 64];
+                a.copy_from_slice(&bytes[70..134]);
+                a
+            },
+            mode: if bytes[5] == 0 {
+                SignMode::Keypair
+            } else {
+                SignMode::Keyless
+            },
+        })
+    }
+}
+
 /// A signature bundle: covers a `ManifestRoot` with one of the
 /// supported modes.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -287,5 +505,43 @@ mod tests {
         // Both verify against their own public key.
         verify(&bundle_a).expect("a verifies");
         verify(&bundle_b).expect("b verifies");
+    }
+
+    #[test]
+    fn pem_private_round_trip_matches_openssl_layout() {
+        let seed: [u8; 32] = core::array::from_fn(|i| (i * 7 + 3) as u8);
+        let pem = encode_private_pkcs8_pem(&seed);
+        assert!(pem.starts_with("-----BEGIN PRIVATE KEY-----\n"));
+        assert!(pem.ends_with("-----END PRIVATE KEY-----\n"));
+        let back = decode_private_pkcs8_pem(&pem).expect("decode");
+        assert_eq!(back, seed);
+        // Truncated / wrong label must fail.
+        assert!(decode_private_pkcs8_pem("-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----").is_err());
+    }
+
+    #[test]
+    fn pem_public_round_trip() {
+        let public: [u8; 32] = core::array::from_fn(|i| (i * 13 + 1) as u8);
+        let pem = encode_public_spki_pem(&public);
+        assert!(pem.starts_with("-----BEGIN PUBLIC KEY-----\n"));
+        let back = decode_public_spki_pem(&pem).expect("decode");
+        assert_eq!(back, public);
+    }
+
+    #[test]
+    fn limsig_sidecar_round_trip_and_rejects_garbage() {
+        let seed: [u8; 32] = core::array::from_fn(|i| i as u8);
+        let kp = SigningKeyPair::from_bytes(seed);
+        let root = [7u8; 32];
+        let bundle = sign(&kp, &root).expect("sign");
+        let bytes = bundle.to_limsig();
+        assert_eq!(bytes.len(), LIMSIG_LEN);
+        let back = SignatureBundle::from_limsig(&bytes).expect("decode");
+        assert_eq!(back, bundle);
+        assert!(SignatureBundle::from_limsig(&bytes[..LIMSIG_LEN - 1]).is_err());
+        let mut bad = bytes.clone();
+        bad[0] = b'X';
+        assert!(SignatureBundle::from_limsig(&bad).is_err());
+        verify(&back).expect("verify");
     }
 }

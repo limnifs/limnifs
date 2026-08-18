@@ -30,7 +30,8 @@ use limnifs_core::{
     compute_merkle_root, hash_empty_section, hash_section, parse_dms_policy, parse_ec_params,
     parse_feature_flags_section, parse_history, parse_manifest_header, parse_metadata_blob,
     parse_metadata_reference, parse_slab_index, ContentHandle, CoreError, FeatureFlags, HistoryOp,
-    ManifestCursor, ManifestHeader, ManifestRoot, MetadataBlob, SectionHashes,
+    ManifestCursor, ManifestHeader, ManifestRoot, MetadataBlob, MetadataReference,
+    SectionHashes,
 };
 
 /// Install dictionaries parsed from the manifest's `dictionary_section`
@@ -110,6 +111,10 @@ enum Command {
         /// Override average chunk size in bytes.
         #[arg(long)]
         chunk_size: Option<u32>,
+        /// Ed25519 private key (PKCS#8 PEM) to sign the image's
+        /// `ManifestRoot` after writing. Produces `<output>.limsig`.
+        #[arg(long)]
+        sign_key: Option<PathBuf>,
     },
     /// List the contents of a directory inside a `.lim` image.
     ///
@@ -167,7 +172,15 @@ enum Command {
         path: String,
     },
     /// Extract an image's contents to a filesystem directory.
-    Extract { image: PathBuf, dest: PathBuf },
+    Extract {
+        image: PathBuf,
+        dest: PathBuf,
+        /// Ed25519 public key (SPKI PEM). When given, the image's
+        /// `.limsig` sidecar is verified against this key before
+        /// extraction starts; a missing or invalid signature aborts.
+        #[arg(long)]
+        verify_key: Option<PathBuf>,
+    },
     /// Add a file to an existing image (RW).
     Add {
         image: PathBuf,
@@ -235,6 +248,30 @@ enum Command {
     Benchmark,
     /// Generate a random AEAD key (XChaCha20-Poly1305, 32 bytes).
     Keygen,
+    /// Generate an Ed25519 signing keypair for `limni limn --sign-key`.
+    ///
+    /// Writes `signing.pem` (PKCS#8 private) and `signing-pub.pem`
+    /// (SPKI public) into the target directory. Keep the private key
+    /// offline; distribute the public key to verifiers.
+    SignKeygen {
+        /// Directory for the key files (default: current directory).
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
+    },
+    /// Verify a `.lim` image's Ed25519 signature against a trusted
+    /// public key.
+    ///
+    /// Recomputes the image's `ManifestRoot`, reads the `.limsig`
+    /// sidecar written by `limni limn --sign-key`, and checks the
+    /// signature with the GIVEN key (not the embedded one — the
+    /// trust anchor is yours). Offline; no network, no sigstore.
+    VerifySig {
+        /// Path to the `.lim` image.
+        image: PathBuf,
+        /// Path to the trusted public key (SPKI PEM).
+        #[arg(long)]
+        pubkey: PathBuf,
+    },
     /// Encrypt a file using XChaCha20-Poly1305.
     Seal {
         input: PathBuf,
@@ -286,25 +323,6 @@ enum Command {
     /// If `mkcomposefs` is not on PATH, the extracted rootfs is left
     /// in place and a warning is printed; the user can install
     /// composefs-utils and re-run.
-    /// Sign a `.lim` image's `ManifestRoot` using sigstore keyless mode.
-    ///
-    /// Shells out to `cosign sign-blob` (<https://github.com/sigstore/cosign>).
-    /// The signer authenticates via OIDC (Google/GitHub/etc.); Fulcio
-    /// issues a short-lived cert; Rekor logs the signature publicly.
-    /// The bundle (cert + signature + Rekor inclusion proof) is written
-    /// to `<image>.sigstore.json`.
-    ///
-    /// Requires `cosign` on PATH and an interactive OIDC flow. For an
-    /// offline, self-sovereign alternative, use the Ed25519 keypair
-    /// API in `limnifs-core::signing`.
-    /// Verify a `.lim` image's sigstore signature bundle.
-    ///
-    /// Shells out to `cosign verify-blob`. Checks the Fulcio cert
-    /// chain, the Rekor inclusion proof, and the signature against
-    /// the image's `ManifestRoot`.
-    ///
-    /// Requires `cosign` on PATH. For offline verification of
-    /// Ed25519 keypair signatures, use `limnifs-core::signing::verify`.
     /// Mount a `.lim` image as a read-only filesystem.
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
@@ -328,7 +346,8 @@ fn run() -> Result<(), CliError> {
             profile,
             text_codec,
             chunk_size,
-        } => limn_with_profile(&source, &output, profile, text_codec, chunk_size),
+            sign_key,
+        } => limn_with_profile(&source, &output, profile, text_codec, chunk_size, sign_key.as_deref()),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat {
             image,
@@ -339,7 +358,11 @@ fn run() -> Result<(), CliError> {
         Command::CatMulti { image, paths } => cat_multi(&image, &paths),
         Command::Stat { image, path } => stat(&image, &path),
         Command::Tree { image, path } => tree(&image, &path),
-        Command::Extract { image, dest } => extract(&image, &dest),
+        Command::Extract {
+            image,
+            dest,
+            verify_key,
+        } => extract(&image, &dest, verify_key.as_deref()),
         Command::Add {
             image,
             dest,
@@ -362,6 +385,8 @@ fn run() -> Result<(), CliError> {
         Command::Check { image } => check_cmd(&image),
         Command::Benchmark => benchmark(),
         Command::Keygen => keygen(),
+        Command::SignKeygen { out_dir } => sign_keygen_cmd(out_dir.as_deref()),
+        Command::VerifySig { image, pubkey } => verify_sig_cmd(&image, &pubkey),
         Command::Seal { input, output, key } => seal_cmd(&input, &output, &key),
         Command::Open { input, output, key } => open_cmd(&input, &output, &key),
         Command::ShamirSplit {
@@ -391,6 +416,10 @@ fn run_with_exit_code() -> ExitCode {
             eprintln!("limni: write failed: {source}");
             ExitCode::FAILURE
         }
+        Err(CliError::SignatureFailed { reason }) => {
+            eprintln!("limni: signature check failed: {reason}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -412,31 +441,46 @@ enum CliError {
     WriteFailed {
         source: limnifs_write::WriteError,
     },
+    SignatureFailed {
+        reason: String,
+    },
 }
 
-#[allow(clippy::too_many_lines)]
-fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
+/// Parsed manifest sections plus the computed `ManifestRoot`.
+///
+/// Shared by `verify` (full report) and the signing workflow
+/// (`limn --sign-key`, `verify-sig`), so both agree on how the root
+/// is computed.
+struct ManifestView {
+    header: ManifestHeader,
+    flags: FeatureFlags,
+    metadata_reference: MetadataReference,
+    slab_index_len: usize,
+    history_len: usize,
+    extra_bytes_remaining: usize,
+    merkle_root: ManifestRoot,
+}
+
+fn read_manifest(image: &Path) -> Result<ManifestView, CliError> {
     let mut file = std::fs::File::open(image).map_err(|source| CliError::ReadFailed {
-        path: image.clone(),
+        path: image.to_path_buf(),
         source,
     })?;
     let mut buffer = vec![0u8; VERIFY_READ_BUDGET];
     let read_len = file
         .read(&mut buffer)
         .map_err(|source| CliError::ReadFailed {
-            path: image.clone(),
+            path: image.to_path_buf(),
             source,
         })?;
     buffer.truncate(read_len);
     let mut cursor = ManifestCursor::new(&buffer);
 
     let map_err = |source: CoreError| CliError::FormatFailed {
-        path: image.clone(),
+        path: image.to_path_buf(),
         source,
     };
 
-    // Capture the byte range each parser consumes so we can hash the
-    // raw section bytes for the Merkle root computation.
     let header_start = cursor.position();
     let header = parse_manifest_header(&mut cursor).map_err(map_err)?;
     let header_end = cursor.position();
@@ -453,7 +497,6 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
     let slab_index = parse_slab_index(&mut cursor).map_err(map_err)?;
     let slab_index_end = cursor.position();
 
-    // Parse optional sections based on feature flags.
     let ec_params_start = cursor.position();
     let has_ec = flags.is_required(0x0001) || flags.get(0x0001).is_some();
     if has_ec {
@@ -495,6 +538,30 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
         history: hash_section(&buffer[history_start..history_end]),
     };
     let merkle_root = compute_merkle_root(&hashes);
+
+    Ok(ManifestView {
+        header,
+        flags,
+        metadata_reference,
+        slab_index_len: slab_index.len(),
+        history_len: history.len(),
+        extra_bytes_remaining,
+        merkle_root,
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
+    let view = read_manifest(image)?;
+    let ManifestView {
+        header,
+        flags,
+        metadata_reference,
+        slab_index_len,
+        history_len,
+        extra_bytes_remaining,
+        merkle_root,
+    } = view;
 
     let metadata_summary = if metadata_reference.is_inlined() {
         metadata_reference.inline_metadata.as_deref().and_then(|blob_bytes| {
@@ -542,13 +609,138 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
         header,
         &flags,
         metadata_reference.is_inlined(),
-        slab_index.len(),
-        history.len(),
+        slab_index_len,
+        history_len,
         extra_bytes_remaining,
         merkle_root,
         metadata_summary.as_deref(),
         json,
     );
+    Ok(())
+}
+
+fn limsig_path(image: &Path) -> PathBuf {
+    let mut s = image.as_os_str().to_os_string();
+    s.push(".limsig");
+    PathBuf::from(s)
+}
+
+/// Verify `<image>.limsig` against a trusted external public key.
+///
+/// Three checks, all must pass:
+/// 1. the signed `ManifestRoot` equals the root recomputed from the
+///    image on disk (any byte flipped in the manifest fails here),
+/// 2. the embedded signer key equals the trusted key,
+/// 3. the Ed25519 signature verifies.
+fn check_signature(image: &Path, pubkey_pem_path: &Path) -> Result<(), CliError> {
+    use limnifs_core::signing::{self, SignatureBundle};
+
+    let sig = std::fs::read(limsig_path(image)).map_err(|source| CliError::SignatureFailed {
+        reason: format!(
+            "no signature sidecar {} ({source}) — was the image built with --sign-key?",
+            limsig_path(image).display()
+        ),
+    })?;
+    let bundle = SignatureBundle::from_limsig(&sig)
+        .map_err(|e| CliError::SignatureFailed { reason: format!("{e}") })?;
+
+    let view = read_manifest(image)?;
+    let actual_root: [u8; 32] = *view.merkle_root.as_bytes();
+    if bundle.manifest_root != actual_root {
+        return Err(CliError::SignatureFailed {
+            reason: "signature covers a different ManifestRoot — the image was modified after signing".into(),
+        });
+    }
+
+    let pem = std::fs::read_to_string(pubkey_pem_path).map_err(|source| CliError::ReadFailed {
+        path: pubkey_pem_path.to_path_buf(),
+        source,
+    })?;
+    let trusted = signing::decode_public_spki_pem(&pem)
+        .map_err(|e| CliError::SignatureFailed { reason: format!("{e}") })?;
+    if bundle.public_key != trusted {
+        return Err(CliError::SignatureFailed {
+            reason: "image signed by a different key than the trusted public key".into(),
+        });
+    }
+
+    signing::verify(&bundle)
+        .map_err(|e| CliError::SignatureFailed { reason: format!("{e}") })
+}
+
+fn sign_keygen_cmd(out_dir: Option<&Path>) -> Result<(), CliError> {
+    use limnifs_core::signing::{encode_private_pkcs8_pem, encode_public_spki_pem, SigningKeyPair};
+
+    let dir = out_dir.unwrap_or_else(|| std::path::Path::new("."));
+    let mut seed = [0u8; 32];
+    getrandom::getrandom(&mut seed).map_err(|e| CliError::SignatureFailed {
+        reason: format!("keygen: CSPRNG failed: {e}"),
+    })?;
+    let kp = SigningKeyPair::from_bytes(seed);
+    let public = kp.public();
+    let mut pub_bytes = [0u8; 32];
+    pub_bytes.copy_from_slice(public.as_bytes());
+
+    let priv_path = dir.join("signing.pem");
+    let pub_path = dir.join("signing-pub.pem");
+    std::fs::write(&priv_path, encode_private_pkcs8_pem(&seed)).map_err(|source| {
+        CliError::ReadFailed {
+            path: priv_path.clone(),
+            source,
+        }
+    })?;
+    std::fs::write(&pub_path, encode_public_spki_pem(&pub_bytes)).map_err(|source| {
+        CliError::ReadFailed {
+            path: pub_path.clone(),
+            source,
+        }
+    })?;
+    println!("Ed25519 signing keypair:");
+    println!("  private: {}", priv_path.display());
+    println!("  public:  {}", pub_path.display());
+    println!("  public key fingerprint: {}", {
+        let mut s = String::with_capacity(64);
+        for b in pub_bytes {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+        }
+        s
+    });
+    Ok(())
+}
+
+/// Sign an already-written image: recomputes the `ManifestRoot` from
+/// the file on disk, signs it, writes `<image>.limsig`.
+fn sign_image(image: &Path, key_pem_path: &Path) -> Result<(), CliError> {
+    use limnifs_core::signing::{
+        decode_private_pkcs8_pem, sign, SigningKeyPair, SignatureBundle,
+    };
+
+    let pem = std::fs::read_to_string(key_pem_path).map_err(|source| CliError::ReadFailed {
+        path: key_pem_path.to_path_buf(),
+        source,
+    })?;
+    let seed = decode_private_pkcs8_pem(&pem)
+        .map_err(|e| CliError::SignatureFailed { reason: format!("{e}") })?;
+    let kp = SigningKeyPair::from_bytes(seed);
+
+    let view = read_manifest(image)?;
+    let root: [u8; 32] = *view.merkle_root.as_bytes();
+    let bundle: SignatureBundle = sign(&kp, &root)
+        .map_err(|e| CliError::SignatureFailed { reason: format!("{e}") })?;
+    let out = limsig_path(image);
+    std::fs::write(&out, bundle.to_limsig()).map_err(|source| CliError::ReadFailed {
+        path: out.clone(),
+        source,
+    })?;
+    println!("signed: {} (ManifestRoot {})", out.display(), view.merkle_root);
+    Ok(())
+}
+
+fn verify_sig_cmd(image: &Path, pubkey: &Path) -> Result<(), CliError> {
+    check_signature(image, pubkey)?;
+    println!("signature OK: {}", image.display());
+    println!("  verified against trusted key: {}", pubkey.display());
     Ok(())
 }
 
@@ -636,6 +828,7 @@ fn limn_with_profile(
     profile: Option<String>,
     text_codec: Option<String>,
     chunk_size: Option<u32>,
+    sign_key: Option<&Path>,
 ) -> Result<(), CliError> {
     // Resolve config from profile or use default.
     let mut config = match &profile {
@@ -715,6 +908,9 @@ fn limn_with_profile(
         artifact.drop_count,
         artifact.slabs.len(),
     );
+    if let Some(key) = sign_key {
+        sign_image(output, key)?;
+    }
     Ok(())
 }
 /// the entries of the directory at `path` (slash-separated, relative
@@ -788,7 +984,7 @@ fn rw_add(
     let staging = std::env::temp_dir().join(format!("limnifs-rw-add-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     if image.exists() {
-        extract(image, &staging)?;
+        extract(image, &staging, None)?;
     } else {
         std::fs::create_dir_all(&staging).map_err(|e| CliError::ReadFailed {
             path: staging.clone(),
@@ -849,7 +1045,7 @@ fn rw_delete(image: &Path, path: &str, profile: Option<String>) -> Result<(), Cl
     };
     let staging = std::env::temp_dir().join(format!("limnifs-rw-del-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
-    extract(image, &staging)?;
+    extract(image, &staging, None)?;
     let target = staging.join(path);
     std::fs::remove_file(&target).map_err(|e| CliError::ReadFailed {
         path: target.clone(),
@@ -892,7 +1088,7 @@ fn turnover_cmd(image: &Path, profile_name: &str) -> Result<(), CliError> {
 
     let staging = std::env::temp_dir().join(format!("limnifs-turnover-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
-    extract(image, &staging)?;
+    extract(image, &staging, None)?;
 
     let config = limnifs_write::WriteConfig::from_profile(profile_name).unwrap_or_else(|| {
         eprintln!("warning: unknown profile '{profile_name}', using max-ratio");
@@ -1429,8 +1625,12 @@ fn print_tree(
 }
 
 /// Extract an image to a filesystem directory.
-fn extract(image: &Path, dest: &Path) -> Result<(), CliError> {
+fn extract(image: &Path, dest: &Path, verify_key: Option<&Path>) -> Result<(), CliError> {
     use rayon::prelude::*;
+    if let Some(key) = verify_key {
+        check_signature(image, key)?;
+        eprintln!("signature verified against {}", key.display());
+    }
     let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
         path: image.to_path_buf(),
         source,
@@ -1769,7 +1969,7 @@ fn compact(source: &Path, output: &Path) -> Result<(), CliError> {
             .map_or(0u128, |d| d.as_nanos()),
     ));
 
-    extract(source, &temp_dir)?;
+    extract(source, &temp_dir, None)?;
 
     let artifact = limnifs_write::write_directory(&temp_dir)
         .map_err(|e| CliError::WriteFailed { source: e })?;
@@ -1960,7 +2160,7 @@ fn benchmark() -> Result<(), CliError> {
 
     // Extract benchmark.
     let t2 = Instant::now();
-    extract(&img, &dest).expect("extract");
+    extract(&img, &dest, None).expect("extract");
     let extract_ms = t2.elapsed().as_millis();
 
     let write_throughput = if write_ms > 0 {
@@ -2492,6 +2692,68 @@ fn escape_json_path(path: &Path) -> String {
 mod tests {
     use super::*;
     use limnifs_core::MANIFEST_HEADER_LEN;
+
+    #[test]
+    fn sign_then_verify_workflow_round_trip() {
+        use limnifs_core::signing::{encode_private_pkcs8_pem, encode_public_spki_pem, SigningKeyPair};
+
+        let dir = std::env::temp_dir().join(format!(
+            "limni-sigtest-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0u128, |d| d.as_nanos())
+        ));
+        std::fs::create_dir_all(dir.join("src")).expect("mkdir");
+        std::fs::write(dir.join("src/main.rs"), b"fn main() {}").expect("write");
+
+        // keygen via the same code path as sign_keygen_cmd
+        let mut seed = [0u8; 32];
+        getrandom::getrandom(&mut seed).expect("rng");
+        let kp = SigningKeyPair::from_bytes(seed);
+        let mut pub_bytes = [0u8; 32];
+        pub_bytes.copy_from_slice(kp.public().as_bytes());
+        std::fs::write(dir.join("signing.pem"), encode_private_pkcs8_pem(&seed)).expect("pem");
+        std::fs::write(dir.join("signing-pub.pem"), encode_public_spki_pem(&pub_bytes))
+            .expect("pub pem");
+
+        let image = dir.join("app.lim");
+        limn_with_profile(
+            &dir.join("src"),
+            &image,
+            None,
+            None,
+            None,
+            Some(&dir.join("signing.pem")),
+        )
+        .expect("limn with sign-key");
+        assert!(image.with_file_name("app.lim.limsig").exists());
+
+        // verify-sig passes with the trusted key
+        verify_sig_cmd(&image, &dir.join("signing-pub.pem")).expect("verify");
+
+        // tampering the manifest must fail the root check
+        let bytes = std::fs::read(&image).expect("read image");
+        let mut tampered = bytes.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0xAA;
+        std::fs::write(&image, &tampered).expect("write tampered");
+        assert!(verify_sig_cmd(&image, &dir.join("signing-pub.pem")).is_err());
+
+        // a different trusted key must fail the signer check
+        std::fs::write(&image, &bytes).expect("restore");
+        let mut other_seed = [9u8; 32];
+        other_seed[0] = 1;
+        let other_kp = SigningKeyPair::from_bytes(other_seed);
+        let mut other_pub = [0u8; 32];
+        other_pub.copy_from_slice(other_kp.public().as_bytes());
+        std::fs::write(
+            dir.join("other-pub.pem"),
+            encode_public_spki_pem(&other_pub),
+        )
+        .expect("other pem");
+        assert!(verify_sig_cmd(&image, &dir.join("other-pub.pem")).is_err());
+    }
+
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -2907,7 +3169,7 @@ mod tests {
         stat(&img, "/small.txt").expect("stat succeeds");
 
         // Extract and verify round-trip.
-        extract(&img, &dest).expect("extract succeeds");
+        extract(&img, &dest, None).expect("extract succeeds");
         let orig = std::fs::read(src.join("small.txt")).expect("read orig");
         let extracted = std::fs::read(dest.join("small.txt")).expect("read extracted");
         assert_eq!(orig, extracted, "small.txt round-trip mismatch");
