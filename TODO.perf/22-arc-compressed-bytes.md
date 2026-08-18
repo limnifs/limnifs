@@ -30,7 +30,7 @@ Slab packing uses `&[u8]` borrows from the Arc, so no semantic change.
 
 ## Acceptance
 
-- [ ] `compressed` field is `Arc<[u8]>`
-- [ ] Cache hits are refcount bumps (no alloc)
-- [ ] Output bytes unchanged
-- [ ] Benchmark: container-layer workloads improve
+- [x] `compressed` field is `Arc<[u8]>`
+- [x] Cache hits are refcount bumps (no alloc)
+- [x] Output bytes unchanged (verified byte-identical on dedup-heavy 200-file tree)
+- [ ] Benchmark: container-layer workloads improve (pending next full bench run)

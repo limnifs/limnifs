@@ -282,7 +282,7 @@ pub fn write_stream<R: std::io::Read>(
         short_circuit_permille: config.tournament.short_circuit_threshold,
     };
 
-    let mut drops: Vec<([u8; 32], Vec<u8>, Vec<u8>, u8)> = Vec::with_capacity(chunks.len());
+    let mut drops: Vec<RawDrop> = Vec::with_capacity(chunks.len());
     let mut slices: Vec<PendingSlice> = Vec::with_capacity(chunks.len());
     let mut offset: u64 = 0;
     for chunk in &chunks {
@@ -548,7 +548,12 @@ pub fn write_directory_with_config(
 }
 
 /// One chunk of a file before dedup: (`drop_id`, `plaintext`, `compressed`, `codec`).
-type RawDrop = ([u8; 32], Vec<u8>, Vec<u8>, u8);
+///
+/// `compressed` is `Arc<[u8]>` so the cross-file compress cache can
+/// share bytes across hits with a refcount bump instead of a deep
+/// copy — dedup-heavy workloads (container layers, duplicate files)
+/// skip the allocation entirely.
+type RawDrop = ([u8; 32], Vec<u8>, std::sync::Arc<[u8]>, u8);
 /// Result of parallel file processing: the drop data (uncompressed,
 struct ChunkedFileResult {
     drops: Vec<RawDrop>, // (id, plaintext, compressed, codec)
@@ -608,21 +613,22 @@ fn process_whole_file_drop(
     // registry converts panics to Err), fall back to ZSTD, then to
     // STORE. A broken encoder must degrade the drop's ratio, never
     // the write itself.
-    let (mut best_codec, mut best_compressed) = match limnifs_core::codec::compress_with_tunables(
-        limnifs_core::codec::CODEC_BROTLI,
-        data,
-        tunables,
-    ) {
-        Ok(c) => (limnifs_core::codec::CODEC_BROTLI, c),
-        Err(_) => match limnifs_core::codec::compress_with_tunables(
-            limnifs_core::codec::CODEC_ZSTD,
+    let (mut best_codec, mut best_compressed): (u8, std::sync::Arc<[u8]>) =
+        match limnifs_core::codec::compress_with_tunables(
+            limnifs_core::codec::CODEC_BROTLI,
             data,
             tunables,
         ) {
-            Ok(c) => (limnifs_core::codec::CODEC_ZSTD, c),
-            Err(_) => (limnifs_core::codec::CODEC_STORE, data.to_vec()),
-        },
-    };
+            Ok(c) => (limnifs_core::codec::CODEC_BROTLI, c.into()),
+            Err(_) => match limnifs_core::codec::compress_with_tunables(
+                limnifs_core::codec::CODEC_ZSTD,
+                data,
+                tunables,
+            ) {
+                Ok(c) => (limnifs_core::codec::CODEC_ZSTD, c.into()),
+                Err(_) => (limnifs_core::codec::CODEC_STORE, data.to_vec().into()),
+            },
+        };
 
     // Short-circuit: if Brotli already achieves < 5% ratio, the input
     // is highly compressible and ZSTD is unlikely to beat it by enough
@@ -634,7 +640,7 @@ fn process_whole_file_drop(
         {
             if zstd_c.len() < best_compressed.len() {
                 best_codec = limnifs_core::codec::CODEC_ZSTD;
-                best_compressed = zstd_c;
+                best_compressed = zstd_c.into();
             }
         }
     }
@@ -657,7 +663,7 @@ fn process_whole_file_drop(
         if let Ok(spec_c) = spec_result {
             if spec_c.len() < best_compressed.len() {
                 best_codec = cat.codec_id;
-                best_compressed = spec_c;
+                best_compressed = spec_c.into();
             }
         }
     }
@@ -700,7 +706,7 @@ fn compress_chunk_with_tournament(
     binary_codec: u8,
     tunables: &limnifs_core::codec::CodecTunables,
     tournament: &TournamentSpec,
-) -> (u8, Vec<u8>) {
+) -> (u8, std::sync::Arc<[u8]>) {
     use classifier::Class;
 
     let preferred = match class {
@@ -710,7 +716,7 @@ fn compress_chunk_with_tournament(
     };
 
     if preferred == limnifs_core::codec::CODEC_STORE {
-        return (limnifs_core::codec::CODEC_STORE, chunk.to_vec());
+        return (limnifs_core::codec::CODEC_STORE, chunk.to_vec().into());
     }
     if class == Class::Binary && tournament.skip_for_binary {
         return compress_chunk_one(chunk, preferred, tunables);
@@ -719,7 +725,7 @@ fn compress_chunk_with_tournament(
         return compress_chunk_one(chunk, preferred, tunables);
     }
 
-    let mut best: Option<(u8, Vec<u8>)> = None;
+    let mut best: Option<(u8, std::sync::Arc<[u8]>)> = None;
     for &codec_id in &tournament.codec_ids {
         if codec_id == limnifs_core::codec::CODEC_STORE {
             continue;
@@ -734,9 +740,7 @@ fn compress_chunk_with_tournament(
         let ratio_permille = (c.len() as u64 * 1000 / chunk.len() as u64) as u32;
         let is_best_so_far = best.as_ref().map_or(true, |(_, b)| c.len() < b.len());
         if is_best_so_far {
-            best = Some((codec_id, c));
-        } else {
-            drop(c);
+            best = Some((codec_id, c.into()));
         }
         if tournament.short_circuit_permille > 0 && ratio_permille <= tournament.short_circuit_permille
         {
@@ -744,7 +748,7 @@ fn compress_chunk_with_tournament(
         }
     }
 
-    best.unwrap_or_else(|| (limnifs_core::codec::CODEC_STORE, chunk.to_vec()))
+    best.unwrap_or_else(|| (limnifs_core::codec::CODEC_STORE, chunk.to_vec().into()))
 }
 
 /// Compress `chunk` with a single codec, falling back to STORE if
@@ -753,13 +757,13 @@ fn compress_chunk_one(
     chunk: &[u8],
     codec_id: u8,
     tunables: &limnifs_core::codec::CodecTunables,
-) -> (u8, Vec<u8>) {
+) -> (u8, std::sync::Arc<[u8]>) {
     if codec_id == limnifs_core::codec::CODEC_STORE {
-        return (limnifs_core::codec::CODEC_STORE, chunk.to_vec());
+        return (limnifs_core::codec::CODEC_STORE, chunk.to_vec().into());
     }
     match limnifs_core::codec::compress_with_tunables(codec_id, chunk, tunables) {
-        Ok(c) if c.len() < chunk.len() => (codec_id, c),
-        _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
+        Ok(c) if c.len() < chunk.len() => (codec_id, c.into()),
+        _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec().into()),
     }
 }
 
@@ -815,10 +819,10 @@ fn process_file(
             classifier::Class::Binary => binary_codec,
             _ => text_codec,
         };
-        let (codec_id, compressed) =
+        let (codec_id, compressed): (u8, std::sync::Arc<[u8]>) =
             match limnifs_core::codec::compress_with_tunables(preferred_codec, &data, tunables) {
-                Ok(c) if c.len() < data.len() => (preferred_codec, c),
-                _ => (limnifs_core::codec::CODEC_STORE, data.clone()),
+                Ok(c) if c.len() < data.len() => (preferred_codec, c.into()),
+                _ => (limnifs_core::codec::CODEC_STORE, data.to_vec().into()),
             };
         return Ok(ChunkedFileResult {
             drops: vec![(drop_id, data, compressed, codec_id)],
@@ -878,18 +882,18 @@ fn process_file(
     // correct, misses are bounded by worker count.
     use rayon::prelude::*;
     thread_local! {
-        static COMPRESS_CACHE: std::cell::RefCell<std::collections::HashMap<[u8; 32], (u8, Vec<u8>)>> =
+        static COMPRESS_CACHE: std::cell::RefCell<std::collections::HashMap<[u8; 32], (u8, std::sync::Arc<[u8]>)>> =
             std::cell::RefCell::new(std::collections::HashMap::new());
     }
     const COMPRESS_CACHE_MAX_ENTRIES: usize = 100_000;
-    let drops: Vec<([u8; 32], Vec<u8>, Vec<u8>, u8)> = unique_chunks
+    let drops: Vec<RawDrop> = unique_chunks
         .par_iter()
         .map(|(chunk, drop_id)| {
             // Layer fast-path: chunk already exists in the base image
             // → skip compress entirely.
             if let Some(base) = base_drop_index {
                 if base.contains(drop_id) {
-                    return (*drop_id, Vec::new(), Vec::new(), CODEC_REFERENCED);
+                    return (*drop_id, Vec::new(), Vec::new().into(), CODEC_REFERENCED);
                 }
             }
             let class = classifier.classify(chunk);
@@ -907,7 +911,8 @@ fn process_file(
                 COMPRESS_CACHE.with(|c| {
                     let mut cache = c.borrow_mut();
                     if cache.len() < COMPRESS_CACHE_MAX_ENTRIES {
-                        cache.insert(*drop_id, (new.0, new.1.clone()));
+                        // `new.1.clone()` here is an Arc refcount bump.
+                        cache.insert(*drop_id, new.clone());
                     }
                 });
                 new
@@ -928,7 +933,7 @@ struct PendingDrop {
     /// the full plaintext until slab assembly wastes memory
     /// proportional to image size on top of the compressed bytes.
     plaintext_len: u32,
-    compressed: Vec<u8>,
+    compressed: std::sync::Arc<[u8]>,
     codec: u8,
     /// Dictionary id (0xFF = NO_DICT). Populated during the dict
     /// re-compression pass for drops that were re-compressed with a
@@ -1181,12 +1186,12 @@ impl WriteContext {
     #[allow(dead_code)]
     fn deepen_drop(&self, drop_id: [u8; 32], plaintext: &[u8]) -> PendingDrop {
         let class = self.classifier.classify(plaintext);
-        let (codec, compressed) = match class {
+        let (codec, compressed): (u8, std::sync::Arc<[u8]>) = match class {
             classifier::Class::Text | classifier::Class::Code | classifier::Class::Binary => {
                 let c = limnifs_core::codec::compress_lz4_with_size(plaintext);
-                (limnifs_core::codec::CODEC_LZ4, c)
+                (limnifs_core::codec::CODEC_LZ4, c.into())
             }
-            _ => (limnifs_core::codec::CODEC_STORE, plaintext.to_vec()),
+            _ => (limnifs_core::codec::CODEC_STORE, plaintext.to_vec().into()),
         };
         PendingDrop {
             id: drop_id,
@@ -1357,7 +1362,7 @@ impl WriteContext {
                 continue;
             };
             if dict_compressed.len() < d.compressed.len() {
-                d.compressed = dict_compressed;
+                d.compressed = dict_compressed.into();
                 d.dict_id = dict.id;
             }
         }
