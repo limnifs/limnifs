@@ -31,6 +31,6 @@ For sigstore (keyless), add `limni sigstore-sign` and
 
 ## Acceptance
 
-- [ ] `--sign-key` produces a signed image
-- [ ] `--verify-key` rejects tampered images
-- [ ] Tests cover signing + verification round-trip
+- [x] `--sign-key` produces a signed image
+- [x] `--verify-key` rejects tampered images
+- [x] Tests cover signing + verification round-trip (core PEM/limsig + CLI workflow)
