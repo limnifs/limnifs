@@ -5,6 +5,27 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.43] — 2026-08-19
+
+### Changed
+
+- **omnizip 0.16.62 → 0.16.64** — upstream fixed the from-spec
+  Brotli encoder's dictionary-reference classification (walks used
+  the unclamped output position; the decoder clamps to
+  min(pos, MAX_BACKWARD_DISTANCE)), which caused both the >=16 MB
+  tail-window panic and a silent wrong-word corruption variant at
+  metablock offsets past the 16 MiB window. Verified against our
+  minimal repro (16,976,720-byte FITS-like input): q5 round-trips
+  byte-identical where 0.16.62/0.16.63 panicked. The v0.2.42 panic
+  guard remains as defense-in-depth.
+- Benchmark on 0.16.64: CSV 4.04% (matches upstream's number),
+  FITS 32.09% (ricepp keeps the drop; Brotli at 64% is uncompetitive
+  on gradient data), WAV 0.44%. CSV/FITS create times increased
+  (88s/276s) — the Brotli trial now completes instead of panicking
+  early; the dictionary-lookup O(N x dict_words) cost (see
+  BUGREPORT-brotli-dict-lookup-O(n).md upstream) is the remaining
+  wall-clock factor.
+
 ## [0.2.42] — 2026-08-19
 
 ### Fixed
