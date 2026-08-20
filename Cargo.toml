@@ -32,6 +32,13 @@ missing_panics_doc = "allow"
 return_self_not_must_use = "allow"
 
 [workspace.dependencies]
+# Internal crates (omnizip-style: members reference these as
+# `limnifs-core.workspace = true`; release-plz bumps the shared
+# workspace version once and publishes in DAG order).
+limnifs-format = { path = "limnifs-format", version = "0.2.50" }
+limnifs-ocb3 = { path = "limnifs-ocb3", version = "0.2.50" }
+limnifs-core = { path = "limnifs-core", version = "0.2.50" }
+limnifs-write = { path = "limnifs-write", version = "0.2.50" }
 aes-gcm = "0.10"
 blake3 = { version = "1.8.7", default-features = false, features = ["std", "rayon"] }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "getrandom"] }

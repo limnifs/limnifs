@@ -5,6 +5,18 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Release process aligned with omnizip-rs / parsanol-rs** —
+  release-plz now owns crates.io publishing: version bumps land on
+  main as commits, release-plz tags each crate `<crate>-vX.Y.Z` and
+  publishes in DAG order via trusted publishing (OIDC; no static
+  registry token). Internal deps moved to `workspace.dependencies`
+  (`limnifs-core.workspace = true` style). Binary/SBOM workflows
+  unchanged, now also keyed off release-plz's `limni-v*` tags.
+
 ## [0.2.50] — 2026-08-20
 
 ### Fixed

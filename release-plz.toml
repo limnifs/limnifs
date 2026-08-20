@@ -1,0 +1,30 @@
+# Release-plz configuration for limnifs
+# https://release-plz.dev/docs/config
+#
+# Aligned with omnizip-rs / parsanol-rs:
+# - git_release_enable = false: no per-crate GitHub Releases; binary
+#   releases are built by release.yml's tag jobs + release-binary.yml.
+# - Version bumps land on main as commits (workspace.package.version);
+#   release-plz tags each crate `<crate>-vX.Y.Z` and publishes to
+#   crates.io in DAG order via trusted publishing (OIDC).
+
+[workspace]
+git_release_enable = false
+dependencies_update = true
+allow_dirty = false
+# Publish on every main push (same rationale as omnizip-rs: the
+# changed-since-last-release check is unreliable over our pre-plz
+# tag history; no changes -> no-op).
+release_always = true
+
+[changelog]
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}\
+{% if commit.breaking %} (BREAKING){% endif %}\
+{% if commit.author != "github-actions[bot]" %} by @{{ commit.author }}{% endif %}\
+{% endfor %}
+{% endfor %}
+"""

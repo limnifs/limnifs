@@ -1,27 +1,29 @@
 name: Release
 
-# Tag-driven release pipeline. Triggers on `v*` tags.
+# Release pipeline (aligned with omnizip-rs / parsanol-rs).
 #
-# Pipeline:
-#   1. cargo-deny license scan (hard fail on GPL-3/AGPL/LGPL).
-#   2. cargo-cyclonedx SBOM generation per workspace crate.
-#   3. Reproducible release build: linux + macOS, x86_64 + aarch64.
-#   4. SHA256 checksums per artifact.
-#   5. GitHub Releases upload with SBOM + checksums + binaries.
+# Two triggers, two halves:
+#
+# - push to main → release-plz publishes the workspace crates to
+#   crates.io via trusted publishing (OIDC; crates.io Publishers:
+#   GitHub Actions / limnifs / limnifs / release.yml) and creates
+#   per-crate tags `<crate>-vX.Y.Z`. Version bumps land on main as
+#   commits; release-plz never publishes from a laptop.
+# - tag push (`v*` or release-plz's `limni-v*`) → binary pipeline:
+#   cargo-deny license scan, CycloneDX SBOM, 4-target build,
+#   checksums, GitHub Release upload.
 #
 # Sigstore keyless signing is deferred — v1 ships Ed25519 keypair
-# signatures via `limni sign` (see limnifs-core/src/signing.rs).
+# signatures via `limni limn --sign-key` (see limnifs-core/src/signing.rs).
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+      - "limni-v*"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag name to simulate (e.g. v0.1.0)"
-        required: false
-        type: string
 
 permissions:
   contents: write
@@ -31,8 +33,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-plz:
+    name: Release-plz (crates.io)
+    if: github.ref == 'refs/heads/main' && github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      # push per-crate tags
+      contents: write
+      # crates.io trusted publishing (OIDC token exchange)
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Mint short-lived crates.io token (trusted publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: Run release-plz
+        uses: MarcoIeni/release-plz-action@v0.5.131
+        with:
+          # release only — same as omnizip-rs: no release PR (GitHub
+          # Actions can't open PRs here without a PAT). Version bumps
+          # arrive on main as commits; this publishes + tags them.
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
   license-scan:
     name: License scan (cargo-deny)
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +78,7 @@ jobs:
 
   sbom:
     name: SBOM (CycloneDX)
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -159,38 +193,3 @@ jobs:
             release/sbom-flat/*.cdx.json
           generate_release_notes: true
           fail_on_unmatched_files: false
-
-
-  # Publish library crates to crates.io (GHA only — never from a laptop).
-  # Requires secret CARGO_REGISTRY_TOKEN (crates.io API token with publish
-  # scope for the limnifs owner). Order respects the dep DAG.
-  publish-crates-io:
-    name: Publish crates.io
-    needs: [license-scan, build]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # OIDC token exchange for crates.io trusted publishing
-      # (crate settings → Publishers → GitHub Actions / limnifs / limnifs / release.yml).
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Mint short-lived crates.io token (trusted publishing)
-        id: auth
-        uses: rust-lang/crates-io-auth-action@v1
-      - name: Publish in dependency order
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-        run: |
-          set -euo pipefail
-          # Leaf → root. --no-verify: CI already built + tested on this commit.
-          for crate in limnifs-format limnifs-ocb3 limnifs-core limnifs-write limni; do
-            echo "=== publishing $crate ==="
-            cargo publish -p "$crate" --no-verify --locked
-            # crates.io index lag between publishes
-            sleep 15
-          done

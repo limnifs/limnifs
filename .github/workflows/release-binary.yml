@@ -11,6 +11,7 @@ on:
   push:
     tags:
       - "v*.*.*"
+      - "limni-v*"
   workflow_dispatch:
 
 permissions:
