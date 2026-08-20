@@ -1520,7 +1520,15 @@ impl WriteContext {
         cleanup(self);
     }
 
+    /// Env-gated phase timer for assemble profiling (TODO.perf/16).
+    fn trace_phase(label: &str, start: std::time::Instant) {
+        if std::env::var_os("LIMNIFS_TRACE_ASSEMBLE").is_some() {
+            eprintln!("[assemble] {label}: {:?}", start.elapsed());
+        }
+    }
+
     fn assemble(mut self) -> WriteArtifact {
+        let t_assemble = std::time::Instant::now();
         let inode_count = self.inodes.len();
         let dir_count = self.dir_count;
         let drop_count = self.drops.len();
@@ -1530,12 +1538,16 @@ impl WriteContext {
         // MAX_SLAB_TOTAL_BYTES so the reader's 64 MiB ceiling is never
         // exceeded. A single drop larger than the budget gets its own
         // slab (we cannot split a drop).
+        let t = std::time::Instant::now();
         let slabs = pack_slabs(&self.drops);
+        Self::trace_phase("pack_slabs", t);
 
         // Build the shared inline table: deduplicate inline data that
         // appears in more than one inode. For N files with identical
         // small content, store once and reference by index.
+        let t = std::time::Instant::now();
         self.build_shared_inline_table();
+        Self::trace_phase("shared_inline_table", t);
 
         let mut metadata_blob = Vec::new();
         metadata_blob.extend_from_slice(&u32::try_from(self.inodes.len()).unwrap().to_le_bytes());
@@ -1562,6 +1574,7 @@ impl WriteContext {
             }
         }
 
+        Self::trace_phase("metadata_encode", t);
         // Compress the metadata blob. Metadata is highly compressible
         // (sequential inode numbers, repeated modes, natural-language
         // file names) — even low Brotli quality yields 4–8× on source
@@ -1570,6 +1583,7 @@ impl WriteContext {
         // dominate create time at q5, so step down to q2.
         let uncompressed_len =
             u32::try_from(metadata_blob.len()).expect("metadata blob length fits u32");
+        let t = std::time::Instant::now();
         let metadata_hash = hash_section(&metadata_blob);
         let metadata_codec = self.metadata_codec;
         let metadata_quality = if metadata_blob.len() > METADATA_LARGE_BLOB_THRESHOLD {
@@ -1584,6 +1598,7 @@ impl WriteContext {
             limnifs_core::codec::compress(metadata_codec, &metadata_blob)
                 .unwrap_or_else(|_| metadata_blob.clone())
         };
+        Self::trace_phase("metadata_compress", t);
         let (on_wire_codec, on_wire_blob) = if compressed_blob.len() < metadata_blob.len() {
             (metadata_codec, compressed_blob)
         } else {
