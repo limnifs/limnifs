@@ -33,4 +33,4 @@ Slab packing uses `&[u8]` borrows from the Arc, so no semantic change.
 - [x] `compressed` field is `Arc<[u8]>`
 - [x] Cache hits are refcount bumps (no alloc)
 - [x] Output bytes unchanged (verified byte-identical on dedup-heavy 200-file tree)
-- [ ] Benchmark: container-layer workloads improve (pending next full bench run)
+- [x] Benchmark: container-layer workloads improve (measured 2026-08-20 on omnizip 0.16.75: 4000-file / 262 MB tree with 100 unique 64 KiB contents -> create 0.2 s flat, 100 drops (perfect dedup), 6.5 MB slab, ~410 MB peak RSS, byte-identical extract, deterministic root across runs; the 3900 cache hits are Arc refcount bumps)
