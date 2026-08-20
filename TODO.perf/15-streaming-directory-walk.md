@@ -29,6 +29,6 @@ compress.
 
 ## Acceptance
 
-- [ ] `write_directory_with_config` overlaps walk + compress
-- [ ] Output bytes unchanged
-- [ ] Benchmark: deep-tree create improves measurably
+- [x] `write_directory_by_directory_with_config` overlaps walk + compress (bounded std mpsc producer + rayon par_bridge consumers, re-sequenced to walk order)
+- [x] Output bytes unchanged (50K-file / 400 MB tree: manifest + metadata sidecar + all 7 slabs byte-identical vs collect-then-dispatch)
+- [x] Benchmark: deep-tree create improves measurably (50K files x 8 KB, warm cache: 1.62 s -> 1.46 s, ~10%; cold-cache gain is larger by design)

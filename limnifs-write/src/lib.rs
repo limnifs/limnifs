@@ -540,10 +540,129 @@ pub fn write_directory_with_config(
     ctx.auto_turnover = config.turnover_threshold > 0;
     ctx.collect_dict_samples = config.dictionaries.enabled;
 
-    let root_inode_number = ctx.walk(root)?;
-    ctx.root_inode_number = root_inode_number;
-    write_directory_body(&mut ctx, config)?;
+    write_directory_streaming(&mut ctx, root, config)?;
     Ok(ctx.assemble())
+}
+
+/// Walk + compress with producer/consumer overlap (TODO.perf/15).
+///
+/// The tree walk runs on a scoped producer thread and forwards each
+/// deferred file to a bounded channel; rayon workers (via `par_bridge`)
+/// compress while the walk is still descending. For warm-cache trees
+/// with few files this is equivalent to the collect-then-dispatch
+/// shape; for huge or cold-cache trees it hides walk latency behind
+/// compression.
+///
+/// **Determinism:** results are re-sequenced into walk order before
+/// merging, and inode allocation / dir-node construction are
+/// untouched, so the emitted bytes are identical to
+/// `write_directory_body` for the same input.
+fn write_directory_streaming(
+    ctx: &mut WriteContext,
+    root: &Path,
+    config: &WriteConfig,
+) -> Result<(), WriteError> {
+    use rayon::prelude::*;
+
+    ctx.metadata_codec = config
+        .metadata_codec_id()
+        .unwrap_or(limnifs_core::codec::CODEC_BROTLI);
+
+    let chunker = ctx.chunker.clone();
+    let classifier = ctx.classifier;
+    let text_codec = config.text_codec_id().unwrap_or(0x04);
+    let binary_codec = config.binary_codec_id().unwrap_or(0x01);
+    let tunables = config.to_core_tunables();
+    let use_categorizers = !config.categorizers.is_empty();
+    let skip_chunking = config.skip_chunking;
+    let registry = config
+        .codec_registry()
+        .map_err(|e| WriteError::Io(std::io::Error::other(format!("codec registry: {e}"))))?;
+    let tournament_codec_ids: Vec<u8> = config
+        .tournament
+        .codecs
+        .iter()
+        .filter_map(|n| registry.lookup_by_name(n))
+        .collect();
+    let tournament_spec = TournamentSpec {
+        codec_ids: tournament_codec_ids,
+        min_size: config.tournament.min_size_threshold as usize,
+        skip_for_binary: config.tournament.skip_for_binary,
+        short_circuit_permille: config.tournament.short_circuit_threshold,
+    };
+    // The producer thread owns `&mut ctx` for the duration of the
+    // walk, so the layer fast-path index travels as a clone.
+    let base_drop_index = ctx.base_drop_index.clone();
+
+    // Bounded so the walk back-pressures if compression falls behind;
+    // the buffer is large enough to keep every worker fed on bursty
+    // directory layouts.
+    const PIPELINE_CAPACITY: usize = 256;
+    let (tx, rx) = std::sync::mpsc::sync_channel::<PendingFile>(PIPELINE_CAPACITY);
+    ctx.pending_sink = Some(tx);
+
+    let (root_inode_number, mut results): (
+        u64,
+        Vec<(usize, PendingFile, Result<ChunkedFileResult, WriteError>)>,
+    ) = std::thread::scope(|scope| {
+        let producer = {
+            let ctx = &mut *ctx;
+            let root = root;
+            scope.spawn(move || {
+                let r = ctx.walk(root);
+                // Disconnect the channel so the consumer's iterator
+                // terminates; the sink stays None until the next
+                // streaming write resets it after the scope.
+                ctx.pending_sink = None;
+                r
+            })
+        };
+        // par_bridge does not preserve order; carry the arrival index
+        // and re-sequence before merging.
+        let results = rx
+            .into_iter()
+            .enumerate()
+            .par_bridge()
+            .map(|(i, pf)| {
+                let r = process_file(
+                    &pf,
+                    &chunker,
+                    classifier,
+                    text_codec,
+                    binary_codec,
+                    &tunables,
+                    use_categorizers,
+                    skip_chunking,
+                    &tournament_spec,
+                    base_drop_index.as_ref(),
+                );
+                (i, pf, r)
+            })
+            .collect();
+        let joined = producer
+            .join()
+            .unwrap_or_else(|_| {
+                Err(WriteError::Io(std::io::Error::other(
+                    "walk thread panicked",
+                )))
+            })
+            .map(|n| (n, results));
+        // Scope can't `?` across borrows of `results`; return the
+        // outcome and propagate outside.
+        joined
+    })?;
+    ctx.pending_sink = None;
+    ctx.root_inode_number = root_inode_number;
+
+    results.sort_unstable_by_key(|(i, _, _)| *i);
+    // Fail on the lowest walk index first, matching the
+    // collect::<Result<Vec<_>, _>> abort semantics of the
+    // collect-then-dispatch shape.
+    for (_, pf, r) in results {
+        ctx.merge_chunked_file(&pf, r?);
+    }
+    ctx.train_and_apply_dictionary(&config.dictionaries);
+    Ok(())
 }
 
 /// One chunk of a file before dedup: (`drop_id`, `plaintext`, `compressed`, `codec`).
@@ -1071,6 +1190,12 @@ struct WriteContext {
     /// so readers know which image provides the referenced drops.
     /// `None` for standalone writes.
     base_root: Option<[u8; 32]>,
+    /// Streaming-walk sink (TODO.perf/15). When set, `walk` forwards
+    /// deferred files to the channel instead of buffering them in
+    /// `pending_files`, so compression starts while the walk is still
+    /// descending the tree. `None` keeps the collect-then-dispatch
+    /// shape (used by the non-streaming entry points).
+    pending_sink: Option<std::sync::mpsc::SyncSender<PendingFile>>,
 }
 
 impl WriteContext {
@@ -1103,6 +1228,7 @@ impl WriteContext {
             trained_dicts_by_class: HashMap::new(),
             base_drop_index: None,
             base_root: None,
+            pending_sink: None,
         }
     }
 
@@ -1265,12 +1391,24 @@ impl WriteContext {
                 });
             } else {
                 // Defer to parallel processing — collect the file info.
-                self.pending_files.push(PendingFile {
+                let pf = PendingFile {
                     inode_number,
                     path: path.to_path_buf(),
                     mtime_ns,
                     file_len,
-                });
+                };
+                if let Some(sink) = &self.pending_sink {
+                    // Streaming mode: hand the file to the compress
+                    // workers immediately; the bounded channel
+                    // back-pressures if they fall behind. A send
+                    // failure means the receiver is gone (a worker
+                    // hit an unrecoverable error) — abort the walk.
+                    sink.send(pf).map_err(|_| {
+                        WriteError::Io(std::io::Error::other("walk: compress pipeline shut down"))
+                    })?;
+                } else {
+                    self.pending_files.push(pf);
+                }
             }
             Ok(inode_number)
         } else {
