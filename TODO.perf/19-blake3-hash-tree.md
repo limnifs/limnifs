@@ -32,8 +32,16 @@ The realistic win is #1 for large-file workloads.
 - 10–20% on large-file workloads (ML models, archives within archives)
 - No change on small-file workloads (already chunk-parallel via rayon)
 
-## Acceptance
+## Findings (2026-08-20)
 
-- [ ] Profile BLAKE3 cost on large-file benchmark
-- [ ] If >10% of total, implement hash-tree derivation
-- [ ] Output bytes unchanged (BLAKE3 is deterministic regardless)
+- [x] Profile BLAKE3 cost on large-file benchmark — measured 1.65 GB/s
+      scalar on this machine: the whole 47.7 MB FITS file hashes in
+      29 ms against a 276 s create (0.01%). Per-chunk hashing already
+      rides the rayon file-level parallelism; inline-file hashing is
+      137 ms for 50 K files.
+- [x] If >10% of total, implement hash-tree derivation — NO: BLAKE3
+      is under 0.1% of every measured workload. The >10% bar from the
+      acceptance criteria is nowhere near met; tree-mode derivation
+      would add complexity for unmeasurable gain.
+- [x] Output bytes unchanged (BLAKE3 is deterministic regardless) —
+      no code path changed.
