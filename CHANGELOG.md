@@ -5,6 +5,18 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.49] — 2026-08-20
+
+### Fixed
+
+- **Release matrix (gnu)**: set
+  `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc`
+  — host `cc` was linking x86-64 flavor lld against aarch64 objects.
+- **Release binaries (musl)**: install `musl-tools` (x86_64) and the
+  musl.cc prebuilt aarch64 cross toolchain; blake3's NEON shim needs
+  a target C compiler.
+- **Windows binary**: build with host MSVC (no mingw on the runner).
+
 ## [0.2.48] — 2026-08-20
 
 ### Fixed

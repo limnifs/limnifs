@@ -9,8 +9,8 @@ repository.workspace = true
 description = "LimniFS conformance suite — declarative vectors, generators, harness"
 
 [dependencies]
-limnifs-format = { path = "../limnifs-format", version = "0.2.48" }
-limnifs-core = { path = "../limnifs-core", version = "0.2.48" }
+limnifs-format = { path = "../limnifs-format", version = "0.2.49" }
+limnifs-core = { path = "../limnifs-core", version = "0.2.49" }
 serde_json = "1"
 
 [lints]

@@ -28,10 +28,22 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
 
+      - name: Install x86_64 musl + aarch64 musl cross toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          # musl.cc prebuilt cross toolchain for aarch64
+          curl -sL --retry 3 https://musl.cc/aarch64-linux-musl-cross.tgz \
+            | sudo tar xz -C /opt
+          echo "/opt/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+
       - name: Build x86_64 (musl, static)
         run: cargo build --release --target x86_64-unknown-linux-musl -p limni
 
       - name: Build aarch64 (musl, static)
+        env:
+          CC_aarch64_unknown_linux_musl: aarch64-linux-musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
         run: cargo build --release --target aarch64-unknown-linux-musl -p limni
 
       - name: Package binaries
@@ -77,17 +89,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
 
-      - name: Build x86_64 (GNU)
-        run: cargo build --release --target x86_64-pc-windows-gnu -p limni
+      - name: Build x86_64 (MSVC)
+        run: cargo build --release -p limni
 
       - name: Package binaries
         shell: bash
         run: |
           mkdir -p dist
-          7z a dist/limni-windows-x86_64.zip ./target/x86_64-pc-windows-gnu/release/limni.exe
+          7z a dist/limni-windows-x86_64.zip ./target/release/limni.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
