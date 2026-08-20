@@ -5,6 +5,15 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.48] — 2026-08-20
+
+### Fixed
+
+- **Release build matrix**: `aarch64-unknown-linux-gnu` installs
+  `gcc-aarch64-linux-gnu` — blake3's NEON shim needs a cross C
+  compiler; the target previously failed with
+  `ToolNotFound: aarch64-linux-gnu-gcc`.
+
 ## [0.2.47] — 2026-08-20
 
 ### Fixed
