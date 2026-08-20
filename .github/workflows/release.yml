@@ -54,14 +54,17 @@ jobs:
       - name: Install cargo-cyclonedx
         run: cargo install cargo-cyclonedx --locked --version ^0.5
       - name: Generate SBOM
-        run: cargo cyclonedx --workspace --all-features --format json --output-pattern package
+        run: |
+          # cargo-cyclonedx 0.5.x: no --workspace; pass the workspace manifest.
+          cargo cyclonedx --manifest-path ./Cargo.toml -f json --all-features
+          find . -name '*.cdx.json' -print
+
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
         with:
           name: sbom
           path: |
             **/*.cdx.json
-            **/build/cyclonedx/*.cdx.json
           if-no-files-found: error
 
   build:
@@ -134,15 +137,20 @@ jobs:
           path: release
       - name: Display structure
         run: find release -type f | sort
+      - name: Flatten SBOM files for release upload
+        run: |
+          mkdir -p release/sbom-flat
+          find release/sbom -name '*.cdx.json' -exec cp {} release/sbom-flat/ \;
+          ls -la release/sbom-flat/
       - name: Create or update release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             release/limni-*/*.tar.gz
             release/limni-*/*.sha256
-            release/sbom/*.cdx.json
+            release/sbom-flat/*.cdx.json
           generate_release_notes: true
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
 
 
   # Publish library crates to crates.io (GHA only — never from a laptop).

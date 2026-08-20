@@ -5,6 +5,19 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.47] — 2026-08-20
+
+### Fixed
+
+- **no-shims**: `todo!` annotations must be **same-line** (previous
+  attempt put the task path on the next line; gate still failed).
+- **clippy 1.97**: `dict_round_trip` map_unwrap_or + cast.
+- **SBOM**: `cargo-cyclonedx` 0.5 dropped `--workspace`; use
+  `--manifest-path ./Cargo.toml -f json`.
+- **rustdoc Pages**: use default `github-pages` artifact name.
+- **GitHub Release upload**: flatten SBOM paths; do not fail the
+  whole release on a missing optional glob.
+
 ## [0.2.46] — 2026-08-20
 
 ### Fixed

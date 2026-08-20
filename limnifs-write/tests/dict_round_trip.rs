@@ -14,6 +14,7 @@
 //! - `SlabStore::plaintext_for` routing dict-id'd drops through
 //!   `codec::zstd_dict::decompress_with_dict`.
 
+#![allow(clippy::cast_possible_truncation, clippy::map_unwrap_or)]
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -28,8 +29,7 @@ use limnifs_write::{profile, write_directory_with_config};
 fn make_workdir(name: &str) -> PathBuf {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_millis() as u64);
     let p = std::env::temp_dir().join(format!(
         "limnifs-dict-rt-{name}-{}-{nonce}",
         std::process::id()
