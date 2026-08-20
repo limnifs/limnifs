@@ -151,7 +151,10 @@ jobs:
           if [ -z "$tag" ]; then
             tag="dev"
           fi
-          staging="limni-${tag}-${{ matrix.target }}"
+          # release-plz tags already carry the limni- prefix (limni-vX.Y.Z);
+          # plain v* tags get it added.
+          case "$tag" in limni-*) ;; *) tag="limni-$tag" ;; esac
+          staging="${tag}-${{ matrix.target }}"
           mkdir "$staging"
           cp target/${{ matrix.target }}/release/limni "$staging/"
           cp README.md LICENSE-* "$staging/" 2>/dev/null || true
