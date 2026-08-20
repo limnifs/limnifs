@@ -1,0 +1,49 @@
+# One-off bootstrap publish for the remaining new crates.
+#
+# Why this exists (same situation as omnizip-rs publish-deflate64.yml):
+# crates.io trusted-publishing tokens cannot CREATE new crates —
+# "Publish the crate manually, first". release-plz's first run
+# published limnifs-format (tag limnifs-format-v0.2.50) and stopped
+# at limnifs-ocb3. This workflow does the one-time classic-token
+# publish + tagging for the rest; after it succeeds, release-plz
+# owns everything via trusted publishing and the
+# CARGO_REGISTRY_TOKEN secret can be deleted.
+#
+# Trigger: manual via workflow_dispatch ONLY.
+
+name: Bootstrap crates.io publish
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish + tag remaining crates (DAG order)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN secret not set"
+            exit 1
+          fi
+          ver="$(grep -m1 '^version' Cargo.toml | tr -d ' "' | cut -d= -f2)"
+          echo "bootstrap version: $ver"
+          for crate in limnifs-ocb3 limnifs-core limnifs-write limni; do
+            echo "=== publishing $crate ==="
+            cargo publish -p "$crate" --no-verify
+            git tag "${crate}-v${ver}"
+            git push origin "${crate}-v${ver}"
+            sleep 15
+          done
