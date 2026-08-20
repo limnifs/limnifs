@@ -5,7 +5,39 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.51] — 2026-08-21
+
+### Added
+
+- **Streaming directory walk** (TODO.perf/15) — `write_directory_with_config`
+  overlaps the tree walk with compression: bounded mpsc producer →
+  rayon `par_bridge` consumers, re-sequenced to walk order. Output
+  bytes identical (verified on 50K-file / 400 MB tree: manifest,
+  sidecar, all 7 slabs); ~10% faster warm-cache deep-tree create,
+  more on cold cache.
+- **assemble phase tracing** — `LIMNIFS_TRACE_ASSEMBLE=1` prints
+  per-phase timings (pack_slabs / shared_inline_table /
+  metadata_encode / metadata_compress).
+
+### Fixed
+
+- **`inline_threshold` config is honored** — the knob was silently
+  ignored (hard constant); now threaded through WriteContext into
+  the walk + skip-chunking decisions. Per-profile values apply.
+- **`cat-multi` drop cache** — routes through `CachedSlabStore` like
+  `extract`; files sharing drops decode once (400 files / 100 drops:
+  0.30 s).
+- FSST+Brotli CSV round-trip test un-ignored (omnizip 0.16.64+
+  fixed dictionary-reference classification).
+
+### Changed
+
+- **omnizip 0.16.75 → 0.16.76.** First full benchmark on the 0.16.7x
+  line: CSV create 88 s → 2.25 s (39x) at 2.99% ratio (vs reference
+  6.23%), FITS 276 s → 14.5 s, tiny-files 5.8 s.
+- TODO.perf board closed: 01/04/08 rejected with data (Brotli keeps
+  metadata on ratio; inline routing beats slabs on tiny files;
+  categorizer dispatch <1%), 02/05 verified shipped.
 
 ### Changed
 
