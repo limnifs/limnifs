@@ -28,23 +28,19 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
 
-      - name: Install x86_64 musl + aarch64 musl cross toolchains
+      - name: Install musl-tools + cross
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
-          # musl.cc prebuilt cross toolchain for aarch64
-          curl -sL --retry 3 https://musl.cc/aarch64-linux-musl-cross.tgz \
-            | sudo tar xz -C /opt
-          echo "/opt/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
+          # cross-rs builds foreign musl targets in a container with the
+          # full toolchain — musl.cc downloads truncate on GH runners.
+          cargo install cross --locked
 
       - name: Build x86_64 (musl, static)
         run: cargo build --release --target x86_64-unknown-linux-musl -p limni
 
       - name: Build aarch64 (musl, static)
-        env:
-          CC_aarch64_unknown_linux_musl: aarch64-linux-musl-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
-        run: cargo build --release --target aarch64-unknown-linux-musl -p limni
+        run: cross build --release --target aarch64-unknown-linux-musl -p limni
 
       - name: Package binaries
         run: |

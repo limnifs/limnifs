@@ -5,6 +5,14 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.50] — 2026-08-20
+
+### Fixed
+
+- **aarch64-musl static build**: musl.cc tarballs truncate on GH
+  runners; build that target with `cross` (containerized full musl
+  toolchain) instead.
+
 ## [0.2.49] — 2026-08-20
 
 ### Fixed
