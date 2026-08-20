@@ -1297,20 +1297,22 @@ fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
     let inode_index: std::collections::HashMap<u64, &limnifs_core::Inode> =
         blob.inodes.iter().map(|i| (i.number, i)).collect();
 
-    let slab_store: Option<limnifs_core::slab_store::SlabStore> = if slab_index.is_empty() {
+    // Wrap in the LRU drop cache (TODO.perf/02): cat-multi across
+    // files sharing drops (dedup trees, container layers) decodes
+    // each drop once instead of per referencing file.
+    let cached_store: Option<limnifs_core::slab_cache::CachedSlabStore> = if slab_index.is_empty() {
         None
     } else {
-        Some(
-            limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index)
-                .map_err(map_err)
-                .map(|mut s| {
-                    if let Some(d) = &_dict_section {
-                        install_dicts(&mut s, d);
-                    }
-                    s
-                })?,
-        )
+        let mut s =
+            limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?;
+        if let Some(d) = &_dict_section {
+            install_dicts(&mut s, d);
+        }
+        Some(limnifs_core::slab_cache::CachedSlabStore::with_default_capacity(s))
     };
+    let slab_store: Option<&dyn limnifs_core::slab_source::SlabSource> = cached_store
+        .as_ref()
+        .map(|s| s as &dyn limnifs_core::slab_source::SlabSource);
 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();

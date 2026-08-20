@@ -378,6 +378,7 @@ pub fn write_layer(
     ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
     ctx.auto_turnover = config.turnover_threshold > 0;
     ctx.collect_dict_samples = config.dictionaries.enabled;
+    ctx.inline_threshold = config.defaults.inline_threshold as usize;
     ctx.base_drop_index = Some(base_drop_index);
     ctx.base_root = Some(base_root);
 
@@ -481,6 +482,7 @@ fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<
     if pending.is_empty() {
         return Ok(());
     }
+    ctx.inline_threshold = config.defaults.inline_threshold as usize;
     let chunker = ctx.chunker.clone();
     let classifier = ctx.classifier;
     let text_codec = config.text_codec_id().unwrap_or(0x04);
@@ -504,6 +506,7 @@ fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<
         short_circuit_permille: config.tournament.short_circuit_threshold,
     };
     let base_drop_index = ctx.base_drop_index.as_ref();
+    let inline_threshold = ctx.inline_threshold;
     let results: Vec<ChunkedFileResult> = pending
         .par_iter()
         .map(|pf| {
@@ -518,6 +521,7 @@ fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<
                 skip_chunking,
                 &tournament_spec,
                 base_drop_index,
+                inline_threshold,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -593,6 +597,9 @@ fn write_directory_streaming(
     // The producer thread owns `&mut ctx` for the duration of the
     // walk, so the layer fast-path index travels as a clone.
     let base_drop_index = ctx.base_drop_index.clone();
+    let inline_threshold = ctx.inline_threshold;
+
+    ctx.inline_threshold = config.defaults.inline_threshold as usize;
 
     // Bounded so the walk back-pressures if compression falls behind;
     // the buffer is large enough to keep every worker fed on bursty
@@ -635,6 +642,7 @@ fn write_directory_streaming(
                     skip_chunking,
                     &tournament_spec,
                     base_drop_index.as_ref(),
+                    inline_threshold,
                 );
                 (i, pf, r)
             })
@@ -902,6 +910,7 @@ fn process_file(
     skip_chunking: bool,
     tournament: &TournamentSpec,
     base_drop_index: Option<&std::collections::HashSet<[u8; 32]>>,
+    inline_threshold: usize,
 ) -> Result<ChunkedFileResult, WriteError> {
     // For files above MMAP_READ_THRESHOLD, map them rather than reading
     // into a Vec via std::fs::read. Pages load on demand from the
@@ -935,7 +944,7 @@ fn process_file(
     // compress at ~1 GB/s is faster than FastCDC hashing overhead
     // for all but the largest multi-GB files (where rayon parallelism
     // across chunks would help).
-    if skip_chunking && file_len > INLINE_THRESHOLD {
+    if skip_chunking && file_len > inline_threshold {
         let drop_id = hash_section(&data);
         let class = classifier.classify(&data);
         let preferred_codec = match class {
@@ -1190,6 +1199,11 @@ struct WriteContext {
     /// so readers know which image provides the referenced drops.
     /// `None` for standalone writes.
     base_root: Option<[u8; 32]>,
+    /// Inline-data cutoff from `WriteConfig::defaults.inline_threshold`.
+    /// Files at or below this size are stored inline in the metadata
+    /// blob instead of being chunked into slabs. Set from the profile
+    /// before `walk`; defaults to the historical constant.
+    inline_threshold: usize,
     /// Streaming-walk sink (TODO.perf/15). When set, `walk` forwards
     /// deferred files to the channel instead of buffering them in
     /// `pending_files`, so compression starts while the walk is still
@@ -1229,6 +1243,7 @@ impl WriteContext {
             base_drop_index: None,
             base_root: None,
             pending_sink: None,
+            inline_threshold: INLINE_THRESHOLD,
         }
     }
 
@@ -1381,7 +1396,7 @@ impl WriteContext {
             let inode_number = self.alloc_inode();
             let file_len = meta.len();
 
-            if file_len <= u64::try_from(INLINE_THRESHOLD).unwrap_or(u64::MAX) {
+            if file_len <= u64::try_from(self.inline_threshold).unwrap_or(u64::MAX) {
                 let data = std::fs::read(path)?;
                 self.inodes.push(PendingInode {
                     number: inode_number,

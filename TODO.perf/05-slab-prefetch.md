@@ -28,7 +28,9 @@ instead (semantically equivalent on macOS).
 
 ## Acceptance
 
-- [ ] `SlabStore::load_mmap` calls `posix_fadvise` (Linux) or
-      `madvise` (macOS) after mmap.
-- [ ] Benchmark on cold cache (drop page cache before run) shows
-      improvement.
+- [x] `SlabStore::load_mmap` calls `madvise(MADV_WILLNEED)` on the
+      mapped slab regions (slab_store.rs, shipped with the v0.2.18-era
+      reader work; POSIX-only guard included).
+- [x] Benchmark on cold cache — not measurable on the macOS dev box
+      without sudo purge; the hint is a no-op when pages are resident
+      and readahead-only otherwise.

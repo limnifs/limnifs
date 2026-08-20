@@ -30,7 +30,17 @@ training + zstd compression applies.
 - **tiny-files create speed**: slightly slower (chunking overhead on
   tiny files). Acceptable for balanced/max-ratio.
 
-## Acceptance
+## Resolution (2026-08-20)
 
-- [ ] Profiles use per-profile `inline_threshold`.
-- [ ] Benchmark on tiny-files shows ratio improvement.
+- [x] Profiles use per-profile `inline_threshold` — the config knob
+      was silently IGNORED (walk + process_file read the hard constant
+      `INLINE_THRESHOLD`); now threaded through WriteContext into both
+      decision points. Profile values (4096 / 8192) now take effect.
+- [x] Benchmark on tiny-files shows ratio improvement — REJECTED with
+      data (50K unique 1 KiB files): threshold 4096 (inline) = 87.1%
+      total, 4.6 s create; threshold 512 (slab path) = 108.3% total,
+      68.4 s create. Inline wins BOTH ways: the shared-inline table
+      already dedups duplicate inline files, and one metadata stream
+      compresses tiny files better than 50K independent chunks (which
+      also pay full tournament cost per chunk). Default thresholds
+      unchanged.

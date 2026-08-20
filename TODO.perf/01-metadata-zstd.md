@@ -26,10 +26,13 @@ the standard fast level).
 - **Create speed on large trees**: faster metadata compression.
 - **No impact** on data drops (only the metadata blob codec changes).
 
-## Acceptance
+## Findings (2026-08-20, measured on real metadata blobs)
 
-- [ ] `balanced()`, `competitive()`, `max-write()`, `max-read()`
-      profiles use `metadata_codec = "zstd"`, `metadata_quality = 3`.
-- [ ] `max-ratio()` keeps `metadata_codec = "brotli"` at q11 (best
-      ratio for archival use case).
-- [ ] Benchmark on tiny-files shows measurable ratio improvement.
+- [x] Benchmark — REJECTED on ratio: on structured metadata (2.3 MB
+      blob) Brotli q2 = 97.26% vs zstd = 99.74%; Brotli wins where the
+      codec choice matters. On inline-dominated blobs both are
+      content-bound (99.99%). zstd wins only SPEED (6.5x: 520 ms vs
+      3.4 s on a 43.6 MB blob) — that gap is omnizip's dictionary-
+      lookup issue (BUGREPORT-brotli-dict-lookup-O(n).md upstream),
+      and per the wait-for-upstream rule we do not change codec
+      profiles to dodge it. No profile change.

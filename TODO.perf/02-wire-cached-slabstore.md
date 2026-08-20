@@ -31,6 +31,9 @@ In `limni::extract`, `cat`, and `cat_multi`:
 
 ## Acceptance
 
-- [ ] `limni::extract` uses `CachedSlabStore`.
-- [ ] `limni::cat_multi` uses `CachedSlabStore`.
-- [ ] Benchmark: repeated `cat-multi` invocation shows cache hits.
+- [x] `limni::extract` uses `CachedSlabStore` (shipped with the
+      parallel-extract pipeline; slab reads ride `&dyn SlabSource`).
+- [x] `limni::cat_multi` uses `CachedSlabStore` (wired 2026-08-20;
+      previously a raw SlabStore).
+- [x] Benchmark: cat-multi over 400 files sharing 100 drops on the
+      4000-file dedup tree: 0.30 s; each drop decoded once.
