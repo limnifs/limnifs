@@ -82,7 +82,7 @@ pub fn write_directory_with_pipeline(
     let pending = std::mem::take(&mut ctx.pending_files);
     if pending.is_empty() {
         ctx.train_and_apply_dictionary(&config.dictionaries);
-        return ctx.assemble();
+        return Ok(ctx.assemble());
     }
 
     let chunker = Arc::new(ctx.chunker.clone());
@@ -152,7 +152,7 @@ pub fn write_directory_with_pipeline(
     }
 
     ctx.train_and_apply_dictionary(&config.dictionaries);
-    ctx.assemble()
+    Ok(ctx.assemble())
 }
 
 /// Same shape as `process_file` but takes pre-read data instead
@@ -201,7 +201,7 @@ fn process_file_inline(
     }
 
     use rayon::prelude::*;
-    let drops: Vec<([u8; 32], Vec<u8>, Vec<u8>, u8)> = unique_chunks
+    let drops: Vec<crate::RawDrop> = unique_chunks
         .par_iter()
         .map(|(chunk, drop_id)| {
             let class = classifier.classify(chunk);
@@ -212,13 +212,15 @@ fn process_file_inline(
                 }
                 _ => limnifs_core::codec::CODEC_STORE,
             };
-            let (codec_id, compressed) = if preferred_codec == limnifs_core::codec::CODEC_STORE {
-                (limnifs_core::codec::CODEC_STORE, chunk.to_vec())
+            let (codec_id, compressed): (u8, std::sync::Arc<[u8]>) = if preferred_codec
+                == limnifs_core::codec::CODEC_STORE
+            {
+                (limnifs_core::codec::CODEC_STORE, chunk.to_vec().into())
             } else {
                 match limnifs_core::codec::compress_with_tunables(preferred_codec, chunk, tunables)
                 {
-                    Ok(c) if c.len() < chunk.len() => (preferred_codec, c),
-                    _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec()),
+                    Ok(c) if c.len() < chunk.len() => (preferred_codec, c.into()),
+                    _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec().into()),
                 }
             };
             (*drop_id, chunk.to_vec(), compressed, codec_id)
@@ -237,29 +239,43 @@ fn process_whole_file_drop_inline(
     tunables: &limnifs_core::codec::CodecTunables,
 ) -> Result<ChunkedFileResult, WriteError> {
     let drop_id = limnifs_core::hash_section(data);
-    let brotli_c = limnifs_core::codec::compress_with_tunables(
-        limnifs_core::codec::CODEC_BROTLI,
-        data,
-        tunables,
-    )
-    .map_err(|e| WriteError::Io(std::io::Error::other(format!("brotli compress: {e}"))))?;
-    let zstd_c = limnifs_core::codec::compress_with_tunables(
-        limnifs_core::codec::CODEC_ZSTD,
-        data,
-        tunables,
-    )
-    .unwrap_or_default();
-    let (mut best_codec, mut best_compressed) = if brotli_c.len() <= zstd_c.len() {
-        (limnifs_core::codec::CODEC_BROTLI, brotli_c)
-    } else {
-        (limnifs_core::codec::CODEC_ZSTD, zstd_c)
-    };
+    // Brotli first; fall back to ZSTD then STORE on failure (including
+    // a codec panic — the registry converts panics to Err).
+    let (mut best_codec, mut best_compressed): (u8, std::sync::Arc<[u8]>) =
+        match limnifs_core::codec::compress_with_tunables(
+            limnifs_core::codec::CODEC_BROTLI,
+            data,
+            tunables,
+        ) {
+            Ok(c) => (limnifs_core::codec::CODEC_BROTLI, c.into()),
+            Err(_) => match limnifs_core::codec::compress_with_tunables(
+                limnifs_core::codec::CODEC_ZSTD,
+                data,
+                tunables,
+            ) {
+                Ok(c) => (limnifs_core::codec::CODEC_ZSTD, c.into()),
+                Err(_) => (limnifs_core::codec::CODEC_STORE, data.to_vec().into()),
+            },
+        };
+    let brotli_ratio = best_compressed.len() as f64 / data.len() as f64;
+    if brotli_ratio > 0.05 && best_codec == limnifs_core::codec::CODEC_BROTLI {
+        if let Ok(zstd_c) = limnifs_core::codec::compress_with_tunables(
+            limnifs_core::codec::CODEC_ZSTD,
+            data,
+            tunables,
+        ) {
+            if zstd_c.len() < best_compressed.len() {
+                best_codec = limnifs_core::codec::CODEC_ZSTD;
+                best_compressed = zstd_c.into();
+            }
+        }
+    }
     let general_ratio = best_compressed.len() as f64 / data.len() as f64;
     if general_ratio > 0.15 || cat.codec_id == limnifs_core::codec::CODEC_RICEPP {
         if let Ok(spec_c) = limnifs_core::codec::compress(cat.codec_id, data) {
             if spec_c.len() < best_compressed.len() {
                 best_codec = cat.codec_id;
-                best_compressed = spec_c;
+                best_compressed = spec_c.into();
             }
         }
     }

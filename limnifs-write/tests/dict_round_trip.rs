@@ -1,7 +1,7 @@
 //! End-to-end integration test for ZSTD dictionary compression.
 //!
 //! Writes an image with `dictionaries.enabled = true`, then reads it
-//! back via the dict-aware SlabStore path. Verifies the round trip
+//! back via the dict-aware `SlabStore` path. Verifies the round trip
 //! produces the original plaintext bytes.
 //!
 //! This test exercises:

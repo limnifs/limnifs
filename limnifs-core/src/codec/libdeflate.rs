@@ -70,8 +70,8 @@ impl Codec for LibdeflateCodec {
             reason: format!("decompress: expected_len {expected_len} exceeds usize"),
         })?;
         let codec = omnizip_libdeflate::LibdeflateCodec::new();
-        let result =
-            omnizip_codecs::Codec::decompress(&codec, compressed, expected_len).map_err(libdeflate_err)?;
+        let result = omnizip_codecs::Codec::decompress(&codec, compressed, expected_len)
+            .map_err(libdeflate_err)?;
         if result.len() != expected_us {
             return Err(CoreError::Corrupt {
                 reason: format!(
@@ -122,9 +122,7 @@ mod tests {
         let data: Vec<u8> = Vec::new();
         let codec = LibdeflateCodec;
         let compressed = codec.compress(&data).expect("compress empty");
-        let recovered = codec
-            .decompress(&compressed, 0)
-            .expect("decompress empty");
+        let recovered = codec.decompress(&compressed, 0).expect("decompress empty");
         assert_eq!(recovered, data);
     }
 
@@ -136,18 +134,18 @@ mod tests {
         use crate::codec::deflate::DeflateCodec;
         let data = b"cross-decode test data ".repeat(20);
 
-        let libdeflate_compressed = LibdeflateCodec.compress(&data).expect("libdeflate compress");
-        let recovered_via_deflate =
-            DeflateCodec
-                .decompress(&libdeflate_compressed, data.len() as u32)
-                .expect("decode libdeflate via deflate");
+        let libdeflate_compressed = LibdeflateCodec
+            .compress(&data)
+            .expect("libdeflate compress");
+        let recovered_via_deflate = DeflateCodec
+            .decompress(&libdeflate_compressed, data.len() as u32)
+            .expect("decode libdeflate via deflate");
         assert_eq!(recovered_via_deflate, data);
 
         let deflate_compressed = DeflateCodec.compress(&data).expect("deflate compress");
-        let recovered_via_libdeflate =
-            LibdeflateCodec
-                .decompress(&deflate_compressed, data.len() as u32)
-                .expect("decode deflate via libdeflate");
+        let recovered_via_libdeflate = LibdeflateCodec
+            .decompress(&deflate_compressed, data.len() as u32)
+            .expect("decode deflate via libdeflate");
         assert_eq!(recovered_via_libdeflate, data);
     }
 

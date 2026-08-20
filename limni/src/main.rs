@@ -30,8 +30,7 @@ use limnifs_core::{
     compute_merkle_root, hash_empty_section, hash_section, parse_dms_policy, parse_ec_params,
     parse_feature_flags_section, parse_history, parse_manifest_header, parse_metadata_blob,
     parse_metadata_reference, parse_slab_index, ContentHandle, CoreError, FeatureFlags, HistoryOp,
-    ManifestCursor, ManifestHeader, ManifestRoot, MetadataBlob, MetadataReference,
-    SectionHashes,
+    ManifestCursor, ManifestHeader, ManifestRoot, MetadataBlob, MetadataReference, SectionHashes,
 };
 
 /// Install dictionaries parsed from the manifest's `dictionary_section`
@@ -347,7 +346,14 @@ fn run() -> Result<(), CliError> {
             text_codec,
             chunk_size,
             sign_key,
-        } => limn_with_profile(&source, &output, profile, text_codec, chunk_size, sign_key.as_deref()),
+        } => limn_with_profile(
+            &source,
+            &output,
+            profile,
+            text_codec,
+            chunk_size,
+            sign_key.as_deref(),
+        ),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat {
             image,
@@ -641,14 +647,17 @@ fn check_signature(image: &Path, pubkey_pem_path: &Path) -> Result<(), CliError>
             limsig_path(image).display()
         ),
     })?;
-    let bundle = SignatureBundle::from_limsig(&sig)
-        .map_err(|e| CliError::SignatureFailed { reason: format!("{e}") })?;
+    let bundle = SignatureBundle::from_limsig(&sig).map_err(|e| CliError::SignatureFailed {
+        reason: format!("{e}"),
+    })?;
 
     let view = read_manifest(image)?;
     let actual_root: [u8; 32] = *view.merkle_root.as_bytes();
     if bundle.manifest_root != actual_root {
         return Err(CliError::SignatureFailed {
-            reason: "signature covers a different ManifestRoot — the image was modified after signing".into(),
+            reason:
+                "signature covers a different ManifestRoot — the image was modified after signing"
+                    .into(),
         });
     }
 
@@ -656,16 +665,18 @@ fn check_signature(image: &Path, pubkey_pem_path: &Path) -> Result<(), CliError>
         path: pubkey_pem_path.to_path_buf(),
         source,
     })?;
-    let trusted = signing::decode_public_spki_pem(&pem)
-        .map_err(|e| CliError::SignatureFailed { reason: format!("{e}") })?;
+    let trusted = signing::decode_public_spki_pem(&pem).map_err(|e| CliError::SignatureFailed {
+        reason: format!("{e}"),
+    })?;
     if bundle.public_key != trusted {
         return Err(CliError::SignatureFailed {
             reason: "image signed by a different key than the trusted public key".into(),
         });
     }
 
-    signing::verify(&bundle)
-        .map_err(|e| CliError::SignatureFailed { reason: format!("{e}") })
+    signing::verify(&bundle).map_err(|e| CliError::SignatureFailed {
+        reason: format!("{e}"),
+    })
 }
 
 fn sign_keygen_cmd(out_dir: Option<&Path>) -> Result<(), CliError> {
@@ -712,28 +723,32 @@ fn sign_keygen_cmd(out_dir: Option<&Path>) -> Result<(), CliError> {
 /// Sign an already-written image: recomputes the `ManifestRoot` from
 /// the file on disk, signs it, writes `<image>.limsig`.
 fn sign_image(image: &Path, key_pem_path: &Path) -> Result<(), CliError> {
-    use limnifs_core::signing::{
-        decode_private_pkcs8_pem, sign, SigningKeyPair, SignatureBundle,
-    };
+    use limnifs_core::signing::{decode_private_pkcs8_pem, sign, SignatureBundle, SigningKeyPair};
 
     let pem = std::fs::read_to_string(key_pem_path).map_err(|source| CliError::ReadFailed {
         path: key_pem_path.to_path_buf(),
         source,
     })?;
-    let seed = decode_private_pkcs8_pem(&pem)
-        .map_err(|e| CliError::SignatureFailed { reason: format!("{e}") })?;
+    let seed = decode_private_pkcs8_pem(&pem).map_err(|e| CliError::SignatureFailed {
+        reason: format!("{e}"),
+    })?;
     let kp = SigningKeyPair::from_bytes(seed);
 
     let view = read_manifest(image)?;
     let root: [u8; 32] = *view.merkle_root.as_bytes();
-    let bundle: SignatureBundle = sign(&kp, &root)
-        .map_err(|e| CliError::SignatureFailed { reason: format!("{e}") })?;
+    let bundle: SignatureBundle = sign(&kp, &root).map_err(|e| CliError::SignatureFailed {
+        reason: format!("{e}"),
+    })?;
     let out = limsig_path(image);
     std::fs::write(&out, bundle.to_limsig()).map_err(|source| CliError::ReadFailed {
         path: out.clone(),
         source,
     })?;
-    println!("signed: {} (ManifestRoot {})", out.display(), view.merkle_root);
+    println!(
+        "signed: {} (ManifestRoot {})",
+        out.display(),
+        view.merkle_root
+    );
     Ok(())
 }
 
@@ -2695,7 +2710,9 @@ mod tests {
 
     #[test]
     fn sign_then_verify_workflow_round_trip() {
-        use limnifs_core::signing::{encode_private_pkcs8_pem, encode_public_spki_pem, SigningKeyPair};
+        use limnifs_core::signing::{
+            encode_private_pkcs8_pem, encode_public_spki_pem, SigningKeyPair,
+        };
 
         let dir = std::env::temp_dir().join(format!(
             "limni-sigtest-{}",
@@ -2713,8 +2730,11 @@ mod tests {
         let mut pub_bytes = [0u8; 32];
         pub_bytes.copy_from_slice(kp.public().as_bytes());
         std::fs::write(dir.join("signing.pem"), encode_private_pkcs8_pem(&seed)).expect("pem");
-        std::fs::write(dir.join("signing-pub.pem"), encode_public_spki_pem(&pub_bytes))
-            .expect("pub pem");
+        std::fs::write(
+            dir.join("signing-pub.pem"),
+            encode_public_spki_pem(&pub_bytes),
+        )
+        .expect("pub pem");
 
         let image = dir.join("app.lim");
         limn_with_profile(

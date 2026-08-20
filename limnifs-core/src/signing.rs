@@ -103,8 +103,7 @@ impl Signer<Signature> for SigningKeyPair {
 /// 32-byte seed. Every Ed25519 PKCS#8 encoding (OpenSSL, cosign,
 /// `openssl genpkey`) has exactly this 16-byte prefix before the seed.
 const PKCS8_ED25519_PREFIX: [u8; 16] = [
-    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
-    0x20,
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
 ];
 
 /// Fixed SPKI DER prefix for an Ed25519 public key (RFC 8410):
@@ -122,7 +121,8 @@ fn pem_wrap(label: &str, der: &[u8]) -> String {
     // 16 bytes per base64 line is conventional enough at these sizes
     // (48-byte DER -> 64 chars of base64 -> 4 lines).
     let b64 = {
-        const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut out = String::with_capacity(der.len().div_ceil(3) * 4);
         for c in der.chunks(3) {
             let b = [c[0], *c.get(1).unwrap_or(&0), *c.get(2).unwrap_or(&0)];
@@ -151,7 +151,11 @@ fn pem_wrap(label: &str, der: &[u8]) -> String {
     out
 }
 
-fn pem_unwrap(expected_header: &str, expected_footer: &str, pem: &str) -> Result<Vec<u8>, SignError> {
+fn pem_unwrap(
+    expected_header: &str,
+    expected_footer: &str,
+    pem: &str,
+) -> Result<Vec<u8>, SignError> {
     let err = |what: &str| SignError::Crypto(format!("pem: {what}"));
     let trimmed = pem.trim();
     if !trimmed.starts_with(expected_header) {
@@ -161,10 +165,7 @@ fn pem_unwrap(expected_header: &str, expected_footer: &str, pem: &str) -> Result
         .strip_prefix(expected_header)
         .and_then(|r| r.strip_suffix(expected_footer))
         .ok_or_else(|| err("missing PEM footer"))?;
-    let b64: String = body
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
+    let b64: String = body.chars().filter(|c| !c.is_whitespace()).collect();
     let mut out = Vec::with_capacity(b64.len() * 3 / 4);
     let mut buf = 0u32;
     let mut bits = 0u32;
@@ -516,7 +517,10 @@ mod tests {
         let back = decode_private_pkcs8_pem(&pem).expect("decode");
         assert_eq!(back, seed);
         // Truncated / wrong label must fail.
-        assert!(decode_private_pkcs8_pem("-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----").is_err());
+        assert!(decode_private_pkcs8_pem(
+            "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----"
+        )
+        .is_err());
     }
 
     #[test]

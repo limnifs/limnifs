@@ -405,7 +405,10 @@ where
 impl CodecRegistry {
     /// Human-readable name for a registered codec id.
     pub fn codec_name(&self, codec_id: u8) -> Option<&'static str> {
-        self.codecs.iter().find(|c| c.id() == codec_id).map(|c| c.name())
+        self.codecs
+            .iter()
+            .find(|c| c.id() == codec_id)
+            .map(|c| c.name())
     }
 }
 
@@ -651,13 +654,17 @@ mod tests {
         let mut registry = CodecRegistry::new();
         registry.register(Box::new(PanickingCodec));
         let err = registry.compress(0xEE, b"data").expect_err("must be Err");
-        assert!(matches!(err, CoreError::Corrupt { ref reason } if reason.contains("panicked")),
-            "got {err:?}");
+        assert!(
+            matches!(err, CoreError::Corrupt { ref reason } if reason.contains("panicked")),
+            "got {err:?}"
+        );
         let err = registry
             .decompress(0xEE, b"data", 4)
             .expect_err("must be Err");
-        assert!(matches!(err, CoreError::Corrupt { ref reason } if reason.contains("panicked")),
-            "got {err:?}");
+        assert!(
+            matches!(err, CoreError::Corrupt { ref reason } if reason.contains("panicked")),
+            "got {err:?}"
+        );
     }
 
     #[test]

@@ -143,13 +143,13 @@ fn derive_formats(results: &[BenchmarkSummary]) -> Vec<String> {
     // ':' (0x3A) < letters, so `limnifs:...` < `limnifs` would be wrong
     // — but `limnifs` has no ':' so it sorts AFTER colon-suffixed
     // entries. Reverse so plain `limnifs` (if present) leads.
-    limnifs_profiles.sort_by(|a, b| {
-        match (a.starts_with("limnifs:"), b.starts_with("limnifs:")) {
+    limnifs_profiles.sort_by(
+        |a, b| match (a.starts_with("limnifs:"), b.starts_with("limnifs:")) {
             (false, true) => std::cmp::Ordering::Less,
             (true, false) => std::cmp::Ordering::Greater,
             _ => a.cmp(b),
-        }
-    });
+        },
+    );
 
     let mut out = limnifs_profiles;
     for f in EXTERNAL_FORMATS {
@@ -298,10 +298,7 @@ impl<'a> MarkdownRenderer<'a> {
                         })
                         .collect();
                     let cells_row = cells.join(" | ");
-                    md.push_str(&format!(
-                        "| {} | {} | {cells_row} |\n",
-                        dv.name, op,
-                    ));
+                    md.push_str(&format!("| {} | {} | {cells_row} |\n", dv.name, op,));
                 }
             }
         }

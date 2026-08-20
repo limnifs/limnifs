@@ -44,14 +44,14 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::chunker::FastCDC;
-use limnifs_core::{
-    compute_merkle_root, hash_empty_section, hash_section, parse_manifest_header,
-    parse_slab_index, ManifestCursor, ManifestHeader, SectionHashes,
-    FEATURE_FLAGS_SECTION_VERSION, HISTORY_SECTION_VERSION, INODE_FLAG_INLINE_DATA,
-    INODE_FLAG_SHARED_INLINE, METADATA_REFERENCE_SECTION_VERSION_2, SLAB_INDEX_SECTION_VERSION,
-};
 use limnifs_core::codec::CODEC_REFERENCED;
 use limnifs_core::slab_store::SlabStore;
+use limnifs_core::{
+    compute_merkle_root, hash_empty_section, hash_section, parse_manifest_header, parse_slab_index,
+    ManifestCursor, ManifestHeader, SectionHashes, FEATURE_FLAGS_SECTION_VERSION,
+    HISTORY_SECTION_VERSION, INODE_FLAG_INLINE_DATA, INODE_FLAG_SHARED_INLINE,
+    METADATA_REFERENCE_SECTION_VERSION_2, SLAB_INDEX_SECTION_VERSION,
+};
 use limnifs_format::{ManifestRoot, SlabId};
 
 /// Inline-data threshold: files at or below this size get inline data
@@ -266,9 +266,9 @@ pub fn write_stream<R: std::io::Read>(
     let binary_codec = config.binary_codec_id().unwrap_or(0x01);
     let tunables = config.to_core_tunables();
     let classifier = ctx.classifier;
-    let registry = config.codec_registry().map_err(|e| {
-        WriteError::Io(std::io::Error::other(format!("codec registry: {e}")))
-    })?;
+    let registry = config
+        .codec_registry()
+        .map_err(|e| WriteError::Io(std::io::Error::other(format!("codec registry: {e}"))))?;
     let tournament_codec_ids: Vec<u8> = config
         .tournament
         .codecs
@@ -401,8 +401,7 @@ fn load_base_drop_index(
     let _ = limnifs_core::parse_feature_flags_section(&mut cursor);
     let _ = limnifs_core::parse_metadata_reference(&mut cursor);
     let slab_index = parse_slab_index(&mut cursor).map_err(io_core)?;
-    let store = SlabStore::load_mmap(base_image, &slab_index)
-        .map_err(io_core)?;
+    let store = SlabStore::load_mmap(base_image, &slab_index).map_err(io_core)?;
     let drop_set: std::collections::HashSet<[u8; 32]> = store.drop_index_keys().copied().collect();
     // Re-derive the Merkle root from the base manifest's section
     // bytes. The base's `ManifestRoot` is the canonical anchor for
@@ -434,11 +433,10 @@ fn compute_merkle_root_from_sections(manifest: &[u8]) -> ManifestRoot {
         Err(_) => flags_start,
     };
     let meta_ref_start = flags_end;
-    let metadata_reference =
-        match limnifs_core::parse_metadata_reference(&mut cursor) {
-            Ok(m) => Some(m),
-            Err(_) => None,
-        };
+    let metadata_reference = match limnifs_core::parse_metadata_reference(&mut cursor) {
+        Ok(m) => Some(m),
+        Err(_) => None,
+    };
     let meta_ref_end = cursor.position();
     let slab_index_start = meta_ref_end;
     let _ = parse_slab_index(&mut cursor);
@@ -448,7 +446,9 @@ fn compute_merkle_root_from_sections(manifest: &[u8]) -> ManifestRoot {
     let history_end = cursor.position();
 
     let hashes = SectionHashes {
-        metadata: metadata_reference.map(|m| m.metadata_hash).unwrap_or_else(hash_empty_section),
+        metadata: metadata_reference
+            .map(|m| m.metadata_hash)
+            .unwrap_or_else(hash_empty_section),
         format_header: hash_section(&manifest[header_start..header_end]),
         feature_flags: hash_section(&manifest[flags_start..flags_end]),
         metadata_reference: hash_section(&manifest[meta_ref_start..meta_ref_end]),
@@ -470,13 +470,12 @@ fn io_core(e: limnifs_core::CoreError) -> WriteError {
 /// Walks `ctx.pending_files` through `process_file` in parallel and
 /// merges the results back. Caller is responsible for `walk()` and
 /// `assemble()`.
-fn write_directory_body(
-    ctx: &mut WriteContext,
-    config: &WriteConfig,
-) -> Result<(), WriteError> {
+fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<(), WriteError> {
     use rayon::prelude::*;
 
-    ctx.metadata_codec = config.metadata_codec_id().unwrap_or(limnifs_core::codec::CODEC_BROTLI);
+    ctx.metadata_codec = config
+        .metadata_codec_id()
+        .unwrap_or(limnifs_core::codec::CODEC_BROTLI);
 
     let pending = std::mem::take(&mut ctx.pending_files);
     if pending.is_empty() {
@@ -489,9 +488,9 @@ fn write_directory_body(
     let tunables = config.to_core_tunables();
     let use_categorizers = !config.categorizers.is_empty();
     let skip_chunking = config.skip_chunking;
-    let registry = config.codec_registry().map_err(|e| {
-        WriteError::Io(std::io::Error::other(format!("codec registry: {e}")))
-    })?;
+    let registry = config
+        .codec_registry()
+        .map_err(|e| WriteError::Io(std::io::Error::other(format!("codec registry: {e}"))))?;
     let tournament_codec_ids: Vec<u8> = config
         .tournament
         .codecs
@@ -553,9 +552,9 @@ pub fn write_directory_with_config(
 /// share bytes across hits with a refcount bump instead of a deep
 /// copy — dedup-heavy workloads (container layers, duplicate files)
 /// skip the allocation entirely.
-type RawDrop = ([u8; 32], Vec<u8>, std::sync::Arc<[u8]>, u8);
+pub(crate) type RawDrop = ([u8; 32], Vec<u8>, std::sync::Arc<[u8]>, u8);
 /// Result of parallel file processing: the drop data (uncompressed,
-struct ChunkedFileResult {
+pub(crate) struct ChunkedFileResult {
     drops: Vec<RawDrop>, // (id, plaintext, compressed, codec)
     slices: Vec<PendingSlice>,
 }
@@ -635,9 +634,11 @@ fn process_whole_file_drop(
     // to justify the extra pass. Skip ZSTD on this fast path.
     let brotli_ratio = best_compressed.len() as f64 / data.len() as f64;
     if brotli_ratio > 0.05 {
-        if let Ok(zstd_c) =
-            limnifs_core::codec::compress_with_tunables(limnifs_core::codec::CODEC_ZSTD, data, tunables)
-        {
+        if let Ok(zstd_c) = limnifs_core::codec::compress_with_tunables(
+            limnifs_core::codec::CODEC_ZSTD,
+            data,
+            tunables,
+        ) {
             if zstd_c.len() < best_compressed.len() {
                 best_codec = limnifs_core::codec::CODEC_ZSTD;
                 best_compressed = zstd_c.into();
@@ -742,7 +743,8 @@ fn compress_chunk_with_tournament(
         if is_best_so_far {
             best = Some((codec_id, c.into()));
         }
-        if tournament.short_circuit_permille > 0 && ratio_permille <= tournament.short_circuit_permille
+        if tournament.short_circuit_permille > 0
+            && ratio_permille <= tournament.short_circuit_permille
         {
             break;
         }
@@ -792,7 +794,9 @@ fn process_file(
     // duration of the write. The file is opened read-only. External
     // mutation during compression would be a serious bug in the
     // caller's workflow (and would also break BLAKE3 determinism).
-    let file_len_estimate = std::fs::metadata(&pf.path).map(|m| m.len() as usize).unwrap_or(0);
+    let file_len_estimate = std::fs::metadata(&pf.path)
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
     let data: Vec<u8> = if file_len_estimate >= MMAP_READ_THRESHOLD {
         let file = std::fs::File::open(&pf.path)?;
         #[allow(unsafe_code)]
@@ -900,13 +904,21 @@ fn process_file(
             // Cache fast-path: identical chunk already compressed on
             // this worker → reuse bytes, skip tournament entirely.
             let cached = COMPRESS_CACHE.with(|c| {
-                c.borrow().get(drop_id).map(|(cid, comp)| (*cid, comp.clone()))
+                c.borrow()
+                    .get(drop_id)
+                    .map(|(cid, comp)| (*cid, comp.clone()))
             });
             let (codec_id, compressed) = if let Some(c) = cached {
                 c
             } else {
-                let new =
-                    compress_chunk_with_tournament(chunk, class, text_codec, binary_codec, tunables, tournament);
+                let new = compress_chunk_with_tournament(
+                    chunk,
+                    class,
+                    text_codec,
+                    binary_codec,
+                    tunables,
+                    tournament,
+                );
                 // Insert into the per-worker cache if there's room.
                 COMPRESS_CACHE.with(|c| {
                     let mut cache = c.borrow_mut();
@@ -1893,10 +1905,7 @@ mod tests {
         let base_manifest = temp.join("base.lim");
         std::fs::write(&base_manifest, &base_artifact.bytes).expect("write base manifest");
         for slab in &base_artifact.slabs {
-            let slab_name = slab
-                .locator
-                .strip_prefix("file:")
-                .unwrap_or(&slab.locator);
+            let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
             std::fs::write(temp.join(slab_name), &slab.bytes).expect("write base slab");
         }
 
@@ -1923,7 +1932,10 @@ mod tests {
         // its delta_linkage section.
         let base_root = base_artifact.merkle_root.as_bytes();
         assert!(
-            layer_artifact.bytes.windows(32).any(|w| w == base_root.as_slice()),
+            layer_artifact
+                .bytes
+                .windows(32)
+                .any(|w| w == base_root.as_slice()),
             "layer manifest must contain base's ManifestRoot bytes"
         );
 

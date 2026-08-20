@@ -1,10 +1,7 @@
-# Build and publish RustDoc API documentation for all published Confium crates.
+# Build and publish RustDoc API documentation for all workspace crates.
 #
 # Deploys to GitHub Pages at the `rustdoc` environment, alongside the
 # AsciiDoc project documentation deployed by docs.yml.
-#
-# Output: rendered RustDoc for every workspace member crate, plus a
-# top-level index linking to each crate's documentation.
 
 name: RustDoc
 
@@ -13,9 +10,10 @@ on:
     branches:
       - main
     paths:
-      - "crates/**/*.rs"
-      - "crates/**/Cargo.toml"
+      - "limni/**"
+      - "limnifs-*/**"
       - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/rustdoc.yml"
   workflow_dispatch:
 
@@ -26,7 +24,7 @@ permissions:
 
 concurrency:
   group: rustdoc-pages
-  cancel-in_progress: false
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -45,20 +43,21 @@ jobs:
       - name: Build RustDoc
         run: |
           cargo doc --workspace --no-deps --all-features
-          # Generate top-level index page
+          # Generate top-level index page from actual workspace members.
           cat > target/doc/index.html <<'HTMLEOF'
           <!DOCTYPE html>
           <html>
-          <head><title>Confium RustDoc</title></head>
+          <head><title>LimniFS RustDoc</title></head>
           <body>
-          <h1>Confium RustDoc</h1>
-          <p>API documentation for all published Confium crates.</p>
+          <h1>LimniFS RustDoc</h1>
+          <p>API documentation for all workspace crates.</p>
           <ul>
           HTMLEOF
-          for crate_dir in crates/*/; do
+          for crate_dir in limni limnifs-*/; do
             crate_name=$(basename "$crate_dir")
-            if [ -d "target/doc/${crate_name//-/_}" ]; then
-              echo "<li><a href=\"${crate_name//-/_}/index.html\">${crate_name}</a></li>" >> target/doc/index.html
+            rustdoc_name="${crate_name//-/_}"
+            if [ -d "target/doc/${rustdoc_name}" ]; then
+              echo "<li><a href=\"${rustdoc_name}/index.html\">${crate_name}</a></li>" >> target/doc/index.html
             fi
           done
           cat >> target/doc/index.html <<'HTMLEOF'

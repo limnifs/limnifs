@@ -1,7 +1,7 @@
 # End-to-end tests for the `limni` CLI.
 #
 # Exercises the full create → verify → extract → inspect pipeline
-# against synthetic and real datasets. Runs on every push and PR.
+# against a synthetic tree. Runs on every push and PR.
 
 name: E2E Tests
 
@@ -33,7 +33,8 @@ jobs:
           mkdir -p /tmp/e2e-input
           echo "hello world" > /tmp/e2e-input/hello.txt
           echo "test data" > /tmp/e2e-input/test.txt
-          ./target/release/limni limn /tmp/e2e-input -o /tmp/e2e-test.lim
+          # Positional SOURCE OUTPUT (no -o flag).
+          ./target/release/limni limn /tmp/e2e-input /tmp/e2e-test.lim
 
       - name: Verify image
         run: ./target/release/limni verify /tmp/e2e-test.lim

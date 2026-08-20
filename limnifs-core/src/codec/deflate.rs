@@ -37,8 +37,8 @@ impl Codec for DeflateCodec {
             reason: format!("decompress: expected_len {expected_len} exceeds usize"),
         })?;
         let codec = omnizip_deflate::DeflateCodec::new();
-        let result =
-            omnizip_codecs::Codec::decompress(&codec, compressed, expected_len).map_err(deflate_err)?;
+        let result = omnizip_codecs::Codec::decompress(&codec, compressed, expected_len)
+            .map_err(deflate_err)?;
         if result.len() != expected_us {
             return Err(CoreError::Corrupt {
                 reason: format!(

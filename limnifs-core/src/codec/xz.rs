@@ -149,10 +149,11 @@ fn compress_at_level(plaintext: &[u8], level: u8) -> Result<Vec<u8>, CoreError> 
     COMPRESSOR.with(|c| {
         let mut borrowed = c.borrow_mut();
         let lv = omnizip_codecs::CompressionLevel::new(level.clamp(1, 9));
-        omnizip_lzma::LzmaCompressor::compress(&mut *borrowed, plaintext, lv)
-            .map_err(|e| CoreError::Corrupt {
+        omnizip_lzma::LzmaCompressor::compress(&mut *borrowed, plaintext, lv).map_err(|e| {
+            CoreError::Corrupt {
                 reason: format!("xz compress (level {level}) failed: {e}"),
-            })
+            }
+        })
     })
 }
 
@@ -160,10 +161,7 @@ fn compress_at_level(plaintext: &[u8], level: u8) -> Result<Vec<u8>, CoreError> 
 /// compressor's persistent `LzmaOptions` fields (lc, lp, pb,
 /// dict_size_mb) before compressing so the caller's intent reaches
 /// the encoder.
-fn compress_with_tunables_inner(
-    plaintext: &[u8],
-    t: &XzTunables,
-) -> Result<Vec<u8>, CoreError> {
+fn compress_with_tunables_inner(plaintext: &[u8], t: &XzTunables) -> Result<Vec<u8>, CoreError> {
     thread_local! {
         static COMPRESSOR: std::cell::RefCell<omnizip_lzma::LzmaCompressor> =
             std::cell::RefCell::new(omnizip_lzma::LzmaCompressor::new());
@@ -179,9 +177,10 @@ fn compress_with_tunables_inner(
         // XzTunables.lc/lp/pb/dict_size_mb through.
         let lv = omnizip_codecs::CompressionLevel::new(t.level.clamp(1, 9));
         let _ = (t.lc, t.lp, t.pb, t.dict_size_mb); // acknowledged unused until setter lands
-        omnizip_lzma::LzmaCompressor::compress(&mut *borrowed, plaintext, lv)
-            .map_err(|e| CoreError::Corrupt {
+        omnizip_lzma::LzmaCompressor::compress(&mut *borrowed, plaintext, lv).map_err(|e| {
+            CoreError::Corrupt {
                 reason: format!("xz compress failed: {e}"),
-            })
+            }
+        })
     })
 }

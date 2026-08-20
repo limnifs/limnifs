@@ -54,8 +54,8 @@ impl Codec for BrotliCodec {
             reason: format!("decompress: expected_len {expected_len} exceeds usize"),
         })?;
         let codec = omnizip_brotli::BrotliCodec;
-        let result =
-            omnizip_codecs::Codec::decompress(&codec, compressed, expected_len).map_err(brotli_err)?;
+        let result = omnizip_codecs::Codec::decompress(&codec, compressed, expected_len)
+            .map_err(brotli_err)?;
         if result.len() != expected_us {
             return Err(CoreError::Corrupt {
                 reason: format!(

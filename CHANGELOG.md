@@ -5,6 +5,26 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.45] — 2026-08-20
+
+### Fixed
+
+- **CI: `pipeline-parallelism` feature builds again** — `pipeline.rs`
+  still used `Vec<u8>` for compressed bytes and returned bare
+  `WriteArtifact` from a `Result`-returning function after the
+  v0.2.42 `Arc<[u8]>` change. Now matches `RawDrop` and wraps
+  `assemble()` in `Ok(...)`. Unblocked `--all-features` CI gates.
+- **CI: E2E workflow CLI args** — `limni limn` takes positional
+  `SOURCE OUTPUT`, not `-o`. Workflow was copied with the wrong
+  flag and failed before any real E2E ran.
+- **CI: rustdoc workflow** — de-confium'd path globs and index
+  generation so it targets `limni` / `limnifs-*` crates.
+- **CI: clippy `-D warnings`** — `manual_let_else` in the FLAC
+  corpus test and a `doc_markdown` miss on `SlabStore` in
+  `dict_round_trip`.
+- **rustfmt** — `cargo fmt --all` so the shared rust-ci fmt check
+  is clean.
+
 ## [0.2.44] — 2026-08-20
 
 ### Changed

@@ -203,12 +203,9 @@ fn run_benchmarks(
             println!("\n  --- profile: {profile_name} ---");
             print!("  [limnifs:{profile_name}] create… ");
             let results = runners::limnifs_create(&source_dir, &ds_work, iters, profile_name);
-            if let Some(s) = metrics::BenchmarkSummary::from_results(
-                ds.name,
-                ds.category,
-                &results,
-                input_size,
-            ) {
+            if let Some(s) =
+                metrics::BenchmarkSummary::from_results(ds.name, ds.category, &results, input_size)
+            {
                 println!(
                     "{:.3}s, {:.1} MB, {:.1}%",
                     s.median_seconds, s.output_size_mb, s.ratio_percent
@@ -233,8 +230,13 @@ fn run_benchmarks(
                 }
 
                 print!("  [limnifs:{profile_name}] extract… ");
-                let results =
-                    runners::limnifs_extract(&limni_image, &ds_work, iters, input_size, profile_name);
+                let results = runners::limnifs_extract(
+                    &limni_image,
+                    &ds_work,
+                    iters,
+                    input_size,
+                    profile_name,
+                );
                 if let Some(s) = metrics::BenchmarkSummary::from_results(
                     ds.name,
                     ds.category,

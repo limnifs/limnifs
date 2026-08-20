@@ -83,9 +83,8 @@ fn flac_corpus_within_5_percent_of_libflac() {
     let mut checked = 0;
     let mut omnizip_wins = 0;
     for wav_path in &wavs {
-        let data = match std::fs::read(wav_path) {
-            Ok(d) => d,
-            Err(_) => continue,
+        let Ok(data) = std::fs::read(wav_path) else {
+            continue;
         };
         if data.len() < 1024 {
             continue;

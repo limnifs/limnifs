@@ -94,7 +94,13 @@ pub fn limnifs_create(
 
                 let _ = std::fs::write(&image, &a.bytes);
                 results.push(OperationResult::measure(
-                    &format_tag, "create", before, after, elapsed, total_size, 1,
+                    &format_tag,
+                    "create",
+                    before,
+                    after,
+                    elapsed,
+                    total_size,
+                    1,
                 ));
             }
             Err(e) => {
@@ -146,7 +152,13 @@ pub fn limnifs_extract(
                     + (after_children.system_secs - before_children.system_secs);
                 let rss = after.rss_bytes.max(after_children.rss_bytes);
                 let mut r = OperationResult::measure(
-                    &format_tag, "extract", before, after, elapsed, input_size, 1,
+                    &format_tag,
+                    "extract",
+                    before,
+                    after,
+                    elapsed,
+                    input_size,
+                    1,
                 );
                 r.cpu_user_secs = user.max(0.0);
                 r.cpu_system_secs = sys.max(0.0);
