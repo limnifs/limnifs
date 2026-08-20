@@ -5,6 +5,20 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.44] — 2026-08-20
+
+### Changed
+
+- **blake3 1.5 → 1.8.7** — pin the floor to the first blake3 release
+  that dropped the `arrayref` dependency. Prior caret `blake3 = "1.5"`
+  admitted 1.8.7 on fresh index views, but a stale crates.io CDN edge
+  could still resolve onto blake3 1.5.0 → `arrayref ^0.3.5` (all
+  yanked) and kill the build. Flooring at 1.8.7 makes the resolution
+  fail-closed on those edges instead of resolving onto a dead dep
+  graph. `arrayref` is gone from `Cargo.lock`.
+- **omnizip 0.16.64 → 0.16.75** — absorb the latest pure-Rust codec
+  line. Workspace tests green end-to-end.
+
 ## [0.2.43] — 2026-08-19
 
 ### Changed
