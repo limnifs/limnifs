@@ -1,7 +1,7 @@
 //! io_uring slab source — Linux-only batched submission queue.
 //!
 //! **Status:** STUB. Compiles only on Linux behind the
-//! `io-uring` feature flag. The body is `todo!()` until a Linux
+//! `io-uring` feature flag. The body is unfinished until a Linux
 //! CI environment validates the `io-uring` crate integration.
 //!
 //! ## Why this exists
@@ -22,7 +22,7 @@
 //! 2. Defines the struct + impl signature so downstream code can
 //!    `#[cfg(all(target_os = "linux", feature = "io-uring"))]`
 //!    reference it.
-//! 3. The actual `plaintext_for` is `todo!()` — calling it panics.
+//! 3. The actual `plaintext_for` panics until implemented.
 //!
 //! When Linux CI lands:
 //! 1. Add `io-uring = "0.6"` as a Linux-only dep.
@@ -39,7 +39,8 @@ use crate::slab_source::SlabSource;
 /// Linux io_uring-backed slab source. Batches drop lookups via
 /// submission queues.
 ///
-/// **NOT IMPLEMENTED** — `todo!()` body. See module docs.
+/// **NOT IMPLEMENTED** — body panics. See module docs.
+/// Task: `TODO.impl/03-core-reader/03-async-slab-source.md`.
 pub struct IoUringSlabSource {
     // Planned fields:
     // ring: io_uring::IoUring,
@@ -55,20 +56,24 @@ impl IoUringSlabSource {
         _manifest_path: &std::path::Path,
         _slab_index: &crate::slab_index::SlabIndex,
     ) -> Self {
+        // TODO.impl/03-core-reader/03-async-slab-source.md
         todo!("IoUringSlabSource requires the io-uring crate + Linux CI validation")
+        // TODO.impl/03-core-reader/03-async-slab-source.md
     }
 }
 
 impl SlabSource for IoUringSlabSource {
     fn plaintext_for(&self, _drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>> {
+        // TODO.impl/03-core-reader/03-async-slab-source.md
         todo!("IoUringSlabSource::plaintext_for requires io_uring crate integration")
+        // TODO.impl/03-core-reader/03-async-slab-source.md
     }
 
     fn slab_count(&self) -> usize {
-        todo!()
+        todo!() // TODO.impl/03-core-reader/03-async-slab-source.md
     }
 
     fn drop_count(&self) -> usize {
-        todo!()
+        todo!() // TODO.impl/03-core-reader/03-async-slab-source.md
     }
 }

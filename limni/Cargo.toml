@@ -12,8 +12,8 @@ name = "limni"
 path = "src/main.rs"
 
 [dependencies]
-limnifs-core = { path = "../limnifs-core", version = "0.2.0", features = ["signing"] }
-limnifs-write = { path = "../limnifs-write", version = "0.2.0" }
+limnifs-core = { path = "../limnifs-core", version = "0.2.46", features = ["signing"] }
+limnifs-write = { path = "../limnifs-write", version = "0.2.46" }
 clap.workspace = true
 fuser = { version = "0.18", optional = true, default-features = false }
 getrandom.workspace = true

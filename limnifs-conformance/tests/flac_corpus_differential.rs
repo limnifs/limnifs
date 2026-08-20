@@ -22,6 +22,11 @@
 //!
 //! Run with: `cargo test --test flac_corpus_differential -- --ignored`
 
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    clippy::map_unwrap_or
+)]
 #![cfg(test)]
 
 use std::path::PathBuf;
@@ -43,8 +48,7 @@ fn has_flac_cli() -> bool {
     Command::new("flac")
         .arg("--version")
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .is_ok_and(|o| o.status.success())
 }
 
 fn collect_wav_files(dir: &PathBuf) -> Vec<PathBuf> {
@@ -63,7 +67,7 @@ fn collect_wav_files(dir: &PathBuf) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "requires corpus + flac CLI; run with --ignored"]
+#[ignore = "requires corpus + flac CLI; run with --ignored"] // TODO.impl/04-writer-pipeline/04-file-level-categorization.md
 fn flac_corpus_within_5_percent_of_libflac() {
     let Some(corpus) = corpus_dir() else {
         eprintln!("SKIP: corpus directory not found. Run fetch_flac_corpus.sh first.");

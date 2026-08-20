@@ -5,6 +5,33 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.46] — 2026-08-20
+
+### Fixed
+
+- **CI unblocked end-to-end** — no-shims gate annotations for
+  `todo!`/`#[ignore]`, clippy 1.97 pedantic on the FLAC corpus test,
+  WASM release skips when `limnifs-wasm` is absent, rustfmt clean.
+- **Internal path-dep versions** — crates pinned each other at
+  `0.2.0` while the workspace was at `0.2.4x`. Bumped to match so
+  crates.io publish resolves.
+
+### Added
+
+- **GHA crates.io publish** — `release.yml` now publishes
+  `limnifs-format` → `limnifs-ocb3` → `limnifs-core` →
+  `limnifs-write` → `limni` on `v*` tags when
+  `CARGO_REGISTRY_TOKEN` is set. Releases are GHA-only; local
+  `cargo publish` is not the release path.
+- `publish = false` on `limnifs-bench` and `limnifs-conformance`.
+
+### Note
+
+Prior "releases" v0.2.20–v0.2.44 were Cargo.toml version bumps on
+`main` without tags and without crates.io publish. Downstream that
+needs a pin should use git tags from v0.2.46 forward, or a git rev
+until the crates.io publish job succeeds.
+
 ## [0.2.45] — 2026-08-20
 
 ### Fixed

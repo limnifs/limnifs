@@ -8,11 +8,11 @@ repository.workspace = true
 description = "LimniFS writer pipeline — directory tree to .lim image"
 
 [dependencies]
-limnifs-format = { path = "../limnifs-format", version = "0.2.0" }
-limnifs-core = { path = "../limnifs-core", version = "0.2.0" }
+limnifs-format = { path = "../limnifs-format", version = "0.2.46" }
+limnifs-core = { path = "../limnifs-core", version = "0.2.46" }
 crossbeam-channel = { version = "0.5", optional = true }
 memmap2.workspace = true
-omnizip-flac = "0.16.62"
+omnizip-flac = "0.16.75"
 rayon.workspace = true
 serde.workspace = true
 thiserror = "1.0"

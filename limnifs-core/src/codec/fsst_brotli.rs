@@ -164,7 +164,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "omnizip 0.16.x decoder does not support static dictionary refs in FSST+Brotli composite output"]
+    #[ignore = "omnizip 0.16.x decoder does not support static dictionary refs in FSST+Brotli composite output"] // TODO.impl/04-writer-pipeline/04-fsst-preprocessor.md
     fn round_trips_csv_like_input() {
         let input = b"id,name,city\n1,alice,paris\n2,bob,london\n3,carol,paris\n".repeat(200);
         let c = FsstBrotliCodec;

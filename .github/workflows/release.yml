@@ -143,3 +143,34 @@ jobs:
             release/sbom/*.cdx.json
           generate_release_notes: true
           fail_on_unmatched_files: true
+
+
+  # Publish library crates to crates.io (GHA only — never from a laptop).
+  # Requires secret CARGO_REGISTRY_TOKEN (crates.io API token with publish
+  # scope for the limnifs owner). Order respects the dep DAG.
+  publish-crates-io:
+    name: Publish crates.io
+    needs: [license-scan, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN secret is not set — cannot publish to crates.io"
+            exit 1
+          fi
+          # Leaf → root. --no-verify: CI already built + tested on this commit.
+          for crate in limnifs-format limnifs-ocb3 limnifs-core limnifs-write limni; do
+            echo "=== publishing $crate ==="
+            cargo publish -p "$crate" --no-verify --locked
+            # crates.io index lag between publishes
+            sleep 15
+          done

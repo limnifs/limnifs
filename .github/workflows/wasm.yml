@@ -1,23 +1,8 @@
 # Build and publish `@limnifs/limni-wasm` to npm via **trusted publishing**.
 #
+# Skips cleanly when the `limnifs-wasm` crate is not yet in the tree.
+#
 # npm trusted publishing uses OIDC: no long-lived NPM_TOKEN secret.
-# Setup per https://docs.npmjs.com/trusted-publishers:
-#
-#   1. **First publish** is done manually by the package owner:
-#        - `wasm-pack build limnifs-wasm --target bundler --release --scope limnifs`
-#        - `cd limnifs-wasm/pkg && npm publish --access public`
-#
-#   2. **Trusted publishing setup** (one-time, on npm side) at
-#      https://www.npmjs.com/package/@limnifs/limni-wasm/access:
-#        - Organization/user: limnifs
-#        - Repository: limnifs
-#        - Workflow filename: wasm.yml
-#        - Environment: (none)
-#
-#   3. **Subsequent publishes** run from this workflow on tag push.
-#      Requires Node 22.14+ / npm 11.5.1+ for trusted-publishing auth.
-#      Provenance is generated automatically — do NOT pass --provenance.
-#
 # Triggered on release tags (v*.*.*) and via workflow_dispatch.
 
 name: Release WASM
@@ -37,18 +22,32 @@ env:
 jobs:
   build-wasm:
     runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.wasm_crate.outputs.present }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Check limnifs-wasm crate exists
+        id: wasm_crate
+        run: |
+          if [ -f limnifs-wasm/Cargo.toml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "limnifs-wasm crate not in tree yet — skipping WASM build/publish"
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.wasm_crate.outputs.present == 'true'
         with:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
+        if: steps.wasm_crate.outputs.present == 'true'
         uses: jetli/wasm-pack-action@v0.4.0
 
-      # Build the bundler target — produces ESM + CJS + .d.ts that npm
-      # consumers can use regardless of their bundler.
       - name: Build WASM package
+        if: steps.wasm_crate.outputs.present == 'true'
         run: |
           wasm-pack build limnifs-wasm \
             --target bundler \
@@ -56,9 +55,11 @@ jobs:
             --scope limnifs
 
       - name: Inspect package
+        if: steps.wasm_crate.outputs.present == 'true'
         run: ls -la limnifs-wasm/pkg/
 
       - name: Upload artifact
+        if: steps.wasm_crate.outputs.present == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: limnifs-wasm-pkg
@@ -67,9 +68,9 @@ jobs:
   publish-npm:
     needs: build-wasm
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && needs.build-wasm.outputs.present == 'true'
     permissions:
-      id-token: write  # required for npm trusted publishing (OIDC)
+      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v7
@@ -83,7 +84,6 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          # Trusted publishing requires Node 22.14+ / npm 11.5.1+.
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
