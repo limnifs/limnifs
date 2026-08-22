@@ -82,12 +82,15 @@ pub const MAX_SLAB_TOTAL_BYTES: usize = 60 * 1024 * 1024;
 /// `limnifs_core::slab::SLAB_HEADER_LEN`.
 const SLAB_HEADER_LEN: usize = 56;
 
-/// Threshold at which the writer externalises the metadata blob to a
-/// sidecar file instead of inlining it in the manifest. The reader's
-/// default inline ceiling is 1 MiB (spec §5.3); we externalise well
-/// before that to leave headroom for variance in inode encoding and
-/// to keep manifests compact for large trees.
-pub const METADATA_EXTERNALIZE_THRESHOLD: usize = 768 * 1024;
+/// Default threshold at which the writer externalises the metadata
+/// blob to a sidecar file instead of inlining it in the manifest.
+/// Derived from the reader's inline ceiling
+/// (`limnifs_core::metadata_reference::DEFAULT_INLINE_METADATA_MAX_BYTES`,
+/// 1 MiB per spec §5.3) minus headroom, so the two constants cannot
+/// silently drift apart. Override per image via
+/// `WriteConfig::defaults::metadata_externalize_threshold` (issue #187).
+pub const METADATA_EXTERNALIZE_THRESHOLD: usize =
+    limnifs_core::metadata_reference::DEFAULT_INLINE_METADATA_MAX_BYTES as usize - 24 * 1024;
 
 /// Metadata-blob size above which the writer steps Brotli quality
 /// down to `METADATA_LARGE_BLOB_QUALITY`. Below this, q5's cost is
@@ -379,6 +382,7 @@ pub fn write_layer(
     ctx.auto_turnover = config.turnover_threshold > 0;
     ctx.collect_dict_samples = config.dictionaries.enabled;
     ctx.inline_threshold = config.defaults.inline_threshold as usize;
+    ctx.metadata_externalize_threshold = config.defaults.metadata_externalize_threshold;
     ctx.base_drop_index = Some(base_drop_index);
     ctx.base_root = Some(base_root);
 
@@ -483,6 +487,7 @@ fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<
         return Ok(());
     }
     ctx.inline_threshold = config.defaults.inline_threshold as usize;
+    ctx.metadata_externalize_threshold = config.defaults.metadata_externalize_threshold;
     let chunker = ctx.chunker.clone();
     let classifier = ctx.classifier;
     let text_codec = config.text_codec_id().unwrap_or(0x04);
@@ -600,6 +605,7 @@ fn write_directory_streaming(
     let inline_threshold = ctx.inline_threshold;
 
     ctx.inline_threshold = config.defaults.inline_threshold as usize;
+    ctx.metadata_externalize_threshold = config.defaults.metadata_externalize_threshold;
 
     // Bounded so the walk back-pressures if compression falls behind;
     // the buffer is large enough to keep every worker fed on bursty
@@ -1199,6 +1205,11 @@ struct WriteContext {
     /// so readers know which image provides the referenced drops.
     /// `None` for standalone writes.
     base_root: Option<[u8; 32]>,
+    /// Compressed-metadata size above which the blob is externalized
+    /// to a sidecar (issue #187). Defaults to
+    /// [`METADATA_EXTERNALIZE_THRESHOLD`]; overridable via
+    /// `WriteConfig::defaults::metadata_externalize_threshold`.
+    metadata_externalize_threshold: usize,
     /// Inline-data cutoff from `WriteConfig::defaults.inline_threshold`.
     /// Files at or below this size are stored inline in the metadata
     /// blob instead of being chunked into slabs. Set from the profile
@@ -1244,6 +1255,7 @@ impl WriteContext {
             base_root: None,
             pending_sink: None,
             inline_threshold: INLINE_THRESHOLD,
+            metadata_externalize_threshold: METADATA_EXTERNALIZE_THRESHOLD,
         }
     }
 
@@ -1620,11 +1632,14 @@ impl WriteContext {
             (limnifs_core::codec::CODEC_STORE, metadata_blob.clone())
         };
 
-        // Decide inline vs sidecar based on the COMPRESSED length. The
-        // reader's inline ceiling is 1 MiB; we externalise when the
-        // compressed form would exceed 768 KiB.
+        // Decide inline vs sidecar based on the COMPRESSED length,
+        // clamped to the reader's inline ceiling regardless of config
+        // (inline metadata above it is unreadable by default readers).
+        let externalize_at = self
+            .metadata_externalize_threshold
+            .min(limnifs_core::metadata_reference::DEFAULT_INLINE_METADATA_MAX_BYTES as usize);
         let (metadata_sidecar, inline_data, metadata_locator_count) =
-            if on_wire_blob.len() > METADATA_EXTERNALIZE_THRESHOLD {
+            if on_wire_blob.len() > externalize_at {
                 let locator = "file:metadata.bin".to_owned();
                 let sidecar = MetadataSidecar {
                     bytes: on_wire_blob.clone(),

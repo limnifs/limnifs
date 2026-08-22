@@ -5,6 +5,32 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.53] — 2026-08-22
+
+### Fixed
+
+- **#186: shared-inline images unreadable** —
+  `INODE_FLAG_RESERVED_MASK` (0xF8) covered the defined
+  `INODE_FLAG_SHARED_INLINE` (0x08), so the reader rejected every
+  deduplicated shared-inline inode the writer emits. Mask corrected
+  to 0xF0; round-trip conformance test added (found by tebako's
+  LimniFS integration).
+- **#187: metadata externalized below the reader ceiling** — the
+  writer externalized the metadata sidecar above 768 KiB while every
+  default reader accepts 1 MiB inline. The default threshold is now
+  derived from the reader ceiling (1 MiB − 24 KiB headroom), is
+  configurable via `WriteConfig.defaults.metadata_externalize_threshold`,
+  and is clamped at the reader ceiling in `assemble` so no
+  configuration can emit unreadable inline metadata.
+- **#188 / omnizip#315 mitigation: zstd self-check on write** —
+  omnizip-zstd's decoder (still broken in 0.16.77, content-dependent)
+  fails on frames its own encoder produced at
+  Fastest/Fast/Default/Better; Best is correct. Every LimniFS zstd
+  encode now decompress-verifies its own frame and refuses to emit
+  ones that do not round-trip — the tournament moves to the next
+  codec instead of writing an image no reader can open. Remove when
+  the upstream decoder is fixed. Regression test uses the exact
+  318-byte blob from the upstream issue.
 ## [0.2.52] — 2026-08-22
 
 ### Changed

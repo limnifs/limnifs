@@ -112,6 +112,10 @@ fn default_write_codec() -> String {
     "lz4".into()
 }
 
+fn default_metadata_externalize_threshold() -> usize {
+    crate::METADATA_EXTERNALIZE_THRESHOLD
+}
+
 /// Default codec + quality settings.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Defaults {
@@ -119,6 +123,14 @@ pub struct Defaults {
     pub binary_codec: String,
     pub metadata_codec: String,
     pub metadata_quality: u8,
+    /// Compressed-metadata size (bytes) above which the blob is
+    /// externalized to a `metadata.bin` sidecar instead of inlined
+    /// in the manifest. Default: just under the reader's 1 MiB
+    /// inline ceiling (`DEFAULT_INLINE_METADATA_MAX_BYTES`); raise to
+    /// that ceiling for maximally self-contained images, lower it to
+    /// keep manifests small. See limnifs#187.
+    #[serde(default = "default_metadata_externalize_threshold")]
+    pub metadata_externalize_threshold: usize,
     /// Inline data threshold (bytes).
     pub inline_threshold: u16,
 }
@@ -379,6 +391,7 @@ impl WriteConfig {
                 binary_codec: DEFAULT_BINARY_CODEC.to_string(),
                 metadata_codec: DEFAULT_METADATA_CODEC.to_string(),
                 metadata_quality: DEFAULT_METADATA_QUALITY,
+                metadata_externalize_threshold: crate::METADATA_EXTERNALIZE_THRESHOLD,
                 inline_threshold: DEFAULT_INLINE_THRESHOLD,
             },
             categorizers: Vec::new(),
@@ -495,6 +508,18 @@ impl WriteConfig {
                 reason: format!(
                     "metadata_quality ({}) out of range 1..=11",
                     self.defaults.metadata_quality
+                ),
+            });
+        }
+        let ceiling = limnifs_core::metadata_reference::DEFAULT_INLINE_METADATA_MAX_BYTES as usize;
+        if self.defaults.metadata_externalize_threshold == 0
+            || self.defaults.metadata_externalize_threshold > ceiling
+        {
+            return Err(ConfigError::InvalidValue {
+                field: "defaults.metadata_externalize_threshold".into(),
+                reason: format!(
+                    "metadata_externalize_threshold ({}) must be within 1..={ceiling}                      (the reader inline ceiling; larger inline metadata is unreadable)",
+                    self.defaults.metadata_externalize_threshold
                 ),
             });
         }

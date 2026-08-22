@@ -23,8 +23,11 @@ pub const INODE_FLAG_INLINE_DATA: u8 = 0x04;
 /// the content handle body is a u32 index into the shared inline
 /// table at the end of the metadata blob, not inline bytes.
 pub const INODE_FLAG_SHARED_INLINE: u8 = 0x08;
-/// Mask for reserved flag bits (3-7).
-pub const INODE_FLAG_RESERVED_MASK: u8 = 0xF8;
+/// Mask for reserved flag bits (4-7). Bit 3 is the DEFINED
+/// [`INODE_FLAG_SHARED_INLINE`]; the previous value (0xF8) covered
+/// it, making the reader reject every deduplicated shared-inline
+/// inode the writer emits (issue #186).
+pub const INODE_FLAG_RESERVED_MASK: u8 = 0xF0;
 
 /// POSIX file type bits from `mode`.
 pub const S_IFMT: u32 = 0xF000;
@@ -387,8 +390,9 @@ mod tests {
     #[test]
     fn rejects_reserved_flag_bits() {
         let mut bytes = make_regular_inline_inode(1, S_IFREG | 0o644, b"x");
-        // Set a reserved flag bit.
-        bytes[INODE_FIXED_PREFIX_LEN - 1] |= 0x08;
+        // Set a reserved flag bit (bit 4; bit 3 is the defined
+        // SHARED_INLINE flag — see issue #186).
+        bytes[INODE_FIXED_PREFIX_LEN - 1] |= 0x10;
         let mut cursor = ManifestCursor::new(&bytes);
         match parse_inode(&mut cursor) {
             Err(CoreError::Corrupt { reason }) => {
