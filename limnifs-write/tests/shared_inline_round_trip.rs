@@ -19,7 +19,9 @@ fn duplicated_inline_files_round_trip_through_reader() {
 
     // Distinct payloads, each written to 2-3 different paths so the
     // shared-inline dedup table is exercised with several entries.
-    let payloads: Vec<Vec<u8>> = (0..4).map(|i| vec![(i * 37 + 11) as u8; 512]).collect();
+    let payloads: Vec<Vec<u8>> = (0..4u8)
+        .map(|i| vec![i.wrapping_mul(37).wrapping_add(11); 512])
+        .collect();
     let mut copies: HashMap<usize, usize> = HashMap::new();
     for (i, p) in payloads.iter().enumerate() {
         for copy in 0..(2 + i % 2) {
@@ -53,7 +55,6 @@ fn duplicated_inline_files_round_trip_through_reader() {
         let inode = blob.inode_by_number(*num).expect("inode");
         let got = match &inode.content_handle {
             ContentHandle::InlineData(d) => d.clone(),
-            ContentHandle::SharedInline(_) => unreachable!("parse resolves shared refs"),
             other => panic!("unexpected content handle: {other:?}"),
         };
         let stem = path.rsplit('/').next().unwrap_or(path);
