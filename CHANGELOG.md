@@ -5,6 +5,19 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.52] — 2026-08-22
+
+### Changed
+
+- **omnizip 0.16.76 → 0.16.77** — the reference-parity campaign
+  landed: the from-spec Brotli dictionary-lookup cost is fixed
+  upstream. Measured locally: 51 MB metadata-blob compress drops
+  24.3 s → 6.7 s (3.6x). Quick benchmark (balanced): WAV create
+  12.2 s → 0.16 s at 0.02% ratio; FITS 14.5 s → 5.7 s; CSV create
+  2.25 s → 0.82 s. Note the CSV ratio trade: 2.99% → 5.71% (still
+  ahead of the 6.23% C reference; DwarFS's LZMA reaches 3.59% but
+  takes 73x longer to create).
+
 ## [0.2.51] — 2026-08-21
 
 ### Added
