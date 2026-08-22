@@ -5,6 +5,23 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.55] — 2026-08-22
+
+### Changed
+
+- **omnizip 0.16.78 → 0.16.79** — upstream fixed the residual
+  omnizip#315 decoder defect (PR #317): the decoder now correctly
+  reads frames its own encoder produces at every level. Verified
+  against both the original 318-byte repro and the 163-byte minimal
+  case we shrank for the upstream report — all five levels
+  round-trip.
+- **zstd write-side self-check REMOVED** — the v0.2.53 decompress-
+  verify guard is obsolete; encode paths are direct again (drops the
+  per-drop decode overhead). The #315 repro stays pinned as a
+  canary test that now requires round-trip at all levels; if it ever
+  regresses, the guard documented in v0.2.53 comes back.
+- Routine dependency updates (cc, either, log, ref-cast).
+
 ## [0.2.54] — 2026-08-22
 
 ### Changed

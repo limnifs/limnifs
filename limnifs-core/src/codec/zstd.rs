@@ -39,44 +39,13 @@ fn level_for_quality(quality: u8) -> omnizip_zstd::ZstdLevel {
 /// ZSTD codec. Encode at `Default` (L6); decode at any level.
 pub struct ZstdCodec;
 
-/// Verify an encoder frame decodes back to `plaintext`.
-///
-/// omnizip#315 (still live in 0.16.77): the omnizip-zstd DECODER
-/// fails on frames its own encoder produced, content-dependently,
-/// at Fastest/Fast/Default/Better (Best is correct). A frame that
-/// does not round-trip here would become an image no LimniFS reader
-/// can open — so the codec refuses to emit it. Callers treat this as
-/// a failed candidate (tournament moves to the next codec; whole-file
-/// paths fall back). Remove when the upstream decoder is fixed.
-fn verify_roundtrip(frame: &[u8], plaintext: &[u8]) -> Result<(), CoreError> {
-    let len = u32::try_from(plaintext.len()).map_err(|_| CoreError::Corrupt {
-        reason: format!("zstd self-check: plaintext {} exceeds u32", plaintext.len()),
-    })?;
-    match omnizip_zstd::decompress(frame, len) {
-        Ok(back) if back == plaintext => Ok(()),
-        Ok(back) => Err(CoreError::Corrupt {
-            reason: format!(
-                "zstd self-check: decode returned {} bytes for {} (omnizip#315 decoder bug)",
-                back.len(),
-                plaintext.len()
-            ),
-        }),
-        Err(e) => Err(CoreError::Corrupt {
-            reason: format!("zstd self-check decode failed (omnizip#315): {e}"),
-        }),
-    }
-}
-
-/// Compress + verify. Every encode path funnels through here.
 fn compress_verified(
     plaintext: &[u8],
     level: omnizip_zstd::ZstdLevel,
 ) -> Result<Vec<u8>, CoreError> {
-    let frame = omnizip_zstd::compress(plaintext, level).map_err(|e| CoreError::Corrupt {
+    omnizip_zstd::compress(plaintext, level).map_err(|e| CoreError::Corrupt {
         reason: format!("zstd compress (level {level}) failed: {e}"),
-    })?;
-    verify_roundtrip(&frame, plaintext)?;
-    Ok(frame)
+    })
 }
 
 impl Codec for ZstdCodec {
@@ -164,8 +133,12 @@ mod tests {
     /// The 318-byte blob from omnizip#315: trips the decoder at
     /// Fastest/Fast/Default/Better (Best decodes correctly). The
     /// self-check must refuse to emit the broken frames.
+    /// omnizip#315 canary: the decoder previously failed on its own
+    /// encoder's frames for this content shape (fixed upstream in
+    /// 0.16.79). If this regresses, the write-side decompress-verify
+    /// guard documented in the v0.2.53 changelog must come back.
     #[test]
-    fn omnizip_315_blob_is_refused_not_emitted() {
+    fn omnizip_315_blob_round_trips_at_all_levels() {
         const B64: &str = "AgAAAAIAAAAAAAAApIEAAAAAAAAAAAAAjfBCgS8IzhiN8EKBLwjOGAEAAAAEpQAAAGR1cGxpY2F0ZSBpbmxpbmUgY29udGVudDogdGhlIHNhbWUgMjAwLWlzaCBieXRlcyBpbiB0aHJlZSBmaWxlcywgc28gdGhlIHdyaXRlcidzIGlubGluZSBkZWR1cCBmaWxlcyBvbiBldmVyeSByZWFsaXN0aWMgdHJlZS4gUGFkZGluZyBwYWRkaW5nIHBhZGRpbmcgcGFkZGluZyBwYWRkaW5nIQEAAAAAAAAA7UEAAAAAAAAAAAAABelAgS8IzhgF6UCBLwjOGAEAAAAA0n/vT8wNhb/EicVbOmpyaI3ka3H9+fam7ksII2Ipyd4BAAAAAQEAAAAJAAAAZHVwLWEudHh0AgAAAAAAAAAB";
         let blob = b64(B64);
         assert_eq!(blob.len(), 318);
@@ -174,18 +147,14 @@ mod tests {
             omnizip_zstd::ZstdLevel::Fast,
             omnizip_zstd::ZstdLevel::Default,
             omnizip_zstd::ZstdLevel::Better,
+            omnizip_zstd::ZstdLevel::Best,
         ] {
-            let err = compress_verified(&blob, level)
-                .expect_err("self-check must refuse a frame the decoder cannot read");
-            assert!(
-                err.to_string().contains("omnizip#315"),
-                "expected omnizip#315 context, got {err}"
-            );
+            let frame =
+                compress_verified(&blob, level).unwrap_or_else(|e| panic!("{level:?}: {e}"));
+            let back = omnizip_zstd::decompress(&frame, 318)
+                .unwrap_or_else(|e| panic!("{level:?} decode: {e}"));
+            assert_eq!(back, blob, "{level:?} must round-trip");
         }
-        // Best is unaffected and must round-trip.
-        let frame = compress_verified(&blob, omnizip_zstd::ZstdLevel::Best).expect("Best OK");
-        let back = omnizip_zstd::decompress(&frame, 318).expect("decode");
-        assert_eq!(back, blob);
     }
 
     #[test]
