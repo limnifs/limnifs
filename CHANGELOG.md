@@ -5,6 +5,17 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.54] — 2026-08-22
+
+### Changed
+
+- **omnizip 0.16.77 → 0.16.78** — absorbs the zstd offset-code
+  table fix (PR #316): real `zstd` CLI frames now decode correctly.
+  Retested against the omnizip#315 repro: the 318-byte blob still
+  fails its self-round-trip identically at
+  Fastest/Fast/Default/Better (Best OK), so the v0.2.53 write-side
+  zstd self-check remains in place; retest results posted upstream.
+
 ## [0.2.53] — 2026-08-22
 
 ### Fixed
