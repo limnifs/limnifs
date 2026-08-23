@@ -383,6 +383,7 @@ pub fn write_layer(
     ctx.collect_dict_samples = config.dictionaries.enabled;
     ctx.inline_threshold = config.defaults.inline_threshold as usize;
     ctx.metadata_externalize_threshold = config.defaults.metadata_externalize_threshold;
+    ctx.emit_shared_inline = config.defaults.shared_inline;
     ctx.base_drop_index = Some(base_drop_index);
     ctx.base_root = Some(base_root);
 
@@ -488,6 +489,7 @@ fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<
     }
     ctx.inline_threshold = config.defaults.inline_threshold as usize;
     ctx.metadata_externalize_threshold = config.defaults.metadata_externalize_threshold;
+    ctx.emit_shared_inline = config.defaults.shared_inline;
     let chunker = ctx.chunker.clone();
     let classifier = ctx.classifier;
     let text_codec = config.text_codec_id().unwrap_or(0x04);
@@ -606,6 +608,7 @@ fn write_directory_streaming(
 
     ctx.inline_threshold = config.defaults.inline_threshold as usize;
     ctx.metadata_externalize_threshold = config.defaults.metadata_externalize_threshold;
+    ctx.emit_shared_inline = config.defaults.shared_inline;
 
     // Bounded so the walk back-pressures if compression falls behind;
     // the buffer is large enough to keep every worker fed on bursty
@@ -1210,6 +1213,12 @@ struct WriteContext {
     /// [`METADATA_EXTERNALIZE_THRESHOLD`]; overridable via
     /// `WriteConfig::defaults::metadata_externalize_threshold`.
     metadata_externalize_threshold: usize,
+    /// Whether to dedup identical inline file contents into the
+    /// shared-inline table (issue #189). `true` (default) keeps the
+    /// historical behavior; `false` emits plain `INLINE_DATA` inodes
+    /// so images stay readable by pre-#186 readers whose reserved
+    /// mask rejects the `SHARED_INLINE` flag.
+    emit_shared_inline: bool,
     /// Inline-data cutoff from `WriteConfig::defaults.inline_threshold`.
     /// Files at or below this size are stored inline in the metadata
     /// blob instead of being chunked into slabs. Set from the profile
@@ -1256,6 +1265,7 @@ impl WriteContext {
             pending_sink: None,
             inline_threshold: INLINE_THRESHOLD,
             metadata_externalize_threshold: METADATA_EXTERNALIZE_THRESHOLD,
+            emit_shared_inline: true,
         }
     }
 
@@ -1573,7 +1583,9 @@ impl WriteContext {
         // appears in more than one inode. For N files with identical
         // small content, store once and reference by index.
         let t = std::time::Instant::now();
-        self.build_shared_inline_table();
+        if self.emit_shared_inline {
+            self.build_shared_inline_table();
+        }
         Self::trace_phase("shared_inline_table", t);
 
         let mut metadata_blob = Vec::new();

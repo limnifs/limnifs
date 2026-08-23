@@ -5,6 +5,19 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.57] — 2026-08-23
+
+### Added
+
+- **#189: `shared_inline` write knob** — `WriteConfig.defaults.shared_inline`
+  (default `true`, TOML `[defaults] shared_inline = false`). Setting
+  it `false` skips the shared-inline dedup pass and emits plain
+  `INLINE_DATA` inodes, so images containing duplicate small files
+  stay readable by pre-#186 readers (published tebako runtimes whose
+  reserved mask rejects the `SHARED_INLINE` flag) at the cost of
+  duplicated inline bytes. Fully additive; default behavior
+  unchanged. Regression test covers the off path.
+
 ## [0.2.56] — 2026-08-23
 
 ### Changed

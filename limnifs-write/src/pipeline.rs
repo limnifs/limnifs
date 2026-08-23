@@ -77,6 +77,7 @@ pub fn write_directory_with_pipeline(
     ctx.collect_dict_samples = config.dictionaries.enabled;
     ctx.inline_threshold = config.defaults.inline_threshold as usize;
     ctx.metadata_externalize_threshold = config.defaults.metadata_externalize_threshold;
+    ctx.emit_shared_inline = config.defaults.shared_inline;
 
     let root_inode_number = ctx.walk(root)?;
     ctx.root_inode_number = root_inode_number;

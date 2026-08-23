@@ -131,6 +131,12 @@ pub struct Defaults {
     /// keep manifests small. See limnifs#187.
     #[serde(default = "default_metadata_externalize_threshold")]
     pub metadata_externalize_threshold: usize,
+    /// Dedup identical inline file contents into the shared-inline
+    /// table (issue #189). Default ; set  to emit plain
+    /// inline inodes readable by pre-#186 readers (cached tebako
+    /// runtimes whose reserved mask rejects the SHARED_INLINE flag).
+    #[serde(default = "default_true")]
+    pub shared_inline: bool,
     /// Inline data threshold (bytes).
     pub inline_threshold: u16,
 }
@@ -392,6 +398,7 @@ impl WriteConfig {
                 metadata_codec: DEFAULT_METADATA_CODEC.to_string(),
                 metadata_quality: DEFAULT_METADATA_QUALITY,
                 metadata_externalize_threshold: crate::METADATA_EXTERNALIZE_THRESHOLD,
+                shared_inline: true,
                 inline_threshold: DEFAULT_INLINE_THRESHOLD,
             },
             categorizers: Vec::new(),

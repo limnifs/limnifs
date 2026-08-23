@@ -70,6 +70,47 @@ fn duplicated_inline_files_round_trip_through_reader() {
 }
 
 #[test]
+fn knob_off_emits_plain_inline_readable_by_pre_186_readers() {
+    // Issue #189: shared_inline = false must produce images whose
+    // inodes carry no SHARED_INLINE flag (readable by the pre-#186
+    // reserved mask 0xF8) at the cost of duplicated inline bytes.
+    let dir =
+        std::env::temp_dir().join(format!("limnifs-shared-inline-off-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let payload = vec![0xA7u8; 165];
+    for name in ["dup-a.txt", "dup-b.txt", "dup-c.txt"] {
+        std::fs::write(dir.join(name), &payload).expect("write");
+    }
+
+    let mut config = WriteConfig::default_v0_1();
+    config.defaults.shared_inline = false;
+    let art = write_directory_with_config(&dir, &config).expect("write");
+    let mut c = ManifestCursor::new(&art.bytes);
+    parse_manifest_header(&mut c).expect("header");
+    parse_feature_flags_section(&mut c).expect("flags");
+    let mr = parse_metadata_reference(&mut c).expect("meta ref");
+    let bytes = mr.inline_metadata.as_deref().expect("inlined");
+    let blob = parse_metadata_blob(&mut ManifestCursor::new(bytes)).expect("blob");
+
+    let mut dups = 0;
+    for inode in &blob.inodes {
+        match &inode.content_handle {
+            ContentHandle::InlineData(d) if d == &payload => dups += 1,
+            ContentHandle::SharedInline(_) => {
+                panic!("shared_inline=false must not emit SharedInline inodes")
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(dups, 3, "all three duplicates present as plain inline");
+
+    // No inode carries the SHARED_INLINE flag (covered by the match
+    // panic above), so a pre-#186 reader's 0xF8 reserved mask sees
+    // clean flags on every inode in this image.
+}
+
+#[test]
 fn shared_inline_flag_not_in_reserved_mask() {
     // Pins the contract: bit 3 is defined, so it must sit OUTSIDE the
     // reserved mask. 0xF8 here regresses issue #186.
