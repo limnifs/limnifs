@@ -5,6 +5,15 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.60] — 2026-08-24
+
+### Changed
+
+- **omnizip 0.16.89 → 0.16.91** — routine absorption. xz/zstd
+  system-CLI conformance canaries still byte-exact; 662 tests green.
+  Quick benchmark: ratios unchanged (CSV 5.71%, FITS 32.09%, WAV
+  0.02%); FITS create improved to 4.0 s (was 6.9 s).
+
 ## [0.2.59] — 2026-08-23
 
 ### Changed
