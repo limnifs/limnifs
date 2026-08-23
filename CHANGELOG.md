@@ -5,6 +5,19 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.59] — 2026-08-23
+
+### Changed
+
+- **omnizip 0.16.88 → 0.16.89** — upstream fixed omnizip#329 (PR
+  #330): mid-stream raw chunks now carry control 0x02 (dictionary
+  preserved) and any dictionary-resetting chunk forces a
+  props-carrying level-2 LZMA chunk after it. Validated against the
+  issue's 11-case trigger matrix (11/11 `xz -t` clean) and the
+  100 MB mixed fixture: system xz decodes rc=0, byte-exact, full
+  length — XZ output is now fully conformant for external interop.
+  Ratio unchanged (conformance fix, as upstream noted).
+
 ## [0.2.58] — 2026-08-23
 
 ### Changed
