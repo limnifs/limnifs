@@ -5,6 +5,25 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.58] — 2026-08-23
+
+### Changed
+
+- **omnizip 0.16.80 → 0.16.88** — absorbs PR #327 (four LZMA fixes:
+  chunk bisection past the u16 size field + raw-store chunks,
+  LZMA2 without the LZMA1 end-of-payload marker, conditional range-
+  coder tail byte, two xz container field corrections) and PR #328
+  (zstd minMatch floor + RLE literals writer + hardened weight
+  fallback; Best no longer corrupts above ~1 MiB). Validated: 100 MB
+  mixed payload round-trips through both codecs; the zstd frame is
+  accepted byte-exact by the system CLI.
+- **Known upstream gap (omnizip#329, filed with a trigger matrix and
+  repro):** XZ frames that exercise the new bisect/raw-store path
+  (>=2 MiB total with >=~512 KiB incompressible content) are
+  non-conformant — the reference xz decodes a byte-exact prefix,
+  stops N bytes short, then errors. Self-readable; affects external
+  tool interop only.
+
 ## [0.2.57] — 2026-08-23
 
 ### Added
