@@ -5,6 +5,16 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.61] — 2026-08-24
+
+### Changed
+
+- **omnizip 0.16.91 → 0.16.92** — LZMA now tracks system xz -6
+  within ~1% on size across the upstream fixture matrix (fits4m
+  1.001x, mix2m 1.011x, m329 1.012-1.013x, big100m 1.000x with
+  parallel speedup; -9 within 4 B). xz/zstd conformance canaries
+  still byte-exact against the system CLIs; 662 tests green.
+
 ## [0.2.60] — 2026-08-24
 
 ### Changed
