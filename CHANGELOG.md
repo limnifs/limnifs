@@ -5,6 +5,19 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.64] — 2026-08-25
+
+### Changed
+
+- **omnizip 0.16.92 → 0.16.96** — latest complete codec line.
+  667 tests green; xz system-CLI conformance canaries byte-exact.
+  The 0.20.1 line is only partially published upstream (their
+  release-plz run fails at `omnizip-archive-core`, whose manifest
+  carries a path-only `omnizip-bzip2` dependency cargo refuses to
+  publish); we jump to 0.20 once their publish completes. Pre-flight
+  against the local 0.20.1 workspace shows zero API breaks and a
+  green full suite, so that jump is ready on demand.
+
 ## [0.2.63] — 2026-08-25
 
 ### Security
