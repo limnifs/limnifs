@@ -129,8 +129,8 @@ pub use metadata::{
     dir_node_hash, parse_metadata_blob, parse_metadata_blob_with_ceiling, MetadataBlob,
 };
 pub use metadata_reference::{
-    parse_metadata_reference, parse_metadata_reference_with_ceilings, MetadataReference,
-    DEFAULT_INLINE_METADATA_MAX_BYTES, METADATA_REFERENCE_SECTION_VERSION,
+    parse_metadata_reference, parse_metadata_reference_with_ceilings, read_external_metadata,
+    MetadataReference, DEFAULT_INLINE_METADATA_MAX_BYTES, METADATA_REFERENCE_SECTION_VERSION,
     METADATA_REFERENCE_SECTION_VERSION_2,
 };
 pub use slab::{

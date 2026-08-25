@@ -34,11 +34,20 @@ pub const METADATA_REFERENCE_SECTION_VERSION_2: u8 = 2;
 /// [`crate::codec::CODEC_STORE`].
 const CODEC_STORE: u8 = 0x00;
 
-/// Default ceiling on the **compressed** inline metadata length (per
+/// Default ceiling on the **compressed** INLINE metadata length (per
 /// spec §5.3: "metadata blob ≤ 1 MiB by default"). The uncompressed
 /// length is bounded separately and may exceed this when a high-
 /// compression codec is in use. Caller can override via
 /// [`parse_metadata_reference_with_ceilings`].
+///
+/// **This gates INLINE metadata only** (bytes carried inside the
+/// manifest, parsed before the reader knows anything about the
+/// image). EXTERNAL metadata — the `file:metadata.bin` sidecar — is
+/// a separate file the opener chose to read and has NO ceiling in
+/// the reference load path ([`read_external_metadata`]); use its
+/// file size as the bound. Do not apply this constant to sidecars
+/// (issue #191: a downstream driver did, rejecting every large-tree
+/// image its own format could carry).
 pub const DEFAULT_INLINE_METADATA_MAX_BYTES: u32 = 1024 * 1024;
 
 /// Width of the fixed prefix of the v1 section: 1-byte `version` +
@@ -256,6 +265,60 @@ fn unreachable_error(prefix_len: usize) -> CoreError {
         reason: format!(
             "metadata_reference is unreachable: locator_count=0 and inline_data_len=0 (need at least one source for the {prefix_len}-byte metadata blob)"
         ),
+    }
+}
+
+/// Load the metadata blob bytes for an image whose reference section
+/// parsed to external locators: follow the first `file:` locator
+/// (resolved relative to the image file's directory), then decompress
+/// per the reference's codec field (codec 0 = STORE returns the raw
+/// bytes). Images with INLINE metadata don't call this — their bytes
+/// already live in [`MetadataReference::inline_metadata`].
+///
+/// This is the one true load path for external metadata. It applies
+/// NO size ceiling: the sidecar is a file the caller chose to open,
+/// so its on-disk size is the bound — unlike INLINE metadata, where
+/// [`DEFAULT_INLINE_METADATA_MAX_BYTES`] protects the unbounded
+/// manifest read. Verified at 150,000 inodes / 616 MiB sidecar
+/// (issue #191).
+///
+/// # Errors
+///
+/// - [`CoreError::Corrupt`] if the reference carries no locators, or
+///   if the locator is not a `file:` URI.
+/// - [`CoreError::Io`]-shaped [`CoreError::Corrupt`] if the sidecar
+///   cannot be read, or v2 decompression fails.
+pub fn read_external_metadata(
+    reference: &MetadataReference,
+    image_path: &std::path::Path,
+) -> Result<Vec<u8>, CoreError> {
+    let entry = reference
+        .locators
+        .first()
+        .ok_or_else(|| CoreError::Corrupt {
+            reason: "metadata_reference has neither inline data nor locators".into(),
+        })?;
+    if !entry.uri.starts_with("file:") {
+        return Err(CoreError::Corrupt {
+            reason: format!(
+                "metadata_reference locator {} is not a file: URI; \
+                 external metadata requires a local sidecar",
+                entry.uri
+            ),
+        });
+    }
+    let name = entry.uri.strip_prefix("file:").unwrap_or(&entry.uri);
+    let sidecar_path = image_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(name);
+    let wire = std::fs::read(&sidecar_path).map_err(|e| CoreError::Corrupt {
+        reason: format!("read external metadata {}: {e}", sidecar_path.display()),
+    })?;
+    if reference.codec == 0 {
+        Ok(wire)
+    } else {
+        crate::codec::decompress(reference.codec, &wire, reference.uncompressed_len)
     }
 }
 

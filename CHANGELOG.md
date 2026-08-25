@@ -5,6 +5,31 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.62] — 2026-08-25
+
+### Added
+
+- **#190: symlink support in the writer.** The format and reader
+  always carried symlinks (`ContentHandle::Symlink`); the walk now
+  records them too — relative or absolute targets, in-tree or
+  out-of-tree, dangling included. Parent entry typing no longer
+  follows links (`entry.file_type()` instead of `entry.metadata()`).
+  Anything genuinely unsupported (sockets, FIFOs, devices) now raises
+  a named `WriteError::UnsupportedFileType` with guidance instead of
+  a bare I/O error. Verified end-to-end on the git-gem shape
+  (`.claude/skills -> ../.github/skills`).
+
+### Fixed
+
+- **#191: external metadata has NO reader ceiling — by design, now
+  documented and centralized.** `DEFAULT_INLINE_METADATA_MAX_BYTES`
+  gates INLINE metadata only (unbounded-manifest-read DoS guard);
+  external sidecars are separate files the opener chose to read.
+  Verified at 150,000 inodes / 616 MiB sidecar: byte-exact extract.
+  New `limnifs_core::read_external_metadata(&reference, &image_path)`
+  is the one true load path (limni now uses it); the constant's docs
+  say explicitly not to apply it to sidecars.
+
 ## [0.2.61] — 2026-08-24
 
 ### Changed

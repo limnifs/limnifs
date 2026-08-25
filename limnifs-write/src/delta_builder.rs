@@ -69,6 +69,10 @@ impl From<crate::WriteError> for DeltaError {
     fn from(e: crate::WriteError) -> Self {
         match e {
             crate::WriteError::Io(io) => Self::Io(io),
+            crate::WriteError::UnsupportedFileType { path, kind } => Self::Io(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                format!("unsupported file type ({kind}): {}", path.display()),
+            )),
         }
     }
 }

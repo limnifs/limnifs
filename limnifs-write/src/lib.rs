@@ -181,12 +181,27 @@ impl WriteArtifact {
 #[derive(Debug)]
 pub enum WriteError {
     Io(std::io::Error),
+    /// The tree contains an entry type the writer deliberately does
+    /// not store (sockets, FIFOs, device nodes). Symlinks ARE
+    /// supported; everything else on a normal filesystem tree is
+    /// either a file, a directory, or this error.
+    UnsupportedFileType {
+        path: PathBuf,
+        kind: String,
+    },
 }
 
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::UnsupportedFileType { path, kind } => write!(
+                f,
+                "unsupported file type ({kind}): {} — limnifs stores files, \
+                 directories, and symlinks; remove the entry or file an issue \
+                 if you need it carried",
+                path.display()
+            ),
         }
     }
 }
@@ -1144,6 +1159,8 @@ struct PendingInode {
 
 enum PendingContent {
     Inline(Vec<u8>),
+    /// Symlink target (raw, as read from the filesystem).
+    Symlink(String),
     DropBacked {
         file_len: u64,
         slices: Vec<PendingSlice>,
@@ -1398,8 +1415,16 @@ impl WriteContext {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let child_path = entry.path();
                 let child_inode = self.walk(&child_path)?;
-                let child_meta = entry.metadata()?;
-                let entry_type = if child_meta.is_dir() { 0x02 } else { 0x01 };
+                // entry.file_type() does NOT follow symlinks (the old
+                // entry.metadata() did, misreporting links to dirs).
+                let ft = entry.file_type()?;
+                let entry_type = if ft.is_symlink() {
+                    0x03
+                } else if ft.is_dir() {
+                    0x02
+                } else {
+                    0x01
+                };
                 entries.push((name, child_inode, entry_type));
             }
 
@@ -1448,11 +1473,52 @@ impl WriteContext {
                 }
             }
             Ok(inode_number)
+        } else if file_type.is_symlink() {
+            // Issue #190: symlinks are a first-class format citizen
+            // (the reader has ContentHandle::Symlink and extract
+            // recreates links); the writer just never emitted them.
+            // The target is stored verbatim — relative or absolute,
+            // in-tree or out-of-tree, dangling or not. Note
+            // `symlink_metadata` above gives us the LINK's own
+            // metadata, so a dangling link still walks cleanly.
+            let inode_number = self.alloc_inode();
+            let target = std::fs::read_link(path)?;
+            let target = target
+                .to_str()
+                .ok_or_else(|| WriteError::UnsupportedFileType {
+                    path: path.to_path_buf(),
+                    kind: format!("symlink with non-UTF-8 target ({})", target.display()),
+                })?
+                .to_owned();
+            self.inodes.push(PendingInode {
+                number: inode_number,
+                mode: limnifs_core::inode::S_IFLNK | 0o777,
+                mtime_ns,
+                content: PendingContent::Symlink(target),
+            });
+            Ok(inode_number)
         } else {
-            Err(WriteError::Io(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                format!("unsupported file type: {}", path.display()),
-            )))
+            #[cfg(unix)]
+            let kind = {
+                use std::os::unix::fs::FileTypeExt;
+                if file_type.is_fifo() {
+                    "fifo".to_owned()
+                } else if file_type.is_socket() {
+                    "socket".to_owned()
+                } else if file_type.is_block_device() {
+                    "block device".to_owned()
+                } else if file_type.is_char_device() {
+                    "character device".to_owned()
+                } else {
+                    "unknown".to_owned()
+                }
+            };
+            #[cfg(not(unix))]
+            let kind = "unknown".to_owned();
+            Err(WriteError::UnsupportedFileType {
+                path: path.to_path_buf(),
+                kind,
+            })
         }
     }
 
@@ -1864,6 +1930,16 @@ impl WriteContext {
                     out.extend_from_slice(&drop_byte_len.to_le_bytes());
                 }
                 let _ = file_len;
+            }
+            PendingContent::Symlink(target) => {
+                // The reader dispatches on the inode's S_IFMT bits and
+                // reads target_len + target directly (flags unused
+                // for non-regular inodes).
+                out.push(0x00);
+                let t = target.as_bytes();
+                let len = u32::try_from(t.len()).expect("target fits u32");
+                out.extend_from_slice(&len.to_le_bytes());
+                out.extend_from_slice(t);
             }
             PendingContent::Directory(entries) => {
                 out.push(0x00);

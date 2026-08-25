@@ -2458,29 +2458,9 @@ fn load_image(
         // Parser already decompressed v2 inline bytes.
         inline.to_vec()
     } else {
-        // External metadata blob: follow the first file: locator,
-        // then decompress if codec != 0.
-        let entry = meta_ref
-            .locators
-            .first()
-            .ok_or_else(|| CliError::FormatFailed {
-                path: image.to_path_buf(),
-                source: CoreError::Corrupt {
-                    reason: "metadata_reference has neither inline data nor locators".into(),
-                },
-            })?;
-        let name = entry.uri.strip_prefix("file:").unwrap_or(&entry.uri);
-        let sidecar_path = image.parent().unwrap_or_else(|| Path::new(".")).join(name);
-        let wire_bytes = std::fs::read(&sidecar_path).map_err(|source| CliError::ReadFailed {
-            path: sidecar_path.clone(),
-            source,
-        })?;
-        if meta_ref.codec == 0 {
-            wire_bytes
-        } else {
-            limnifs_core::codec::decompress(meta_ref.codec, &wire_bytes, meta_ref.uncompressed_len)
-                .map_err(&map_err)?
-        }
+        // The one true external-metadata load path (no ceiling —
+        // see read_external_metadata; issue #191).
+        limnifs_core::read_external_metadata(&meta_ref, image).map_err(&map_err)?
     };
     let mut blob_cursor = ManifestCursor::new(&blob_bytes);
     let blob = parse_metadata_blob(&mut blob_cursor).map_err(&map_err)?;
