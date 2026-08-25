@@ -298,16 +298,7 @@ pub fn read_external_metadata(
         .ok_or_else(|| CoreError::Corrupt {
             reason: "metadata_reference has neither inline data nor locators".into(),
         })?;
-    if !entry.uri.starts_with("file:") {
-        return Err(CoreError::Corrupt {
-            reason: format!(
-                "metadata_reference locator {} is not a file: URI; \
-                 external metadata requires a local sidecar",
-                entry.uri
-            ),
-        });
-    }
-    let name = entry.uri.strip_prefix("file:").unwrap_or(&entry.uri);
+    let name = crate::locator::local_sidecar_name(&entry.uri)?;
     let sidecar_path = image_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))

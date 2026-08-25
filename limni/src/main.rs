@@ -625,6 +625,13 @@ fn verify(image: &PathBuf, json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
+fn sidecar_name<'a>(uri: &'a str) -> Result<&'a str, CliError> {
+    limnifs_core::locator::local_sidecar_name(uri).map_err(|source| CliError::FormatFailed {
+        path: PathBuf::from(uri),
+        source,
+    })
+}
+
 fn limsig_path(image: &Path) -> PathBuf {
     let mut s = image.as_os_str().to_os_string();
     s.push(".limsig");
@@ -783,7 +790,7 @@ fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
         .slabs
         .iter()
         .map(|slab| {
-            let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+            let slab_name = sidecar_name(&slab.locator)?;
             let slab_path = parent.join(slab_name);
             std::fs::write(&slab_path, &slab.bytes).map_err(|source| CliError::ReadFailed {
                 path: slab_path.clone(),
@@ -803,10 +810,7 @@ fn limn(source: &Path, output: &Path) -> Result<(), CliError> {
         .sum();
 
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar
-            .locator
-            .strip_prefix("file:")
-            .unwrap_or(&sidecar.locator);
+        let name = sidecar_name(&sidecar.locator)?;
         let sidecar_path = parent.join(name);
         std::fs::write(&sidecar_path, &sidecar.bytes).map_err(|source| CliError::ReadFailed {
             path: sidecar_path.clone(),
@@ -882,7 +886,7 @@ fn limn_with_profile(
 
     let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
     for slab in &artifact.slabs {
-        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        let slab_name = sidecar_name(&slab.locator)?;
         let slab_path = parent.join(slab_name);
         std::fs::write(&slab_path, &slab.bytes).map_err(|source| CliError::ReadFailed {
             path: slab_path.clone(),
@@ -898,10 +902,7 @@ fn limn_with_profile(
     }
 
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar
-            .locator
-            .strip_prefix("file:")
-            .unwrap_or(&sidecar.locator);
+        let name = sidecar_name(&sidecar.locator)?;
         let sidecar_path = parent.join(name);
         std::fs::write(&sidecar_path, &sidecar.bytes).map_err(|source| CliError::ReadFailed {
             path: sidecar_path.clone(),
@@ -1026,17 +1027,14 @@ fn rw_add(
     })?;
     let parent = image.parent().unwrap_or_else(|| std::path::Path::new("."));
     for slab in &artifact.slabs {
-        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        let slab_name = sidecar_name(&slab.locator)?;
         std::fs::write(parent.join(slab_name), &slab.bytes).map_err(|e| CliError::ReadFailed {
             path: parent.join(slab_name),
             source: e,
         })?;
     }
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar
-            .locator
-            .strip_prefix("file:")
-            .unwrap_or(&sidecar.locator);
+        let name = sidecar_name(&sidecar.locator)?;
         std::fs::write(parent.join(name), &sidecar.bytes).map_err(|e| CliError::ReadFailed {
             path: parent.join(name),
             source: e,
@@ -1075,17 +1073,14 @@ fn rw_delete(image: &Path, path: &str, profile: Option<String>) -> Result<(), Cl
     })?;
     let parent = image.parent().unwrap_or_else(|| std::path::Path::new("."));
     for slab in &artifact.slabs {
-        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        let slab_name = sidecar_name(&slab.locator)?;
         std::fs::write(parent.join(slab_name), &slab.bytes).map_err(|e| CliError::ReadFailed {
             path: parent.join(slab_name),
             source: e,
         })?;
     }
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar
-            .locator
-            .strip_prefix("file:")
-            .unwrap_or(&sidecar.locator);
+        let name = sidecar_name(&sidecar.locator)?;
         std::fs::write(parent.join(name), &sidecar.bytes).map_err(|e| CliError::ReadFailed {
             path: parent.join(name),
             source: e,
@@ -1129,17 +1124,14 @@ fn turnover_cmd(image: &Path, profile_name: &str) -> Result<(), CliError> {
     })?;
     let parent = image.parent().unwrap_or_else(|| std::path::Path::new("."));
     for slab in &artifact.slabs {
-        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        let slab_name = sidecar_name(&slab.locator)?;
         std::fs::write(parent.join(slab_name), &slab.bytes).map_err(|e| CliError::ReadFailed {
             path: parent.join(slab_name),
             source: e,
         })?;
     }
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar
-            .locator
-            .strip_prefix("file:")
-            .unwrap_or(&sidecar.locator);
+        let name = sidecar_name(&sidecar.locator)?;
         std::fs::write(parent.join(name), &sidecar.bytes).map_err(|e| CliError::ReadFailed {
             path: parent.join(name),
             source: e,
@@ -1498,7 +1490,7 @@ fn inspect(image: &Path) -> Result<(), CliError> {
     for (i, entry) in slab_index.entries.iter().enumerate() {
         let locator = entry.locators.first();
         if let Some(loc) = locator {
-            let name = loc.uri.strip_prefix("file:").unwrap_or(&loc.uri);
+            let name = sidecar_name(&loc.uri)?;
             let slab_path = image
                 .parent()
                 .unwrap_or_else(|| std::path::Path::new("."))
@@ -1844,7 +1836,7 @@ fn gc_cmd(image: &Path) -> Result<(), CliError> {
 
     for entry in &slab_index.entries {
         for locator in &entry.locators {
-            let name = locator.uri.strip_prefix("file:").unwrap_or(&locator.uri);
+            let name = sidecar_name(&locator.uri)?;
             let slab_path = image
                 .parent()
                 .unwrap_or_else(|| std::path::Path::new("."))
@@ -2000,7 +1992,7 @@ fn compact(source: &Path, output: &Path) -> Result<(), CliError> {
     let parent = output.parent().unwrap_or_else(|| std::path::Path::new("."));
     let mut slab_size: u64 = 0;
     for slab in &artifact.slabs {
-        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        let slab_name = sidecar_name(&slab.locator)?;
         let slab_path = parent.join(slab_name);
         std::fs::write(&slab_path, &slab.bytes).map_err(|e| CliError::ReadFailed {
             path: slab_path.clone(),
@@ -2009,10 +2001,7 @@ fn compact(source: &Path, output: &Path) -> Result<(), CliError> {
         slab_size += slab.bytes.len() as u64;
     }
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar
-            .locator
-            .strip_prefix("file:")
-            .unwrap_or(&sidecar.locator);
+        let name = sidecar_name(&sidecar.locator)?;
         let sidecar_path = parent.join(name);
         std::fs::write(&sidecar_path, &sidecar.bytes).map_err(|e| CliError::ReadFailed {
             path: sidecar_path.clone(),
@@ -2154,7 +2143,7 @@ fn benchmark() -> Result<(), CliError> {
     let write_ms = t0.elapsed().as_millis();
     std::fs::write(&img, &artifact.bytes).expect("write image");
     for slab in &artifact.slabs {
-        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        let slab_name = sidecar_name(&slab.locator)?;
         let slab_path = img
             .parent()
             .unwrap_or(std::path::Path::new("."))
@@ -2162,10 +2151,7 @@ fn benchmark() -> Result<(), CliError> {
         std::fs::write(&slab_path, &slab.bytes).expect("write slab");
     }
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar
-            .locator
-            .strip_prefix("file:")
-            .unwrap_or(&sidecar.locator);
+        let name = sidecar_name(&sidecar.locator)?;
         let sidecar_path = img.parent().unwrap_or(std::path::Path::new(".")).join(name);
         std::fs::write(&sidecar_path, &sidecar.bytes).expect("write metadata sidecar");
     }
@@ -2207,15 +2193,12 @@ fn benchmark() -> Result<(), CliError> {
     std::fs::remove_dir_all(&dest).ok();
     std::fs::remove_file(&img).ok();
     for slab in &artifact.slabs {
-        let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+        let slab_name = sidecar_name(&slab.locator)?;
         let slab_path = std::env::temp_dir().join(slab_name);
         let _ = std::fs::remove_file(&slab_path);
     }
     if let Some(sidecar) = &artifact.metadata_sidecar {
-        let name = sidecar
-            .locator
-            .strip_prefix("file:")
-            .unwrap_or(&sidecar.locator);
+        let name = sidecar_name(&sidecar.locator)?;
         let sidecar_path = std::env::temp_dir().join(name);
         let _ = std::fs::remove_file(&sidecar_path);
     }

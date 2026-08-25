@@ -5,6 +5,28 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.63] — 2026-08-25
+
+### Security
+
+- **Locator path-traversal gate (CWE-22).** Every local join site —
+  slab loads (`SlabStore`), the external-metadata helper, the RW
+  image paths, the FUSE vfs, `FileLocator`, and all CLI reads —
+  previously stripped `file:` and joined the raw path against the
+  image directory. A malicious manifest could point a slab or
+  metadata sidecar at `file:../../etc/passwd` (or an absolute path,
+  which `Path::join` substitutes wholesale) and exfiltrate host
+  files through `cat`/`extract`. New
+  `limnifs_core::locator::local_sidecar_name()` admits only flat
+  file names (no separators, no `.`, no `..`, no drive letters) and
+  every join site routes through it; the URI grammar itself stays
+  permissive per the format spec (rich `file:` paths remain legal
+  for future resolver backends — they are simply refused for local
+  sidecar access). Writer-emitted locators are always flat, so
+  legitimate images are unaffected (verified). End-to-end: a
+  manifest tampered to `file:../secretx` now fails with a named
+  error on every reader path instead of reading the host file.
+
 ## [0.2.62] — 2026-08-25
 
 ### Added

@@ -1954,6 +1954,16 @@ impl WriteContext {
     }
 }
 
+/// Resolve a locator URI to the local sidecar file name, refusing
+/// non-flat paths (CWE-22 — see
+/// `limnifs_core::locator::local_sidecar_name`). Writer-emitted
+/// locators are always flat, so this only fires on foreign/malicious
+/// manifests.
+fn sidecar_name(locator: &str) -> Result<&str, WriteError> {
+    limnifs_core::locator::local_sidecar_name(locator)
+        .map_err(|e| WriteError::Io(std::io::Error::other(format!("{e}"))))
+}
+
 fn encode_dir_node(entries: &[(String, u64, u8)]) -> DirNode {
     let mut bytes = Vec::new();
     bytes.push(1u8);
@@ -2176,7 +2186,7 @@ mod tests {
         let base_manifest = temp.join("base.lim");
         std::fs::write(&base_manifest, &base_artifact.bytes).expect("write base manifest");
         for slab in &base_artifact.slabs {
-            let slab_name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+            let slab_name = sidecar_name(&slab.locator).expect("slab locator");
             std::fs::write(temp.join(slab_name), &slab.bytes).expect("write base slab");
         }
 

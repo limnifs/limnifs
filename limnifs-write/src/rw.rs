@@ -39,6 +39,8 @@ use limnifs_core::codec;
 use limnifs_core::slab_store::SlabStore;
 use limnifs_core::{ContentHandle, ManifestCursor, MetadataBlob};
 
+use crate::sidecar_name;
+
 use crate::config::{ImageMode, WriteConfig};
 use crate::WriteError;
 
@@ -117,7 +119,7 @@ impl RwImage {
                     "metadata_reference has neither inline data nor locators",
                 ))
             })?;
-            let name = entry.uri.strip_prefix("file:").unwrap_or(&entry.uri);
+            let name = sidecar_name(&entry.uri)?;
             let sidecar = path.parent().unwrap_or_else(|| Path::new(".")).join(name);
             let wire_bytes = std::fs::read(&sidecar).map_err(WriteError::Io)?;
             if meta_ref.codec == 0 {
@@ -454,17 +456,14 @@ impl RwImage {
 
         let mut slab_names: Vec<std::ffi::OsString> = Vec::new();
         for slab in &artifact.slabs {
-            let name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+            let name = sidecar_name(&slab.locator)?;
             let os_name = std::ffi::OsString::from(name);
             std::fs::write(staging.join(&os_name), &slab.bytes).map_err(WriteError::Io)?;
             slab_names.push(os_name);
         }
         let sidecar_name: Option<std::ffi::OsString> =
             if let Some(sidecar) = &artifact.metadata_sidecar {
-                let name = sidecar
-                    .locator
-                    .strip_prefix("file:")
-                    .unwrap_or(&sidecar.locator);
+                let name = sidecar_name(&sidecar.locator)?;
                 let os_name = std::ffi::OsString::from(name);
                 std::fs::write(staging.join(&os_name), &sidecar.bytes).map_err(WriteError::Io)?;
                 Some(os_name)
@@ -808,14 +807,11 @@ mod tests {
             crate::write_directory_with_config(&workdir, &profile::balanced()).expect("write");
         std::fs::write(&manifest, &artifact.bytes).expect("manifest");
         for slab in &artifact.slabs {
-            let name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+            let name = sidecar_name(&slab.locator).expect("slab locator");
             std::fs::write(workdir.join(name), &slab.bytes).expect("slab");
         }
         if let Some(sidecar) = &artifact.metadata_sidecar {
-            let name = sidecar
-                .locator
-                .strip_prefix("file:")
-                .unwrap_or(&sidecar.locator);
+            let name = sidecar_name(&sidecar.locator).expect("sidecar locator");
             std::fs::write(workdir.join(name), &sidecar.bytes).expect("sidecar");
         }
 
@@ -864,14 +860,11 @@ mod tests {
             crate::write_directory_with_config(&workdir, &profile::balanced()).expect("write");
         std::fs::write(&manifest, &artifact.bytes).expect("manifest");
         for slab in &artifact.slabs {
-            let name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+            let name = sidecar_name(&slab.locator).expect("slab locator");
             std::fs::write(workdir.join(name), &slab.bytes).expect("slab");
         }
         if let Some(sidecar) = &artifact.metadata_sidecar {
-            let name = sidecar
-                .locator
-                .strip_prefix("file:")
-                .unwrap_or(&sidecar.locator);
+            let name = sidecar_name(&sidecar.locator).expect("sidecar locator");
             std::fs::write(workdir.join(name), &sidecar.bytes).expect("sidecar");
         }
 
@@ -966,14 +959,11 @@ mod tests {
         let artifact = crate::write_directory_with_config(&staging, config).expect("write");
         std::fs::write(&manifest, &artifact.bytes).expect("write manifest");
         for slab in &artifact.slabs {
-            let name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+            let name = sidecar_name(&slab.locator).expect("locator");
             std::fs::write(staging.join(name), &slab.bytes).expect("write slab");
         }
         if let Some(sidecar) = &artifact.metadata_sidecar {
-            let name = sidecar
-                .locator
-                .strip_prefix("file:")
-                .unwrap_or(&sidecar.locator);
+            let name = sidecar_name(&sidecar.locator).expect("locator");
             std::fs::write(staging.join(name), &sidecar.bytes).expect("write sidecar");
         }
         manifest

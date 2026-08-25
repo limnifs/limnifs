@@ -138,7 +138,8 @@ impl Vfs {
         for entry in &slab_index.entries {
             for locator in &entry.locators {
                 let uri = &locator.uri;
-                let name = uri.strip_prefix("file:").unwrap_or(uri);
+                let name =
+                    limnifs_core::locator::local_sidecar_name(uri).map_err(VfsError::Core)?;
                 let path = image_dir.join(name);
                 if path.exists() {
                     let slab_bytes = std::fs::read(&path)?;
@@ -258,7 +259,8 @@ impl Vfs {
             return Ok(cached.clone());
         }
         let locator = entry.locators.first().ok_or(VfsError::NotFound)?;
-        let name = locator.uri.strip_prefix("file:").unwrap_or(&locator.uri);
+        let name =
+            limnifs_core::locator::local_sidecar_name(&locator.uri).map_err(VfsError::Core)?;
         let path = self.image_dir.join(name);
         Ok(std::fs::read(&path)?)
     }

@@ -136,6 +136,12 @@ impl FileLocator {
                 .ok_or_else(|| LocatorError::UnsupportedScheme {
                     scheme: scheme_of(uri).to_owned(),
                 })?;
+        // Flat-name gate: refuse paths that could escape base_dir
+        // (CWE-22) — see locator::local_sidecar_name.
+        let path_str =
+            crate::locator::local_sidecar_name(uri).map_err(|e| LocatorError::InvalidUri {
+                reason: e.to_string(),
+            })?;
         if path_str.is_empty() {
             return Err(LocatorError::InvalidUri {
                 reason: "file: URI has empty path".into(),

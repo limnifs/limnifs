@@ -194,6 +194,53 @@ pub fn parse_locator_entry_with_ceiling(
     })
 }
 
+/// Extract the local sidecar FILE NAME from a `file:` locator URI,
+/// refusing anything that could escape the image's directory when
+/// joined against the image path.
+///
+/// The URI grammar itself stays permissive (the format allows rich
+/// `file:` paths such as `file:///var/lib/...` for future resolver
+/// backends), so this gate lives at every LOCAL join site: only a
+/// flat name — no `/`, no `\\`, no NUL, no `:` (kills drive letters
+/// and scheme confusion), and not `.`/`..` — may be resolved against
+/// the local filesystem. Without this, a malicious manifest could
+/// point a slab or metadata sidecar at `file:../../etc/passwd` (or
+/// an absolute path, which `Path::join` substitutes wholesale) and
+/// exfiltrate host files through `cat`/`extract` (CWE-22).
+///
+/// Writer-emitted locators are always flat (`slab-0.bin`,
+/// `metadata.bin`), so legitimate images are unaffected.
+///
+/// # Errors
+///
+/// [`CoreError::Corrupt`] if the URI is not `file:`, or its
+/// scheme-specific part is not a flat file name.
+pub fn local_sidecar_name(uri: &str) -> Result<&str, CoreError> {
+    let rest = uri
+        .strip_prefix("file:")
+        .ok_or_else(|| CoreError::Corrupt {
+            reason: format!(
+                "locator {uri:?} is not a file: URI; local sidecar access requires one"
+            ),
+        })?;
+    if rest.is_empty()
+        || rest == "."
+        || rest == ".."
+        || rest.contains('/')
+        || rest.contains('\\')
+        || rest.contains('\0')
+        || rest.contains(':')
+    {
+        return Err(CoreError::Corrupt {
+            reason: format!(
+                "locator {uri:?} is not a flat file name; local sidecar access \
+                 refuses paths that could escape the image directory"
+            ),
+        });
+    }
+    Ok(rest)
+}
+
 /// RFC 3986 section 3.1: `scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`.
 fn is_valid_scheme(scheme: &str) -> bool {
     let mut chars = scheme.chars();
@@ -449,6 +496,60 @@ mod tests {
                 assert!(reason.contains("separator"));
             }
             other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod local_sidecar_tests {
+    use super::local_sidecar_name;
+
+    #[test]
+    fn flat_names_pass() {
+        assert_eq!(local_sidecar_name("file:slab-0.bin").unwrap(), "slab-0.bin");
+        assert_eq!(
+            local_sidecar_name("file:metadata.bin").unwrap(),
+            "metadata.bin"
+        );
+        assert_eq!(local_sidecar_name("file:a.bin").unwrap(), "a.bin");
+    }
+
+    #[test]
+    fn traversal_is_refused() {
+        // CWE-22: each of these, joined against the image directory,
+        // escapes it (or replaces it wholesale for absolute paths).
+        for evil in [
+            "file:../evil.bin",
+            "file:../../etc/passwd",
+            "file:/etc/passwd",
+            "file://etc/passwd",
+            "file:///var/lib/x",
+            "file:sub/dir/slab.bin",
+            "file:.\\..\\evil",
+            "file:C:\\Windows\\evil",
+            "file:.",
+            "file:..",
+            "file:",
+        ] {
+            let err = local_sidecar_name(evil)
+                .err()
+                .unwrap_or_else(|| panic!("{evil:?} must be refused"));
+            assert!(
+                err.to_string().contains("flat file name"),
+                "{evil:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_file_schemes_are_refused_for_local_access() {
+        for uri in [
+            "https://example.com/x",
+            "s3://bucket/k",
+            "ipfs:cid",
+            "plain",
+        ] {
+            assert!(local_sidecar_name(uri).is_err(), "{uri:?} must be refused");
         }
     }
 }

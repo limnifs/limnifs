@@ -95,7 +95,11 @@ impl SlabStore {
                         entry.slab_id.ordinal
                     ),
                 })?;
-            let slab_name = locator.uri.strip_prefix("file:").unwrap_or(&locator.uri);
+            let slab_name = crate::locator::local_sidecar_name(&locator.uri).map_err(|e| {
+                CoreError::Corrupt {
+                    reason: format!("slab_index entry {ordinal}: {e}"),
+                }
+            })?;
             let slab_path = parent.join(slab_name);
             let bytes = std::fs::read(&slab_path).map_err(|e| CoreError::Corrupt {
                 reason: format!(
@@ -141,7 +145,11 @@ impl SlabStore {
             let locator = entry.locators.first().ok_or_else(|| CoreError::Corrupt {
                 reason: format!("slab_index entry {ordinal}: zero locators (unreachable)"),
             })?;
-            let slab_name = locator.uri.strip_prefix("file:").unwrap_or(&locator.uri);
+            let slab_name = crate::locator::local_sidecar_name(&locator.uri).map_err(|e| {
+                CoreError::Corrupt {
+                    reason: format!("slab_index entry {ordinal}: {e}"),
+                }
+            })?;
             let slab_path = parent.join(slab_name);
 
             let file = std::fs::File::open(&slab_path).map_err(|e| CoreError::Corrupt {
