@@ -6,6 +6,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+## [0.3.1] — 2026-08-26
+
+### Fixed
+
+- **limnifs#195** — seekable containers are now emitted on the
+  default FastCDC chunk path. Per-chunk drops pass through
+  `seekable_or_monolithic` with a chunk-appropriate threshold
+  (one 256 KiB frame), so `default_v0_1()` / bare `limni limn` can
+  produce flagged containers without a categorizer.
+- **limnifs#196** — `[[categorizers]]` config entries are now
+  actually consulted. A new `ConfigCategorizer` matches configured
+  extensions / magic bytes, honors `enabled` and `max_size`, runs
+  before the built-in registry (user rules override built-ins), and
+  resolves the configured codec name through `WriteConfig`'s codec
+  registry.
+
+### Tests
+
+- Added regression coverage for both issue repro shapes: stock
+  config on a 3 MiB file yields flagged chunk containers, and a
+  `.bin` categorizer entry yields one whole-file seekable drop.
+
 ## [0.3.0] — 2026-08-26
 
 Minor bump: the v0.2.65 image format is INCOMPATIBLE with ≤ 0.2.64
