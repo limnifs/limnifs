@@ -292,11 +292,21 @@ impl<'a> FileReader<'a> {
     /// filled (0 at EOF). Decompresses only the drops covering the
     /// window; cached drops are refcount-shared, never re-decoded.
     ///
+    /// Equivalent to `read_at_into`; kept for API stability.
+    pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, CoreError> {
+        self.read_at_into(offset, buf)
+    }
+
+    /// Zero-copy positional read: writes directly into `buf` without
+    /// an intermediate `Vec` allocation. Returns the number of bytes
+    /// filled. Seekable drops decompress only the covering frames;
+    /// cached drops are refcount-shared, never re-decoded.
+    ///
     /// # Errors
     ///
     /// [`CoreError`] when a covering drop is missing or fails to
     /// decode.
-    pub fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, CoreError> {
+    pub fn read_at_into(&self, offset: u64, buf: &mut [u8]) -> Result<usize, CoreError> {
         if buf.is_empty() {
             return Ok(0);
         }
@@ -317,33 +327,30 @@ impl<'a> FileReader<'a> {
                     if slice.file_byte_end <= offset || slice.file_byte_start >= window_end {
                         continue;
                     }
-                    // Ranged decode: seekable drops decompress only
-                    // the covering container frames; everything else
-                    // resolves through (and populates) the SIEVE
-                    // full-drop cache.
                     let from_abs = offset.max(slice.file_byte_start);
                     let to_abs = window_end.min(slice.file_byte_end);
-                    if to_abs > from_abs {
-                        let range = self
-                            .store
-                            .decoded_range(
-                                slice.drop_id.as_bytes(),
-                                from_abs - slice.file_byte_start,
-                                (to_abs - from_abs) as usize,
-                            )
-                            .transpose()?
-                            .ok_or_else(|| CoreError::Corrupt {
-                                reason: "slice references a drop missing from every slab".into(),
-                            })?;
-                        let n = range.len().min(buf.len() - filled);
-                        buf[filled..filled + n].copy_from_slice(&range[..n]);
-                        filled += n;
-                        if filled == buf.len() || slice.file_byte_end >= window_end {
-                            break;
-                        }
+                    let want = (to_abs - from_abs) as usize;
+                    if want == 0 {
+                        continue;
+                    }
+                    // Zero-copy: write directly into the remaining
+                    // slice of the caller's buffer.
+                    let n = self
+                        .store
+                        .decoded_range_into(
+                            slice.drop_id.as_bytes(),
+                            from_abs - slice.file_byte_start,
+                            &mut buf[filled..filled + want],
+                        )
+                        .transpose()?
+                        .ok_or_else(|| CoreError::Corrupt {
+                            reason: "slice references a drop missing from every slab".into(),
+                        })?;
+                    filled += n;
+                    if filled == buf.len() || slice.file_byte_end >= window_end {
+                        break;
                     }
                 }
-                let _ = window_end;
                 Ok(filled)
             }
             _ => Ok(0),

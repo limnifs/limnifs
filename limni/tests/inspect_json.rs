@@ -3,6 +3,7 @@
 //! is set; the unit-test version inside `src/main.rs` cannot spawn
 //! the binary.
 use limnifs_write::{write_directory_with_config, WriteConfig};
+
 use std::path::PathBuf;
 fn build(src: &PathBuf) -> PathBuf {
     let _ = std::fs::remove_dir_all(src);

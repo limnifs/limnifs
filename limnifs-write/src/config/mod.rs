@@ -615,6 +615,10 @@ impl WriteConfig {
         registry.insert("bzip2", 0x10);
         registry.insert("deflate64", 0x11);
         registry.insert("libdeflate", 0x14);
+        registry.insert("bcj-x86-lz4", 0x20);
+        registry.insert("bcj-x86-zstd", 0x21);
+        registry.insert("bcj-arm64-lz4", 0x23);
+        registry.insert("bcj-arm64-zstd", 0x24);
 
         if !registry.contains_name(&self.defaults.text_codec) {
             return Err(ConfigError::UnknownCodec(self.defaults.text_codec.clone()));
