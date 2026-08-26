@@ -1040,16 +1040,26 @@ fn process_file(
     let file_len_estimate = std::fs::metadata(&pf.path)
         .map(|m| m.len() as usize)
         .unwrap_or(0);
-    let data: Vec<u8> = if file_len_estimate >= MMAP_READ_THRESHOLD {
+    // Borrow the mmap instead of materializing it: the previous
+    // `Vec::from(&mmap[..])` copied every byte of every file ≥ 1 MiB,
+    // defeating the mapping entirely (one full memcpy plus peak RSS
+    // equal to `fs::read`). Chunking, hashing, and compression all
+    // work on borrowed slices; the only owned copies are the per-drop
+    // plaintexts the context retains.
+    let mmap_handle: memmap2::Mmap;
+    let small: Vec<u8>;
+    let data: &[u8] = if file_len_estimate >= MMAP_READ_THRESHOLD {
         let file = std::fs::File::open(&pf.path)?;
+        // SAFETY: LimniFS packs source trees that are immutable for
+        // the duration of the write; the file is opened read-only and
+        // the mapping is only read.
         #[allow(unsafe_code)]
-        let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(WriteError::Io)?;
-        // Materialize only the pages the kernel has paged in. For
-        // chunked access this is roughly unique-chunk bytes; for
-        // skip_chunking we touch every page anyway.
-        Vec::from(&mmap[..])
+        let mapped = unsafe { memmap2::Mmap::map(&file) }.map_err(WriteError::Io)?;
+        mmap_handle = mapped;
+        &mmap_handle[..]
     } else {
-        std::fs::read(&pf.path)?
+        small = std::fs::read(&pf.path)?;
+        &small[..]
     };
     let file_len = data.len();
 
@@ -1080,7 +1090,7 @@ fn process_file(
             SEEKABLE_CHUNK_EMISSION_THRESHOLD,
         );
         return Ok(ChunkedFileResult {
-            drops: vec![(drop_id, data, compressed, codec_id, flags)],
+            drops: vec![(drop_id, data.to_vec(), compressed, codec_id, flags)],
             slices: vec![PendingSlice {
                 drop_id,
                 file_byte_start: 0,
