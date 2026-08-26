@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.3] — 2026-08-26
+
+### Fixed
+
+- **Windows build** (broken in 0.3.2): the reader's `MADV_RANDOM`
+  mmap hint is now `#[cfg(unix)]`-gated — `memmap2::Advice` is not
+  compiled on Windows, so 0.3.2's `limnifs-core` failed to build
+  there. 0.3.2's crates.io publish is immutable; use 0.3.3 on
+  Windows.
+
 ## [0.3.2] — 2026-08-26
 
 ### Changed

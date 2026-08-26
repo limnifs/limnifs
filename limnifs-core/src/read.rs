@@ -167,7 +167,9 @@ impl ImageReader {
                     // Whole-image extraction uses the WILLNEED hint in
                     // `SlabStore::load_mmap` instead. Advisory only —
                     // memmap2's safe `advise` handles the FFI.
-                    // Advisory: ignore errors (unsupported platform).
+                    // Advisory: ignore errors. Unix-only — memmap2's
+                    // advise is not compiled on Windows.
+                    #[cfg(unix)]
                     let _ = mmap.advise(memmap2::Advice::Random);
                     sources[idx] = Some(crate::slab_store::SlabSource::Mapped(mmap));
                     break;
