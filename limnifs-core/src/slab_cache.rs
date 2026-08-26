@@ -346,6 +346,158 @@ impl CachedSlabStore {
         }
     }
 
+    /// Zero-copy ranged decode: writes the requested range directly
+    /// into `buf` and returns the number of bytes written.
+    /// `len = min(buf.len(), bytes_available in drop)`. On decode
+    /// error or out-of-bounds off/len, returns `Err(CoreError)`;
+    /// `buf` is left in an unspecified state on error (callers that
+    /// care should not read it). Prefer `read_at_into` from the reader
+    /// surface — this is the slab-cache internal.
+    pub fn decoded_range_into(
+        &self,
+        drop_id: &[u8; 32],
+        off: u64,
+        buf: &mut [u8],
+    ) -> Option<Result<usize, CoreError>> {
+        if buf.is_empty() {
+            return Some(Ok(0));
+        }
+        let want = buf.len();
+        // Full-drop cache hit — slice the resident Arc directly into
+        // caller's buffer (refcount bump on hit, no decode, no alloc).
+        {
+            let mut cache = self.cache.lock().expect("cache mutex poisoned");
+            if let Some(hit) = cache.get(drop_id) {
+                let total = hit.len() as u64;
+                return Some(if off >= total {
+                    Ok(0)
+                } else {
+                    let avail = usize::try_from(total - off).unwrap_or(0).min(want);
+                    buf[..avail].copy_from_slice(&hit[off as usize..off as usize + avail]);
+                    Ok(avail)
+                });
+            }
+        }
+        if self.inner.drop_is_seekable(drop_id) == Some(true) {
+            return self.cached_frame_range_into(drop_id, off, buf);
+        }
+        // Non-seekable: full decode (populating the cache), then
+        // slice directly into the caller's buffer.
+        match self.decoded(drop_id)? {
+            Ok(full) => {
+                let total = full.len() as u64;
+                Some(if off >= total {
+                    Ok(0)
+                } else {
+                    let avail = usize::try_from(total - off).unwrap_or(0).min(want);
+                    buf[..avail].copy_from_slice(&full[off as usize..off as usize + avail]);
+                    Ok(avail)
+                })
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+
+    /// Zero-copy ranged decode for SEEKABLE drops through the frame
+    /// cache. Edge frames are sliced; interior frames are decoded
+    /// once and copied into `buf` (frame cache retains them for
+    /// repeats).
+    fn cached_frame_range_into(
+        &self,
+        drop_id: &[u8; 32],
+        off: u64,
+        buf: &mut [u8],
+    ) -> Option<Result<usize, CoreError>> {
+        let (raw, record) = self.inner.raw_window(drop_id)?;
+        let footer = {
+            let mut footers = self.footers.lock().expect("footer cache poisoned");
+            if let Some(hit) = footers.get(drop_id) {
+                std::sync::Arc::clone(hit)
+            } else {
+                let parsed = match crate::seekable::parse_footer(raw) {
+                    Ok(f) => std::sync::Arc::new(f),
+                    Err(e) => return Some(Err(e)),
+                };
+                if footers.len() >= 4096 {
+                    footers.clear();
+                }
+                footers.insert(*drop_id, std::sync::Arc::clone(&parsed));
+                parsed
+            }
+        };
+        let total = footer.total_uncomp();
+        if off > total {
+            return Some(Err(CoreError::Corrupt {
+                reason: format!(
+                    "decoded_range_into [{off}, {}) outside drop length {total}",
+                    off + buf.len() as u64
+                ),
+            }));
+        }
+        let want = buf.len();
+        let avail_total = usize::try_from(total - off).unwrap_or(0).min(want);
+        let mut starts = Vec::with_capacity(footer.uncomp_lens.len());
+        let mut acc = 0u64;
+        for &l in &footer.uncomp_lens {
+            starts.push(acc);
+            acc += u64::from(l);
+        }
+        let first = starts.partition_point(|&s| s <= off).saturating_sub(1);
+        let mut written = 0usize;
+        let mut comp_pos = footer.comp_lens[..first]
+            .iter()
+            .map(|&l| l as usize)
+            .sum::<usize>();
+        let mut cum = starts[first];
+        for i in first..footer.uncomp_lens.len() {
+            let uncomp_len = footer.uncomp_lens[i];
+            let comp_len = footer.comp_lens[i] as usize;
+            let frame_bytes = &raw[comp_pos..comp_pos + comp_len];
+
+            let key = crate::seekable::frame_key(drop_id, i as u32);
+            let decoded = {
+                let mut frames = self.frames.lock().expect("frame cache poisoned");
+                if let Some(hit) = frames.get(&key) {
+                    hit
+                } else {
+                    drop(frames);
+                    crate::seekable::count_frame_decode();
+                    let decoded: std::sync::Arc<[u8]> = crate::codec::decompress(
+                        record.representation.codec,
+                        frame_bytes,
+                        uncomp_len,
+                    )
+                    .ok()?
+                    .into();
+                    let mut frames = self.frames.lock().expect("frame cache poisoned");
+                    frames.insert(key, std::sync::Arc::clone(&decoded));
+                    decoded
+                }
+            };
+
+            let frame_avail = usize::try_from(footer.uncomp_lens[i] as u64).unwrap_or(0);
+            let slice_from = off.saturating_sub(cum) as usize;
+            let slice_to_unclamped = (off + want as u64)
+                .saturating_sub(cum)
+                .min(u64::from(uncomp_len));
+            let slice_to = slice_to_unclamped as usize;
+            let take = slice_to
+                .saturating_sub(slice_from)
+                .min(frame_avail.saturating_sub(slice_from));
+            if take == 0 {
+                break;
+            }
+            buf[written..written + take].copy_from_slice(&decoded[slice_from..slice_from + take]);
+            written += take;
+            if written >= avail_total {
+                break;
+            }
+            comp_pos += comp_len;
+            cum += u64::from(uncomp_len);
+        }
+        Some(Ok(written))
+    }
+
     /// Ranged decode for SEEKABLE drops through the frame cache.
     ///
     /// Covering frames resolve from the frame SIEVE cache; misses

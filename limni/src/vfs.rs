@@ -274,29 +274,36 @@ impl Vfs {
             return Ok(Vec::new());
         }
         let window_end = offset.saturating_add(u64::try_from(len).unwrap_or(u64::MAX));
-        let mut out = Vec::new();
+        // Zero-copy: decode writes directly into the output buffer
+        // (no intermediate Vec). The buffer starts zeroed so the
+        // unused tail is initialized; `truncate(filled)` discards it.
+        let mut out = vec![0u8; len];
+        let mut filled = 0usize;
         for slice in slices {
             if slice.file_byte_end <= offset || slice.file_byte_start >= window_end {
                 continue;
             }
             let from_abs = offset.max(slice.file_byte_start);
             let to_abs = window_end.min(slice.file_byte_end);
-            if to_abs > from_abs {
-                let range = self
-                    .store
-                    .decoded_range(
-                        slice.drop_id.as_bytes(),
-                        from_abs - slice.file_byte_start,
-                        (to_abs - from_abs) as usize,
-                    )
-                    .ok_or(VfsError::NotFound)?
-                    .map_err(VfsError::Core)?;
-                out.extend_from_slice(&range);
+            let want = (to_abs - from_abs) as usize;
+            if want == 0 {
+                continue;
             }
-            if slice.file_byte_end >= window_end {
+            let n = self
+                .store
+                .decoded_range_into(
+                    slice.drop_id.as_bytes(),
+                    from_abs - slice.file_byte_start,
+                    &mut out[filled..filled + want],
+                )
+                .ok_or(VfsError::NotFound)?
+                .map_err(VfsError::Core)?;
+            filled += n;
+            if filled == len || slice.file_byte_end >= window_end {
                 break;
             }
         }
+        out.truncate(filled);
         Ok(out)
     }
 }

@@ -159,6 +159,12 @@ pub fn compact_image(
 }
 
 /// Walk the metadata blob to find all referenced `DropIds`.
+///
+/// Intentionally defensive: this is NOT a full `walk_live_tree` call
+/// because compaction only needs the set of referenced `DropId`s —
+/// the per-path Sink structure would be pure overhead. We iterate
+/// inodes directly and pull `DropId`s from each `SliceMap` content
+/// handle. Doc-noted per IMPL-5 (TODO.remaining).
 fn find_referenced_drops(
     meta_ref: &limnifs_core::MetadataReference,
 ) -> Result<HashSet<[u8; 32]>, CompactionError> {
