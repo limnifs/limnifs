@@ -12,6 +12,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.2] — 2026-08-26
+
+### Changed
+
+- **Perf: windowed reads stop allocating per window.** `SeekFooter`
+  now precomputes cumulative frame offsets once at parse time (the
+  footer is memoized per drop); every 8 KiB window previously
+  rebuilt a `Vec` of frame starts just to binary-search the covering
+  frame, in three separate call sites. All three now use
+  `frame_containing()` / `uncomp_offset()` / `compressed_offset_of()`
+  with zero allocation.
+- **Perf: `MADV_RANDOM` on reader slab mmaps.** `ImageReader`'s slabs
+  serve 8 KiB windowed access; kernel readahead was dragging in
+  sequential neighbors nobody reads. Whole-image extraction keeps the
+  `WILLNEED` hint.
+- **Zero-copy `read_at_into`** — `CachedSlabStore::decoded_range_into`
+  writes decoded bytes directly into the caller's buffer across all
+  three decode paths (full-drop cache hit, full decode, seekable
+  frame), eliminating one `Vec` allocation + memcpy per window.
+  Warm windowed reads measured ~7.8 → ~12 GB/s on a quiet machine.
+- Removed the unused, unsafe `pipeline-parallelism` module (audit
+  found a data-pairing bug; nothing default ever used it).
+- `[[categorizers]]` BCJ codec names (`bcj-x86-lz4`, etc.) registered
+  in the writer's codec registry so user rules can reference them.
+
+### Added
+
+- BCJ benchmark harness (synthetic ELF-like fixture); ZSTD dictionary
+  ratio measurement test (45.4% smaller on 2000 × 16 KiB structured
+  text); `extract_file` vs `limni extract` differential; FUSE
+  windowed-read smoke (feature-gated); `limni inspect --json` with
+  layered-aware fields.
+
 ## [0.3.1] — 2026-08-26
 
 ### Fixed
