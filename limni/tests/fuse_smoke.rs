@@ -97,7 +97,7 @@ fn fuse_vfs_read_serves_8kib_windows_against_a_3_mib_file() {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
-        let off = (state as usize) % (total - window);
+        let off = usize::try_from(state).unwrap_or(0) % (total - window);
         let n = file.read_at(off as u64, &mut buf).expect("read_at");
         assert_eq!(
             &buf[..n],
@@ -108,9 +108,9 @@ fn fuse_vfs_read_serves_8kib_windows_against_a_3_mib_file() {
 
     // Verify cache stats moved: a few hits expected after the
     // repeated touches.
-    let stats = reader.cache_stats();
+    let traffic = reader.cache_stats();
     assert!(
-        stats.hits > 0 || stats.misses >= 2,
-        "cache should have seen traffic (got {stats:?})"
+        traffic.hits > 0 || traffic.misses >= 2,
+        "cache should have seen traffic (got {traffic:?})"
     );
 }
