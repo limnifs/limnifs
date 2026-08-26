@@ -160,6 +160,15 @@ impl ImageReader {
                         unsafe { memmap2::Mmap::map(&file) }.map_err(|e| CoreError::Corrupt {
                             reason: format!("mmap slab {}: {e}", path.display()),
                         })?;
+                    // Reader slabs serve windowed (8 KiB) access:
+                    // tell the kernel to skip readahead (MADV_RANDOM)
+                    // so cold windows fault exactly their pages
+                    // instead of dragging in sequential neighbors.
+                    // Whole-image extraction uses the WILLNEED hint in
+                    // `SlabStore::load_mmap` instead. Advisory only —
+                    // memmap2's safe `advise` handles the FFI.
+                    // Advisory: ignore errors (unsupported platform).
+                    let _ = mmap.advise(memmap2::Advice::Random);
                     sources[idx] = Some(crate::slab_store::SlabSource::Mapped(mmap));
                     break;
                 }

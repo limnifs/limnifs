@@ -167,25 +167,48 @@ pub struct SeekFooter {
     pub uncomp_lens: Vec<u32>,
     /// Compressed length of each frame, in order.
     pub comp_lens: Vec<u32>,
+    /// Cumulative uncompressed offset at the START of frame `i`
+    /// (`starts[i]`), plus the total as the final entry. Precomputed
+    /// once at parse time so the hot windowed-read path (footer is
+    /// memoized per drop) pays no per-window allocation or scan to
+    /// locate the covering frame.
+    starts: Vec<u64>,
+    /// Cached `starts[len]` — the drop's plaintext length.
+    total_uncomp: u64,
 }
 
 impl SeekFooter {
     /// Cumulative uncompressed offset at the START of frame `i`.
     #[must_use]
     pub fn uncomp_offset(&self, i: usize) -> u64 {
-        self.uncomp_lens[..i].iter().map(|&l| u64::from(l)).sum()
+        self.starts[i.min(self.starts.len() - 1)]
     }
 
     /// Total uncompressed length.
     #[must_use]
-    pub fn total_uncomp(&self) -> u64 {
-        self.uncomp_lens.iter().map(|&l| u64::from(l)).sum()
+    pub const fn total_uncomp(&self) -> u64 {
+        self.total_uncomp
     }
 
     /// Total compressed length of all frames (footer excluded).
     #[must_use]
     pub fn total_comp(&self) -> u64 {
         self.comp_lens.iter().map(|&l| u64::from(l)).sum()
+    }
+
+    /// Index of the first frame whose plaintext range crosses `off`
+    /// (the frame containing `off`). O(log n) over the precomputed
+    /// cumulative starts — no allocation.
+    #[must_use]
+    pub fn frame_containing(&self, off: u64) -> usize {
+        self.starts.partition_point(|&s| s <= off).saturating_sub(1)
+    }
+
+    /// Cumulative compressed offset of frame `i`'s bytes in the
+    /// container (sum of the compressed lengths before it).
+    #[must_use]
+    pub fn compressed_offset_of(&self, i: usize) -> usize {
+        self.comp_lens[..i].iter().map(|&l| l as usize).sum()
     }
 }
 
@@ -240,9 +263,19 @@ pub(crate) fn parse_footer(container: &[u8]) -> Result<SeekFooter, CoreError> {
             container[e + 7],
         ]));
     }
+    let mut starts = Vec::with_capacity(uncomp_lens.len() + 1);
+    let mut acc = 0u64;
+    for &l in &uncomp_lens {
+        starts.push(acc);
+        acc += u64::from(l);
+    }
+    starts.push(acc);
+    let total_uncomp = acc;
     let footer = SeekFooter {
         uncomp_lens,
         comp_lens,
+        starts,
+        total_uncomp,
     };
     let expected_len = frame_count * 8 + FOOTER_TAIL_LEN;
     let body_len = table_start;
@@ -318,22 +351,11 @@ pub fn decode_seekable_range(
             ),
         });
     }
-    // Cumulative uncompressed start offset per frame; binary search
-    // for the first frame the window lands in.
-    let mut starts = Vec::with_capacity(footer.uncomp_lens.len());
-    let mut acc = 0u64;
-    for &l in &footer.uncomp_lens {
-        starts.push(acc);
-        acc += u64::from(l);
-    }
-    let first = starts.partition_point(|&s| s <= off).saturating_sub(1);
+    let first = footer.frame_containing(off);
 
     let mut out = Vec::with_capacity(len);
-    let mut comp_pos = footer.comp_lens[..first]
-        .iter()
-        .map(|&l| l as usize)
-        .sum::<usize>();
-    let mut cum = starts[first];
+    let mut comp_pos = footer.compressed_offset_of(first);
+    let mut cum = footer.uncomp_offset(first);
     for i in first..footer.uncomp_lens.len() {
         let uncomp_len = footer.uncomp_lens[i];
         let comp_len = footer.comp_lens[i] as usize;
