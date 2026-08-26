@@ -1,7 +1,7 @@
 # tebako: upgrading to the new LimniFS read path
 
 For tamatebako/tebako#464 and limnifs#192 — how to take advantage of
-the v0.2.65 read path, and what changes. This is the integration
+the v0.3.0 read path, and what changes. This is the integration
 guide; the API reference is [docs/read-api.md](read-api.md).
 
 ## TL;DR
@@ -10,12 +10,13 @@ guide; the API reference is [docs/read-api.md](read-api.md).
   `limnifs_core::read::{ImageReader, FileReader}` — the memoized,
   bounded, seek-aware reader is now in the library.
 - **Rebuild cached images.** There is exactly one image format now;
-  images written by limnifs ≤ 0.2.64 are NOT readable by 0.2.65+
+  images written by limnifs ≤ 0.2.64 are NOT readable by 0.3.0+
   (alpha decision — see below). tebako's cached runtimes must be
   re-packed once.
 - Expect mounted-read performance to stop mattering: a cold 8 KiB
   window on a 19.5 MiB file drops from ~58 ms of decode to ~0.6 ms
   (98×), and repeat windows are memcpy-class.
+- The incompatible image-format change is signaled by the **0.3.0 minor bump**. Do not use 0.2.x images with 0.3.x readers; re-pack once.
 
 ## What changed in limnifs
 
