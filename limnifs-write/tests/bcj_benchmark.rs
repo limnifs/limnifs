@@ -80,6 +80,7 @@ fn bcj_lz4_beats_plain_lz4_on_relative_call_heavy_executable() {
     let (_plain_total, plain_drop_bytes) = pack(&src, false);
     let (_bcj_total, bcj_drop_bytes) = pack(&src, true);
 
+    #[allow(clippy::cast_precision_loss)]
     let improvement =
         (plain_drop_bytes as f64 - bcj_drop_bytes as f64) / plain_drop_bytes.max(1) as f64 * 100.0;
     println!(
