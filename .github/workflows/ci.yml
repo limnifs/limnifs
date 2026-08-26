@@ -51,5 +51,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-check
-      - name: cargo check (all targets, all features)
-        run: cargo check --workspace --all-features --all-targets
+      # Default features = what the release matrix ships on Windows.
+      # --all-features would pull the `fuse` feature, whose fuser
+      # dependency cannot build there (WinFSP), and that combination
+      # is never published.
+      - name: cargo check (all targets, default features)
+        run: cargo check --workspace --all-targets
