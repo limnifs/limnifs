@@ -48,12 +48,18 @@ pub const DEFAULT_METADATA_CODEC: &str = "brotli";
 pub const DEFAULT_METADATA_QUALITY: u8 = 5;
 /// Default inline-data threshold (bytes).
 pub const DEFAULT_INLINE_THRESHOLD: u16 = 4096;
+
+/// Default cap on a single whole-file drop's plaintext (4 MiB).
+/// Bounds the decompressed unit behind every random access by
+/// construction (EROFS fixed-output pclusters): a file above the cap
+/// falls back to FastCDC chunking + tournament. 0 disables the cap.
+pub const DEFAULT_MAX_DROP_SIZE: u32 = 4 * 1024 * 1024;
 /// Default `FastCDC` average chunk size.
-pub const DEFAULT_AVG_CHUNK_SIZE: u32 = 8192;
+pub const DEFAULT_AVG_CHUNK_SIZE: u32 = 262_144;
 /// Default `FastCDC` minimum chunk size.
-pub const DEFAULT_MIN_CHUNK_SIZE: u32 = 1024;
+pub const DEFAULT_MIN_CHUNK_SIZE: u32 = 65_536;
 /// Default `FastCDC` maximum chunk size.
-pub const DEFAULT_MAX_CHUNK_SIZE: u32 = 65_536;
+pub const DEFAULT_MAX_CHUNK_SIZE: u32 = 1_048_576;
 /// Default minimum size for the tournament to try a codec.
 pub const DEFAULT_TOURNAMENT_MIN_SIZE: u32 = 256;
 /// Default: skip tournament for binary class.
@@ -137,6 +143,23 @@ pub struct Defaults {
     /// runtimes whose reserved mask rejects the SHARED_INLINE flag).
     #[serde(default = "default_true")]
     pub shared_inline: bool,
+    /// Emit large general-codec drops (> 1 MiB plaintext) as seekable
+    /// containers (256 KiB independent frames; bounded random reads).
+    /// Default true. Set false for maximum compression ratio — frames
+    /// give up cross-frame context (~1-3%) and windowed reads pay a
+    /// full-drop decode again.
+    #[serde(default = "default_true")]
+    pub seekable_drops: bool,
+    /// Maximum plaintext size (bytes) of a drop the writer may emit
+    /// from a whole-file path (categorizer claims and the whole-file
+    /// fallback). Files larger than the cap fall back to `FastCDC`
+    /// chunking + tournament so every drop's decode cost is bounded
+    /// by construction (EROFS fixed-output pclusters). Default
+    /// 4 MiB; `0` = unlimited (pre-knob behavior). The
+    /// `skip_chunking` (max-write) profile is exempt — whole-file IS
+    /// its speed contract.
+    #[serde(default = "default_max_drop_size")]
+    pub max_drop_size: u32,
     /// Inline data threshold (bytes).
     pub inline_threshold: u16,
 }
@@ -164,6 +187,10 @@ pub struct CategorizerConfig {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_max_drop_size() -> u32 {
+    DEFAULT_MAX_DROP_SIZE
 }
 
 /// `FastCDC` parameters.
@@ -399,14 +426,16 @@ impl WriteConfig {
                 metadata_quality: DEFAULT_METADATA_QUALITY,
                 metadata_externalize_threshold: crate::METADATA_EXTERNALIZE_THRESHOLD,
                 shared_inline: true,
+                seekable_drops: true,
+                max_drop_size: DEFAULT_MAX_DROP_SIZE,
                 inline_threshold: DEFAULT_INLINE_THRESHOLD,
             },
             categorizers: Vec::new(),
             chunking: ChunkingConfig {
                 name: "fastcdc".into(),
-                avg_chunk_size: DEFAULT_AVG_CHUNK_SIZE,
-                min_chunk_size: DEFAULT_MIN_CHUNK_SIZE,
-                max_chunk_size: DEFAULT_MAX_CHUNK_SIZE,
+                avg_chunk_size: 262_144,
+                min_chunk_size: 65_536,
+                max_chunk_size: 1_048_576,
             },
             tournament: TournamentConfig {
                 codecs: vec![
@@ -527,6 +556,16 @@ impl WriteConfig {
                 reason: format!(
                     "metadata_externalize_threshold ({}) must be within 1..={ceiling}                      (the reader inline ceiling; larger inline metadata is unreadable)",
                     self.defaults.metadata_externalize_threshold
+                ),
+            });
+        }
+        if self.defaults.max_drop_size != 0 && self.defaults.max_drop_size < 1024 {
+            return Err(ConfigError::InvalidValue {
+                field: "defaults.max_drop_size".into(),
+                reason: format!(
+                    "max_drop_size ({}) is nonzero but below 1 KiB — no whole-file \
+                     drop can form under the cap; raise it or set 0 (unlimited)",
+                    self.defaults.max_drop_size
                 ),
             });
         }

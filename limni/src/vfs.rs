@@ -32,8 +32,12 @@ pub struct Vfs {
     slab_index: SlabIndex,
     /// Image directory (for resolving `file:` slab locators).
     image_dir: std::path::PathBuf,
-    /// Loaded slabs, keyed by slab ordinal (0, 1, ...).
-    slabs: HashMap<u64, Vec<u8>>,
+    /// All slabs behind a SIEVE-evicted, byte-bounded decoded-drop
+    /// cache. Windowed reads borrow `Arc<[u8]>` handles — a read
+    /// never re-decompresses a drop the cache already holds, and a
+    /// drop larger than the byte budget streams through without
+    /// evicting the working set (limnifs#192).
+    store: limnifs_core::slab_cache::CachedSlabStore,
     root_inode_number: u64,
 }
 
@@ -134,7 +138,11 @@ impl Vfs {
             })
         })?;
 
-        let mut slabs: HashMap<u64, Vec<u8>> = HashMap::new();
+        let mut slab_count: u64 = 0;
+        for entry in &slab_index.entries {
+            slab_count = slab_count.max(entry.slab_id.ordinal + 1);
+        }
+        let mut slabs: Vec<Vec<u8>> = vec![Vec::new(); usize::try_from(slab_count).unwrap_or(0)];
         for entry in &slab_index.entries {
             for locator in &entry.locators {
                 let uri = &locator.uri;
@@ -143,17 +151,22 @@ impl Vfs {
                 let path = image_dir.join(name);
                 if path.exists() {
                     let slab_bytes = std::fs::read(&path)?;
-                    slabs.insert(entry.slab_id.ordinal, slab_bytes);
+                    let idx =
+                        usize::try_from(entry.slab_id.ordinal).expect("slab ordinal fits usize");
+                    slabs[idx] = slab_bytes;
                     break;
                 }
             }
         }
 
+        let slab_store =
+            limnifs_core::slab_store::SlabStore::from_bytes(slabs).map_err(VfsError::Core)?;
+
         Ok(Self {
             metadata_blob,
             slab_index,
             image_dir: image_dir.to_path_buf(),
-            slabs,
+            store: limnifs_core::slab_cache::CachedSlabStore::with_default_capacity(slab_store),
             root_inode_number,
         })
     }
@@ -226,43 +239,65 @@ impl Vfs {
             .metadata_blob
             .inode_by_number(ino)
             .ok_or(VfsError::NotFound)?;
-        let data = match &inode.content_handle {
-            ContentHandle::InlineData(d) => d.clone(),
-            ContentHandle::SliceMap(slices) => {
-                let mut file_data = Vec::new();
-                for slice in slices {
-                    let slab_bytes = self.load_slab_for_slice(slice.drop_id.as_bytes())?;
-                    let view = limnifs_core::parse_slab(&slab_bytes)?;
-                    let plaintext = view
-                        .plaintext_for(slice.drop_id.as_bytes())
-                        .ok_or(VfsError::NotFound)?
-                        .map_err(VfsError::Core)?;
-                    file_data.extend_from_slice(&plaintext);
+        match &inode.content_handle {
+            ContentHandle::InlineData(d) => {
+                let start = usize::try_from(offset).unwrap_or(0);
+                let end = start.saturating_add(len).min(d.len());
+                if start >= d.len() {
+                    return Ok(Vec::new());
                 }
-                file_data
+                Ok(d[start..end].to_vec())
             }
-            _ => return Err(VfsError::NotFound),
-        };
-        let start = usize::try_from(offset).unwrap_or(0);
-        let end = start.saturating_add(len).min(data.len());
-        if start >= data.len() {
-            return Ok(Vec::new());
+            ContentHandle::SliceMap(slices) => self.read_windowed(slices, offset, len),
+            _ => Err(VfsError::NotFound),
         }
-        Ok(data[start..end].to_vec())
     }
 
-    /// Load the slab containing `drop_id`, caching the result.
-    fn load_slab_for_slice(&self, drop_id: &[u8; 32]) -> Result<Vec<u8>, VfsError> {
-        let _ = drop_id;
-        let entry = self.slab_index.entries.first().ok_or(VfsError::NotFound)?;
-        if let Some(cached) = self.slabs.get(&entry.slab_id.ordinal) {
-            return Ok(cached.clone());
+    /// Snapshot of the decoded-drop cache counters.
+    #[must_use]
+    pub fn cache_stats(&self) -> limnifs_core::slab_cache::CacheStats {
+        self.store.cache_stats()
+    }
+
+    /// Serve [offset, offset+len) by decompressing ONLY the drops the
+    /// window actually covers (limnifs#192): locate the covering
+    /// slice(s), decode each once through the bounded cache, copy the
+    /// covering bytes out of the shared handle. Never materializes
+    /// the whole file.
+    fn read_windowed(
+        &self,
+        slices: &[limnifs_core::inode::SliceRef],
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, VfsError> {
+        if len == 0 {
+            return Ok(Vec::new());
         }
-        let locator = entry.locators.first().ok_or(VfsError::NotFound)?;
-        let name =
-            limnifs_core::locator::local_sidecar_name(&locator.uri).map_err(VfsError::Core)?;
-        let path = self.image_dir.join(name);
-        Ok(std::fs::read(&path)?)
+        let window_end = offset.saturating_add(u64::try_from(len).unwrap_or(u64::MAX));
+        let mut out = Vec::new();
+        for slice in slices {
+            if slice.file_byte_end <= offset || slice.file_byte_start >= window_end {
+                continue;
+            }
+            let from_abs = offset.max(slice.file_byte_start);
+            let to_abs = window_end.min(slice.file_byte_end);
+            if to_abs > from_abs {
+                let range = self
+                    .store
+                    .decoded_range(
+                        slice.drop_id.as_bytes(),
+                        from_abs - slice.file_byte_start,
+                        (to_abs - from_abs) as usize,
+                    )
+                    .ok_or(VfsError::NotFound)?
+                    .map_err(VfsError::Core)?;
+                out.extend_from_slice(&range);
+            }
+            if slice.file_byte_end >= window_end {
+                break;
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -388,6 +423,72 @@ mod tests {
         let attr = vfs.getattr(file_ino).expect("attr");
         assert_eq!(attr.kind, VfsType::Regular);
         assert_eq!(attr.size, 5);
+    }
+
+    /// limnifs#192: windowed reads must equal a sequential read of the
+    /// whole file, across arbitrary (offset, len) patterns, for a
+    /// slab-backed multi-chunk file. Also asserts the hot window
+    /// path is actually cached (second identical read is a hit).
+    #[test]
+    fn vfs_windowed_reads_match_sequential_on_slab_backed_file() {
+        let id = VFS_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("limnifs-vfs-win-{id}"));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        // ~1.5 MiB pseudo-random content -> chunked into many drops.
+        let mut data = Vec::with_capacity(1_500_000);
+        let mut state = 0x5EED_5EED_5EED_5EEDu64;
+        for _ in 0..1_500_000 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            data.push((state >> 56) as u8);
+        }
+        std::fs::write(dir.join("big.bin"), &data).expect("write big");
+
+        let artifact = limnifs_write::write_directory(&dir).expect("write");
+        assert!(artifact.drop_count > 1, "fixture must be multi-drop");
+        // Write slabs next to a manifest copy so from_bytes can load
+        // them from the "image directory".
+        let img_dir = std::env::temp_dir().join(format!("limnifs-vfs-win-img-{id}"));
+        std::fs::create_dir_all(&img_dir).expect("mkdir img");
+        std::fs::write(img_dir.join("img.lim"), &artifact.bytes).expect("manifest");
+        for slab in &artifact.slabs {
+            let name = slab.locator.strip_prefix("file:").unwrap_or(&slab.locator);
+            std::fs::write(img_dir.join(name), &slab.bytes).expect("slab");
+        }
+        if let Some(side) = &artifact.metadata_sidecar {
+            let name = side.locator.strip_prefix("file:").unwrap_or(&side.locator);
+            std::fs::write(img_dir.join(name), &side.bytes).expect("sidecar");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let vfs = Vfs::open(&img_dir.join("img.lim")).expect("open");
+        let root = vfs.root_inode();
+        let ino = vfs.lookup(root, "big.bin").expect("found");
+
+        let mut rng_state = 0xABCD_ef01_1234_5678u64;
+        let mut next = || {
+            rng_state ^= rng_state << 13;
+            rng_state ^= rng_state >> 7;
+            rng_state ^= rng_state << 17;
+            rng_state
+        };
+        for _ in 0..200 {
+            let off = (next() % (data.len() as u64 + 1)) as usize;
+            let len = (next() % 32_768) as usize;
+            let got = vfs.read(ino, off as u64, len).expect("windowed read");
+            let end = off.saturating_add(len).min(data.len());
+            let want = if off >= data.len() {
+                Vec::new()
+            } else {
+                data[off..end].to_vec()
+            };
+            assert_eq!(got, want, "window off={off} len={len}");
+        }
+
+        // Cache effectiveness: after warmup, stats must show hits.
+        let stats = vfs.cache_stats();
+        assert!(stats.hits > 0, "expected cache hits, got {stats:?}");
     }
 
     #[test]

@@ -141,6 +141,18 @@ impl SlabView<'_> {
             }));
         }
         let raw = &self.bytes[start..end];
+        if record.flags & crate::seekable::DROP_FLAG_SEEKABLE != 0 {
+            if record.dict_id != crate::drop_record::NO_DICT {
+                return Some(Err(CoreError::UnsupportedFeature {
+                    feature: "seekable drop with trained dictionary (not combinable)".into(),
+                }));
+            }
+            return Some(crate::seekable::decode_seekable(
+                record.representation.codec,
+                raw,
+                record.plaintext_len,
+            ));
+        }
         if record.dict_id == crate::drop_record::NO_DICT {
             Some(crate::codec::decompress(
                 record.representation.codec,
@@ -164,6 +176,86 @@ impl SlabView<'_> {
                 &dict_bytes,
             ))
         }
+    }
+
+    /// Decompress only the plaintext bytes at `[off, off+len)` of
+    /// `drop_id`.
+    ///
+    /// Seekable (slab v2) drops decode only the covering container
+    /// frames — a cold 8 KiB window costs at most one 256 KiB frame.
+    /// Non-seekable drops decode the full payload and slice (the
+    /// caller-side cache makes repeat windows cheap; see
+    /// `crate::slab_cache`).
+    ///
+    /// Returns `None` if no drop in this slab carries that id.
+    /// `off + len` beyond the drop's plaintext is `Corrupt`.
+    #[must_use]
+    pub fn plaintext_range(
+        &self,
+        drop_id: &[u8; 32],
+        off: u64,
+        len: usize,
+    ) -> Option<Result<Vec<u8>, CoreError>> {
+        let record = self.find_record(drop_id)?;
+        if record.flags & crate::seekable::DROP_FLAG_SEEKABLE != 0 {
+            let (offset, end) = match self.drop_window_bounds(record) {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            let raw = &self.bytes[offset..end];
+            return Some(crate::seekable::decode_seekable_range(
+                record.representation.codec,
+                raw,
+                off,
+                len,
+            ));
+        }
+        // Non-seekable: full decode + slice.
+        let plaintext = self.plaintext_for(drop_id)?;
+        Some(match plaintext {
+            Ok(bytes) => {
+                let total = bytes.len() as u64;
+                if off > total || off + len as u64 > total {
+                    Err(CoreError::Corrupt {
+                        reason: format!(
+                            "drop range [{off}, {}) outside plaintext length {total}",
+                            off + len as u64
+                        ),
+                    })
+                } else {
+                    Ok(bytes[off as usize..off as usize + len].to_vec())
+                }
+            }
+            Err(e) => Err(e),
+        })
+    }
+
+    /// Resolve a record's byte range inside the slab buffer.
+    fn drop_window_bounds(&self, record: &DropRecord) -> Result<(usize, usize), CoreError> {
+        let offset = usize::try_from(record.offset_in_window).map_err(|_| CoreError::Corrupt {
+            reason: "drop offset_in_window exceeds usize".into(),
+        })?;
+        let len = usize::try_from(record.len_in_window).map_err(|_| CoreError::Corrupt {
+            reason: "drop len_in_window exceeds usize".into(),
+        })?;
+        let start =
+            self.solid_window_start
+                .checked_add(offset)
+                .ok_or_else(|| CoreError::Corrupt {
+                    reason: "drop window start overflows usize".into(),
+                })?;
+        let end = start.checked_add(len).ok_or_else(|| CoreError::Corrupt {
+            reason: "drop window end overflows usize".into(),
+        })?;
+        if end > self.bytes.len() {
+            return Err(CoreError::Corrupt {
+                reason: format!(
+                    "drop range [{start}..{end}] extends past slab length {}",
+                    self.bytes.len()
+                ),
+            });
+        }
+        Ok((start, end))
     }
 }
 
@@ -226,7 +318,7 @@ pub fn parse_slab(bytes: &[u8]) -> Result<SlabView<'_>, CoreError> {
         if trailing < u64::try_from(DROP_RECORD_LEN).unwrap_or(u64::MAX) {
             return Err(CoreError::Corrupt {
                 reason: format!(
-                    "slab has {trailing} trailing bytes that are neither a full drop record nor accounted for by the solid window"
+                    "slab has {trailing} trailing bytes that are neither a full drop record ({DROP_RECORD_LEN}B) nor accounted for by the solid window"
                 ),
             });
         }
@@ -270,6 +362,7 @@ mod tests {
             drop_records.extend_from_slice(&offset_in_window.to_le_bytes());
             drop_records.extend_from_slice(&plaintext_len.to_le_bytes());
             drop_records.push(crate::drop_record::NO_DICT); // dict_id: no dictionary
+            drop_records.push(0x00); // flags
             solid_window.extend_from_slice(plaintext);
         }
         let slab_content = [&drop_records[..], &solid_window[..]].concat();

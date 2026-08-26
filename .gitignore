@@ -11,3 +11,6 @@
 # Local scratch directory (test data, temp files)
 .scratch/
 *.bak
+
+# Local planning notes — never tracked (user rule 2026-08-26)
+TODO.*/

@@ -50,6 +50,10 @@ cargo build --release
 - **Remote locators.** HTTP range streaming, S3, IPFS/CAR — slabs can
   live anywhere.
 - **FUSE mount.** Read-only mount on Linux and macOS.
+- **Bounded random reads.** Large drops are stored as seekable
+  ~256 KiB frames (zstd-seekable-style); a cold 8 KiB window decodes
+  one frame, not the drop. SIEVE-evicted drop and frame caches make
+  repeat windows zero-copy. See [docs/read-api.md](docs/read-api.md).
 
 ## Codec portfolio
 
@@ -67,6 +71,9 @@ Adding a codec is one new file + one `register()` call — the dispatch
 code never changes (open/closed via [`CodecRegistry`]).
 
 ## Performance
+
+Read path (CI-gated canaries, `limnifs-bench readperf`): 2200 MB/s
+sequential extract, 7800 MB/s warm 8 KiB random windows.
 
 Benchmarked against DwarFS 0.15.6 on a 440 MB text corpus:
 

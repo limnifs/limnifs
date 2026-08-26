@@ -13,7 +13,11 @@ use limnifs_format::{SlabId, SLAB_MAGIC};
 /// slabs MUST be ≤ 64 MiB unless the manifest overrides.
 pub const DEFAULT_SLAB_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Current slab layout version (matches `format_version` byte 4..6).
+/// Current (and only) slab layout version (matches `format_version`
+/// byte 4..6). Alpha software: there is no version history — this
+/// layout (50-byte drop records with trailing `flags` byte, seekable
+/// containers per `crate::seekable`) IS the format. Any other value
+/// fails closed.
 pub const SLAB_FORMAT_VERSION: u16 = 1;
 
 /// Width of the fixed slab header.
