@@ -88,12 +88,14 @@ pub fn write_directory_with_pipeline(
         return Ok(ctx.assemble());
     }
 
-    let chunker = Arc::new(ctx.chunker.clone());
+    let chunker = Arc::new(crate::chunker_from_config(config)?);
     let classifier = ctx.classifier;
     let text_codec = config.text_codec_id().unwrap_or(0x04);
     let binary_codec = config.binary_codec_id().unwrap_or(0x01);
     let tunables = config.to_core_tunables();
     let use_categorizers = !config.categorizers.is_empty();
+    let max_drop_size = config.defaults.max_drop_size as usize;
+    let seekable_drops = config.defaults.seekable_drops;
 
     // Phase 1: read I/O threads feed a bounded channel.
     let (read_tx, read_rx) = bounded::<Arc<Vec<u8>>>(CHANNEL_CAPACITY);
@@ -142,6 +144,8 @@ pub fn write_directory_with_pipeline(
                 binary_codec,
                 &tunables,
                 use_categorizers,
+                max_drop_size,
+                seekable_drops,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -169,6 +173,8 @@ fn process_file_inline(
     binary_codec: u8,
     tunables: &limnifs_core::codec::CodecTunables,
     use_categorizers: bool,
+    max_drop_size: usize,
+    seekable_drops: bool,
 ) -> Result<ChunkedFileResult, WriteError> {
     let file_len = data.len();
     if use_categorizers {
@@ -177,8 +183,9 @@ fn process_file_inline(
                 cat.codec_id,
                 limnifs_core::codec::CODEC_FLAC | limnifs_core::codec::CODEC_RICEPP
             );
-            if needs_whole_file || file_len <= crate::WHOLE_FILE_MAX_SIZE {
-                return process_whole_file_drop_inline(pf, data, cat, tunables);
+            let within_cap = max_drop_size == 0 || file_len <= max_drop_size;
+            if within_cap && (needs_whole_file || file_len <= crate::WHOLE_FILE_MAX_SIZE) {
+                return process_whole_file_drop_inline(pf, data, cat, tunables, seekable_drops);
             }
         }
     }
@@ -226,7 +233,7 @@ fn process_file_inline(
                     _ => (limnifs_core::codec::CODEC_STORE, chunk.to_vec().into()),
                 }
             };
-            (*drop_id, chunk.to_vec(), compressed, codec_id)
+            (*drop_id, chunk.to_vec(), compressed, codec_id, 0)
         })
         .collect();
 
@@ -240,6 +247,7 @@ fn process_whole_file_drop_inline(
     data: &[u8],
     cat: file_categorizer::Categorization,
     tunables: &limnifs_core::codec::CodecTunables,
+    seekable_drops: bool,
 ) -> Result<ChunkedFileResult, WriteError> {
     let drop_id = limnifs_core::hash_section(data);
     // Brotli first; fall back to ZSTD then STORE on failure (including
@@ -283,9 +291,11 @@ fn process_whole_file_drop_inline(
         }
     }
     let file_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
+    let (best_compressed, flags) =
+        crate::seekable_or_monolithic(best_codec, data, best_compressed, tunables, seekable_drops);
     let _ = pf;
     Ok(ChunkedFileResult {
-        drops: vec![(drop_id, data.to_vec(), best_compressed, best_codec)],
+        drops: vec![(drop_id, data.to_vec(), best_compressed, best_codec, flags)],
         slices: vec![crate::PendingSlice {
             drop_id,
             file_byte_start: 0,

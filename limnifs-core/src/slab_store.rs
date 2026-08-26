@@ -45,6 +45,15 @@ impl SlabSource {
     }
 }
 
+/// Owned parse of one slab's record table. The slab BYTES stay in
+/// `SlabSource` (owned or mmap'd); this holds only the derived
+/// structure so per-read work is a lookup, not a re-parse.
+#[derive(Debug, Default)]
+struct ParsedSlab {
+    records: Vec<crate::drop_record::DropRecord>,
+    solid_window_start: usize,
+}
+
 /// All slabs for one image, with a `DropId → slab_ordinal` index for
 /// O(1) lookup. Slab ordinals match the order of the manifest's
 /// `slab_index` entries.
@@ -52,14 +61,89 @@ impl SlabSource {
 pub struct SlabStore {
     /// One slab source per ordinal. Index = ordinal.
     slabs: Vec<SlabSource>,
-    /// `DropId` → slab ordinal. Built once at load time.
-    drop_index: HashMap<[u8; 32], usize>,
+    /// Parsed record tables, one per ordinal, built at construction.
+    /// Reads never re-walk a slab's records (TODO.sota-fs/09 F1):
+    /// every lookup is an O(1) index hit plus a bounds-checked slice.
+    parsed: Vec<ParsedSlab>,
+    /// `DropId` → (slab ordinal, record index). Built once at load.
+    drop_index: HashMap<[u8; 32], (usize, usize)>,
     /// `dict_id` → raw dictionary bytes. Populated by
     /// [`SlabStore::set_dictionaries`] when the caller has parsed
     /// the manifest's `dictionary_section`. Drops whose
     /// `DropRecord::dict_id != NO_DICT` consult this map at
     /// decompression time.
     dictionaries: HashMap<u8, Vec<u8>>,
+}
+
+/// Parse one slab and derive its owned index entries: the record
+/// table plus `DropId → (ordinal, record index)` pairs.
+fn index_slab(
+    bytes: &[u8],
+    ordinal: usize,
+) -> Result<(ParsedSlab, Vec<([u8; 32], (usize, usize))>), CoreError> {
+    let view: SlabView<'_> = parse_slab(bytes)?;
+    let mut entries = Vec::with_capacity(view.drop_records().len());
+    for (ridx, record) in view.drop_records().iter().enumerate() {
+        entries.push((*record.drop_id.as_bytes(), (ordinal, ridx)));
+    }
+    Ok((
+        ParsedSlab {
+            records: view.drop_records().to_vec(),
+            solid_window_start: view.solid_window_offset(),
+        },
+        entries,
+    ))
+}
+
+/// Decode a drop's raw window bytes through its representation.
+/// Shared by every SlabStore read path (full, ranged, streaming) —
+/// one place for the seekable / dictionary / plain trichotomy.
+fn decode_drop(
+    record: &crate::drop_record::DropRecord,
+    raw: &[u8],
+    dict_lookup: &dyn Fn(u8) -> Option<Vec<u8>>,
+) -> Result<Vec<u8>, CoreError> {
+    if record.flags & crate::seekable::DROP_FLAG_SEEKABLE != 0 {
+        if record.dict_id != crate::drop_record::NO_DICT {
+            return Err(CoreError::UnsupportedFeature {
+                feature: "seekable drop with trained dictionary (not combinable)".into(),
+            });
+        }
+        return crate::seekable::decode_seekable(
+            record.representation.codec,
+            raw,
+            record.plaintext_len,
+        );
+    }
+    if record.representation.aead != 0x00 {
+        return Err(CoreError::UnsupportedFeature {
+            feature: format!(
+                "drop aead 0x{:02X} (only plaintext/0x00 supported in v0.1)",
+                record.representation.aead
+            ),
+        });
+    }
+    if record.solid_window_index != 0 {
+        return Err(CoreError::UnsupportedFeature {
+            feature: format!(
+                "solid_window_index {} (only single-window slabs supported in v0.1)",
+                record.solid_window_index
+            ),
+        });
+    }
+    if record.dict_id == crate::drop_record::NO_DICT {
+        crate::codec::decompress(record.representation.codec, raw, record.plaintext_len)
+    } else {
+        let Some(dict_bytes) = dict_lookup(record.dict_id) else {
+            return Err(CoreError::Corrupt {
+                reason: format!(
+                    "drop references dict_id 0x{:02X} but no dictionary_section provided",
+                    record.dict_id
+                ),
+            });
+        };
+        crate::codec::zstd_dict::decompress_with_dict(raw, record.plaintext_len, &dict_bytes)
+    }
 }
 
 impl SlabStore {
@@ -83,7 +167,8 @@ impl SlabStore {
 
         let parent = manifest_path.parent().unwrap_or_else(|| Path::new("."));
         let mut slabs = Vec::with_capacity(slab_index.len());
-        let mut drop_index: HashMap<[u8; 32], usize> = HashMap::new();
+        let mut drop_index: HashMap<[u8; 32], (usize, usize)> = HashMap::new();
+        let mut parsed: Vec<ParsedSlab> = Vec::with_capacity(slab_index.len());
 
         for (ordinal, entry) in slab_index.entries.iter().enumerate() {
             let locator = entry
@@ -108,15 +193,15 @@ impl SlabStore {
                 ),
             })?;
 
-            let view = parse_slab(&bytes)?;
-            for record in view.drop_records() {
-                drop_index.insert(*record.drop_id.as_bytes(), ordinal);
-            }
+            let (slab_parsed, entries) = index_slab(&bytes, ordinal)?;
+            parsed.push(slab_parsed);
+            drop_index.extend(entries);
             slabs.push(SlabSource::Memory(bytes));
         }
 
         Ok(Self {
             slabs,
+            parsed,
             drop_index,
             dictionaries: HashMap::new(),
         })
@@ -139,7 +224,8 @@ impl SlabStore {
 
         let parent = manifest_path.parent().unwrap_or_else(|| Path::new("."));
         let mut slabs = Vec::with_capacity(slab_index.len());
-        let mut drop_index: HashMap<[u8; 32], usize> = HashMap::new();
+        let mut drop_index: HashMap<[u8; 32], (usize, usize)> = HashMap::new();
+        let mut parsed: Vec<ParsedSlab> = Vec::with_capacity(slab_index.len());
 
         for (ordinal, entry) in slab_index.entries.iter().enumerate() {
             let locator = entry.locators.first().ok_or_else(|| CoreError::Corrupt {
@@ -200,15 +286,15 @@ impl SlabStore {
                 }
             }
 
-            let view = parse_slab(&mmap[..])?;
-            for record in view.drop_records() {
-                drop_index.insert(*record.drop_id.as_bytes(), ordinal);
-            }
+            let (slab_parsed, entries) = index_slab(&mmap[..], ordinal)?;
+            parsed.push(slab_parsed);
+            drop_index.extend(entries);
             slabs.push(SlabSource::Mapped(mmap));
         }
 
         Ok(Self {
             slabs,
+            parsed,
             drop_index,
             dictionaries: HashMap::new(),
         })
@@ -220,14 +306,37 @@ impl SlabStore {
     /// - [`CoreError::Corrupt`] if any slab fails to parse.
     pub fn from_bytes(slabs: Vec<Vec<u8>>) -> Result<Self, CoreError> {
         let mut drop_index = HashMap::new();
+        let mut parsed = Vec::with_capacity(slabs.len());
         for (ordinal, bytes) in slabs.iter().enumerate() {
-            let view = parse_slab(bytes)?;
-            for record in view.drop_records() {
-                drop_index.insert(*record.drop_id.as_bytes(), ordinal);
-            }
+            let (slab_parsed, entries) = index_slab(bytes, ordinal)?;
+            parsed.push(slab_parsed);
+            drop_index.extend(entries);
         }
         Ok(Self {
             slabs: slabs.into_iter().map(SlabSource::Memory).collect(),
+            parsed,
+            drop_index,
+            dictionaries: HashMap::new(),
+        })
+    }
+
+    /// Build directly from storage modes (owned or mmap'd). Callers
+    /// that already hold slab bytes or mmaps skip the intermediate
+    /// `Vec<Vec<u8>>`.
+    ///
+    /// # Errors
+    /// - [`CoreError::Corrupt`] if any slab fails to parse.
+    pub fn from_sources(slabs: Vec<SlabSource>) -> Result<Self, CoreError> {
+        let mut drop_index = HashMap::new();
+        let mut parsed = Vec::with_capacity(slabs.len());
+        for (ordinal, source) in slabs.iter().enumerate() {
+            let (slab_parsed, entries) = index_slab(source.as_bytes(), ordinal)?;
+            parsed.push(slab_parsed);
+            drop_index.extend(entries);
+        }
+        Ok(Self {
+            slabs,
+            parsed,
             drop_index,
             dictionaries: HashMap::new(),
         })
@@ -277,14 +386,93 @@ impl SlabStore {
     /// - `Some(Ok(bytes))` on success.
     #[must_use]
     pub fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>> {
-        let ordinal = *self.drop_index.get(drop_id)?;
+        let (bytes, record, (start, end)) = self.locate_window(drop_id)?;
+        let raw = &bytes[start..end];
+        Some(decode_drop(record, raw, &|id| {
+            self.dictionaries.get(&id).cloned()
+        }))
+    }
+
+    /// Locate a drop: its slab's bytes, its record, and its resolved
+    /// byte range in the solid window — all in O(1) via the
+    /// construction-time index.
+    fn locate_window(
+        &self,
+        drop_id: &[u8; 32],
+    ) -> Option<(&[u8], &crate::drop_record::DropRecord, (usize, usize))> {
+        let (ordinal, ridx) = *self.drop_index.get(drop_id)?;
         let bytes = self.slabs.get(ordinal)?.as_bytes();
-        let view: SlabView<'_> = parse_slab(bytes).ok()?;
-        // Hand the SlabView a closure that looks up dict_id in our
-        // dictionary map. Clones the dict bytes (cheap relative to
-        // decompression). If `dictionaries` is empty, drops with
-        // `dict_id == NO_DICT` are unaffected.
-        view.plaintext_for_with_dict_lookup(drop_id, &|id| self.dictionaries.get(&id).cloned())
+        let slab = self.parsed.get(ordinal)?;
+        let record = slab.records.get(ridx)?;
+        let offset = usize::try_from(record.offset_in_window).ok()?;
+        let len = usize::try_from(record.len_in_window).ok()?;
+        let start = slab.solid_window_start.checked_add(offset)?;
+        let end = start.checked_add(len)?;
+        if end > bytes.len() {
+            return None;
+        }
+        Some((bytes, record, (start, end)))
+    }
+
+    /// Decompress only `[off, off+len)` of `drop_id`'s plaintext.
+    ///
+    /// Seekable (slab v2) drops decode just the covering container
+    /// frames; everything else decodes the full drop and slices.
+    /// Returns `None` if no slab contains this drop.
+    #[must_use]
+    pub fn plaintext_range(
+        &self,
+        drop_id: &[u8; 32],
+        off: u64,
+        len: usize,
+    ) -> Option<Result<Vec<u8>, CoreError>> {
+        let (bytes, record, (start, end)) = self.locate_window(drop_id)?;
+        let raw = &bytes[start..end];
+        if record.flags & crate::seekable::DROP_FLAG_SEEKABLE != 0 {
+            return Some(crate::seekable::decode_seekable_range(
+                record.representation.codec,
+                raw,
+                off,
+                len,
+            ));
+        }
+        // Non-seekable: full decode + slice.
+        let plaintext = decode_drop(record, raw, &|id| self.dictionaries.get(&id).cloned());
+        Some(match plaintext {
+            Ok(bytes) => {
+                let total = bytes.len() as u64;
+                if off > total || off + len as u64 > total {
+                    Err(CoreError::Corrupt {
+                        reason: format!(
+                            "drop range [{off}, {}) outside plaintext length {total}",
+                            off + len as u64
+                        ),
+                    })
+                } else {
+                    Ok(bytes[off as usize..off as usize + len].to_vec())
+                }
+            }
+            Err(e) => Err(e),
+        })
+    }
+
+    /// The drop's raw window bytes plus its record, for callers that
+    /// implement their own decode policy over the container (the
+    /// frame cache in `slab_cache`). O(1) via the index.
+    pub(crate) fn raw_window(
+        &self,
+        drop_id: &[u8; 32],
+    ) -> Option<(&[u8], &crate::drop_record::DropRecord)> {
+        let (bytes, record, (start, end)) = self.locate_window(drop_id)?;
+        Some((&bytes[start..end], record))
+    }
+
+    /// Whether `drop_id`'s record carries the SEEKABLE flag.
+    /// Returns `None` if no slab contains this drop.
+    #[must_use]
+    pub fn drop_is_seekable(&self, drop_id: &[u8; 32]) -> Option<bool> {
+        let (_, record, _) = self.locate_window(drop_id)?;
+        Some(record.flags & crate::seekable::DROP_FLAG_SEEKABLE != 0)
     }
 
     /// Set the dictionary table parsed from the manifest's
@@ -321,21 +509,13 @@ impl SlabStore {
         drop_id: &[u8; 32],
         writer: &mut W,
     ) -> Result<u64, CoreError> {
-        let ordinal = *self
-            .drop_index
-            .get(drop_id)
-            .ok_or_else(|| CoreError::Corrupt {
-                reason: format!("stream_drop: drop {:02x?} not in any slab", &drop_id[..4]),
-            })?;
-        let bytes = self.slabs.get(ordinal).ok_or_else(|| CoreError::Corrupt {
-            reason: format!("stream_drop: slab ordinal {ordinal} out of range"),
-        })?;
-        let view: SlabView<'_> = parse_slab(bytes.as_bytes())?;
-        let plaintext = view
-            .plaintext_for(drop_id)
-            .ok_or_else(|| CoreError::Corrupt {
-                reason: "stream_drop: slab view returned None for indexed drop".into(),
-            })??;
+        let (bytes, record, (start, end)) =
+            self.locate_window(drop_id)
+                .ok_or_else(|| CoreError::Corrupt {
+                    reason: format!("stream_drop: drop {:02x?} not in any slab", &drop_id[..4]),
+                })?;
+        let raw = &bytes[start..end];
+        let plaintext = decode_drop(record, raw, &|id| self.dictionaries.get(&id).cloned())?;
         let len = plaintext.len() as u64;
         writer
             .write_all(&plaintext)

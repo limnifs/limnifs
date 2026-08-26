@@ -56,6 +56,7 @@ text_codec = "brotli"
 binary_codec = "lz4"
 metadata_codec = "brotli"
 metadata_quality = 5
+max_drop_size = 1048576
 inline_threshold = 4096
 
 [[categorizer]]
@@ -89,6 +90,7 @@ max_dict_size = 65536
         assert_eq!(config.categorizers.len(), 1);
         assert_eq!(config.categorizers[0].name, "dna");
         assert_eq!(config.categorizers[0].max_size, Some(524_288));
+        assert_eq!(config.defaults.max_drop_size, 1_048_576);
     }
 
     #[test]

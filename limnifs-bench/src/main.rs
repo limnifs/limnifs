@@ -15,6 +15,8 @@
 
 mod datasets;
 mod metrics;
+mod readcompare;
+mod readperf;
 mod report;
 mod resource;
 mod runners;
@@ -35,6 +37,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Read-path performance canaries with hard gates (exit nonzero
+    /// below thresholds). Fixed synthetic workload, < 60 s.
+    Readperf,
+    /// Monolithic vs seekable A/B on the 19.5 MiB #192 fixture
+    /// (informational; gates live in readperf).
+    Readcompare,
     Download {
         #[arg(long)]
         all: bool,
@@ -67,6 +75,22 @@ fn main() {
     let paths = runners::WorkspacePaths::new(&workspace);
 
     match cli.command {
+        Command::Readcompare => {
+            let scratch = paths.cache_dir.join("readcompare");
+            std::fs::create_dir_all(&scratch).expect("create scratch");
+            readcompare::run(&scratch);
+        }
+        Command::Readperf => {
+            let scratch = paths.cache_dir.join("readperf");
+            std::fs::create_dir_all(&scratch).expect("create scratch");
+            let (extract, windowed) = readperf::run(&scratch);
+            let ok =
+                windowed >= readperf::WINDOWED_GATE_MBPS && extract >= readperf::EXTRACT_GATE_MBPS;
+            if !ok {
+                eprintln!("readperf: GATE FAILURE");
+                std::process::exit(1);
+            }
+        }
         Command::Download { all, datasets } => {
             let names: Vec<String> = if all {
                 datasets::DATASETS

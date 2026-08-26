@@ -5,6 +5,59 @@ All notable changes to LimniFS are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Public read API** — `limnifs_core::read::{ImageReader, FileReader,
+  ReadConfig, extract_file}`. Positional `read_at` decodes only what
+  the window touches; `extract_file` optionally decodes drops in
+  parallel (they are independent). Docs: `docs/read-api.md`.
+- **Bounded-output drops** — `WriteConfig::defaults.max_drop_size`
+  (default 4 MiB, 0 = unlimited) caps whole-file drops: files over
+  the cap fall back to FastCDC chunking + tournament, bounding the
+  decompressed unit behind any random access by construction (EROFS
+  fixed-output pclusters). `skip_chunking` stays exempt.
+- **Read-path perf canaries** — `limnifs-bench readperf` with hard CI
+  gates (windowed ≥ 200 MB/s, extract ≥ 100 MB/s); wired as the
+  `read-canary` job in the Benchmark workflow.
+
+### Changed
+
+- **Single format: seekable drop containers.** The drop record grows
+  a trailing `flags` byte (49 → 50 bytes; bit0 = SEEKABLE) and large
+  general-codec drops (> 1 MiB) are written as independent 256 KiB
+  frames + an `LMSK` footer index (zstd-seekable-style). Windowed
+  reads binary-search the footer and decompress only covering frames:
+  a cold 8 KiB read on a 19.5 MiB drop costs one frame, not the whole
+  payload. `DropId` still hashes the full plaintext — dedup intact.
+  **Breaking (alpha):** there is one slab format and one record
+  layout; images written by earlier versions (49-byte records) are
+  not readable. Spec updated (limnifs/spec#29).
+- **Read architecture (TODO.sota-fs/09):** slab record tables are
+  parsed once at open (O(1) drop lookups — no per-read re-parse);
+  SEEKABLE drops get a frame-level SIEVE cache (32 MiB default,
+  `ReadConfig::frame_cache_bytes`) so repeat windows decode zero new
+  frames; container footers are memoized; `ImageReader::open` mmaps
+  slab sidecars (pages on demand). Measured: warm windowed
+  4627 → 7793 MB/s.
+- **`[chunking]` config is now applied.** The section was parsed and
+  validated but silently ignored (`FastCDC::default()` was hardcoded).
+  Defaults preserve the previous effective values (64 Ki min /
+  256 Ki avg / 1 Mi max), so default images are byte-identical; only
+  configs that set `[chunking]` change output. New
+  `defaults.seekable_drops` knob (default true; `max-ratio` opts out)
+  selects monolithic drops for maximum ratio.
+- **SIEVE drop cache.** `CachedSlabStore` replaces its count-only LRU
+  with SIEVE (USENIX ATC '24) eviction over shared `Arc<[u8]>`
+  plaintexts, bounded by entries AND bytes (64 MiB / 1024 default);
+  oversized drops bypass instead of evicting the working set.
+- **Windowed reads everywhere.** `limni`'s FUSE vfs and
+  `FileReader::read_at` both serve windows through the ranged path
+  (`CachedSlabStore::decoded_range`), fixing limnifs#192 (~48 GiB of
+  wasted decompression reading 19.5 MiB through 8 KiB windows →
+  bounded single-frame decodes; measured 4600 MB/s warm windowed).
+
 ## [0.2.64] — 2026-08-25
 
 ### Changed

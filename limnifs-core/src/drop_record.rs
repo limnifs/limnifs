@@ -13,7 +13,7 @@ use limnifs_format::{DropId, Representation};
 /// v0.2: extended from 48 to 49 bytes by adding `dict_id` (1 byte)
 /// at the end. `dict_id` = 0xFF means "no dictionary"; 0..254
 /// references an entry in the `dictionary_section` manifest section.
-pub const DROP_RECORD_LEN: usize = 49;
+pub const DROP_RECORD_LEN: usize = 50;
 
 /// Sentinel `dict_id` meaning "no dictionary used for this drop".
 pub const NO_DICT: u8 = 0xFF;
@@ -35,6 +35,9 @@ pub struct DropRecord {
     /// Dictionary id for dict-aided decompression.
     /// 0xFF = no dictionary; 0..254 = index into `dictionary_section`.
     pub dict_id: u8,
+    /// Record flags (trailing byte). Bit meanings:
+    /// [`crate::seekable::DROP_FLAG_SEEKABLE`].
+    pub flags: u8,
 }
 
 /// Parse a single drop record from the cursor's current position.
@@ -114,6 +117,7 @@ pub fn parse_drop_record_with_ceiling(
         });
     }
     let dict_id = cursor.read_u8()?;
+    let flags = cursor.read_u8()?;
     Ok(DropRecord {
         drop_id,
         plaintext_len,
@@ -122,6 +126,7 @@ pub fn parse_drop_record_with_ceiling(
         offset_in_window,
         len_in_window,
         dict_id,
+        flags,
     })
 }
 
@@ -160,6 +165,7 @@ mod tests {
         bytes[40..44].copy_from_slice(&record.offset_in_window.to_le_bytes());
         bytes[44..48].copy_from_slice(&record.len_in_window.to_le_bytes());
         bytes[48] = record.dict_id;
+        bytes[49] = record.flags;
         bytes
     }
 
@@ -172,6 +178,7 @@ mod tests {
             offset_in_window: 0,
             len_in_window: 1024,
             dict_id: NO_DICT,
+            flags: 0,
         }
     }
 
@@ -197,6 +204,7 @@ mod tests {
             offset_in_window: 2048,
             len_in_window: 1024,
             dict_id: NO_DICT,
+            flags: 0,
         };
         let bytes = make_drop_record_bytes(&record);
         let mut cursor = ManifestCursor::new(&bytes);
@@ -301,5 +309,32 @@ mod tests {
         let record_parsed = parse_drop_record(&mut cursor, &slab_parsed).expect("drop parses");
         assert_eq!(record_parsed, record);
         assert_eq!(cursor.position(), 56 + DROP_RECORD_LEN);
+    }
+
+    #[test]
+    fn parses_flags_byte() {
+        let slab = make_plaintext_slab_header();
+        let record = sample_record();
+        let mut bytes = Vec::with_capacity(DROP_RECORD_LEN);
+        bytes.extend_from_slice(&make_drop_record_bytes(&record));
+        let mut cursor = ManifestCursor::new(&bytes);
+        let parsed = parse_drop_record(&mut cursor, &slab).expect("drop parses");
+        assert_eq!(parsed, record);
+        assert_eq!(cursor.position(), DROP_RECORD_LEN);
+    }
+
+    #[test]
+    fn parses_seekable_flag() {
+        let slab = make_plaintext_slab_header();
+        let mut record = sample_record();
+        record.flags = crate::seekable::DROP_FLAG_SEEKABLE;
+        let bytes = make_drop_record_bytes(&record);
+        let mut cursor = ManifestCursor::new(&bytes);
+        let parsed = parse_drop_record(&mut cursor, &slab).expect("drop parses");
+        assert_eq!(
+            parsed.flags,
+            crate::seekable::DROP_FLAG_SEEKABLE,
+            "trailing flags byte is parsed"
+        );
     }
 }

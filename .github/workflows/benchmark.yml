@@ -34,6 +34,23 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  read-canary:
+    name: Read-path canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: read-canary
+      - name: Run readperf canaries (hard gates)
+        run: cargo run --release -p limnifs-bench -- readperf
+      - name: Monolithic vs seekable A/B (informational)
+        run: cargo run --release -p limnifs-bench -- readcompare
+
   benchmark:
     name: Benchmark (${{ matrix.os }})
     strategy:

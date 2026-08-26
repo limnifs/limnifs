@@ -252,6 +252,7 @@ pub fn write_stream<R: std::io::Read>(
     config: &WriteConfig,
 ) -> Result<WriteArtifact, WriteError> {
     let mut ctx = WriteContext::new();
+    ctx.chunker = chunker_from_config(config)?;
     ctx.categorizers_disabled = config.categorizers.is_empty();
     ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
     ctx.auto_turnover = config.turnover_threshold > 0;
@@ -320,7 +321,7 @@ pub fn write_stream<R: std::io::Read>(
             &tunables,
             &tournament,
         );
-        drops.push((drop_id, chunk.clone(), compressed, codec_id));
+        drops.push((drop_id, chunk.clone(), compressed, codec_id, 0));
     }
     let _ = drop_id_root;
 
@@ -392,6 +393,7 @@ pub fn write_layer(
     let (base_drop_index, base_root) = load_base_drop_index(base_image)?;
 
     let mut ctx = WriteContext::new();
+    ctx.chunker = chunker_from_config(config)?;
     ctx.categorizers_disabled = config.categorizers.is_empty();
     ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
     ctx.auto_turnover = config.turnover_threshold > 0;
@@ -498,6 +500,8 @@ fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<
         .metadata_codec_id()
         .unwrap_or(limnifs_core::codec::CODEC_BROTLI);
 
+    ctx.chunker = chunker_from_config(config)?;
+
     let pending = std::mem::take(&mut ctx.pending_files);
     if pending.is_empty() {
         return Ok(());
@@ -529,6 +533,9 @@ fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<
     };
     let base_drop_index = ctx.base_drop_index.as_ref();
     let inline_threshold = ctx.inline_threshold;
+    let max_drop_size = config.defaults.max_drop_size as usize;
+    let seekable_drops = config.defaults.seekable_drops;
+    let seekable_drops = config.defaults.seekable_drops;
     let results: Vec<ChunkedFileResult> = pending
         .par_iter()
         .map(|pf| {
@@ -544,6 +551,8 @@ fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<
                 &tournament_spec,
                 base_drop_index,
                 inline_threshold,
+                max_drop_size,
+                seekable_drops,
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -561,6 +570,7 @@ pub fn write_directory_with_config(
     config: &WriteConfig,
 ) -> Result<WriteArtifact, WriteError> {
     let mut ctx = WriteContext::new();
+    ctx.chunker = chunker_from_config(config)?;
     ctx.categorizers_disabled = config.categorizers.is_empty();
     ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
     ctx.auto_turnover = config.turnover_threshold > 0;
@@ -594,6 +604,8 @@ fn write_directory_streaming(
         .metadata_codec_id()
         .unwrap_or(limnifs_core::codec::CODEC_BROTLI);
 
+    ctx.chunker = chunker_from_config(config)?;
+
     let chunker = ctx.chunker.clone();
     let classifier = ctx.classifier;
     let text_codec = config.text_codec_id().unwrap_or(0x04);
@@ -620,6 +632,8 @@ fn write_directory_streaming(
     // walk, so the layer fast-path index travels as a clone.
     let base_drop_index = ctx.base_drop_index.clone();
     let inline_threshold = ctx.inline_threshold;
+    let max_drop_size = config.defaults.max_drop_size as usize;
+    let seekable_drops = config.defaults.seekable_drops;
 
     ctx.inline_threshold = config.defaults.inline_threshold as usize;
     ctx.metadata_externalize_threshold = config.defaults.metadata_externalize_threshold;
@@ -667,6 +681,8 @@ fn write_directory_streaming(
                     &tournament_spec,
                     base_drop_index.as_ref(),
                     inline_threshold,
+                    max_drop_size,
+                    seekable_drops,
                 );
                 (i, pf, r)
             })
@@ -703,10 +719,10 @@ fn write_directory_streaming(
 /// share bytes across hits with a refcount bump instead of a deep
 /// copy — dedup-heavy workloads (container layers, duplicate files)
 /// skip the allocation entirely.
-pub(crate) type RawDrop = ([u8; 32], Vec<u8>, std::sync::Arc<[u8]>, u8);
+pub(crate) type RawDrop = ([u8; 32], Vec<u8>, std::sync::Arc<[u8]>, u8, u8);
 /// Result of parallel file processing: the drop data (uncompressed,
 pub(crate) struct ChunkedFileResult {
-    drops: Vec<RawDrop>, // (id, plaintext, compressed, codec)
+    drops: Vec<RawDrop>, // (id, plaintext, compressed, codec, flags)
     slices: Vec<PendingSlice>,
 }
 
@@ -749,11 +765,51 @@ struct TournamentSpec {
 /// and lets the codec own its param encoding. The categorizer's
 /// `codec_params` field is reserved for future use when a codec
 /// needs params NOT embedded in its container.
+/// Build the chunker from the config's `[chunking]` section. The
+/// section was previously parsed and validated but never applied —
+/// `WriteContext` hardcoded `FastCDC::default()`. Defaults in
+/// `default_v0_1` match the previous effective values, so default
+/// images are byte-identical; only configs that set `[chunking]`
+/// change output (which is the point of setting it).
+fn chunker_from_config(config: &WriteConfig) -> Result<FastCDC, WriteError> {
+    FastCDC::new(
+        config.chunking.min_chunk_size as usize,
+        config.chunking.avg_chunk_size as usize,
+        config.chunking.max_chunk_size as usize,
+    )
+    .map_err(|e| WriteError::Io(std::io::Error::other(format!("chunking config: {e}"))))
+}
+
+/// Encode `plaintext` as a seekable container when the drop is large
+/// enough to hurt cold random reads and the codec supports
+/// independent frames (TODO.sota-fs/05). Ratio cost is bounded by
+/// per-frame independence; the reader gains 256 KiB-bounded windowed
+/// decode. Encoder failure degrades to the monolithic stream — a
+/// container problem must never fail the write.
+pub(crate) fn seekable_or_monolithic(
+    codec: u8,
+    plaintext: &[u8],
+    compressed: std::sync::Arc<[u8]>,
+    tunables: &limnifs_core::codec::CodecTunables,
+    seekable_drops: bool,
+) -> (std::sync::Arc<[u8]>, u8) {
+    use limnifs_core::seekable::{
+        encode_seekable, is_seekable_codec, DROP_FLAG_SEEKABLE, SEEKABLE_EMISSION_THRESHOLD,
+    };
+    if seekable_drops && plaintext.len() > SEEKABLE_EMISSION_THRESHOLD && is_seekable_codec(codec) {
+        if let Ok(container) = encode_seekable(codec, plaintext, tunables) {
+            return (container.into(), DROP_FLAG_SEEKABLE);
+        }
+    }
+    (compressed, 0)
+}
+
 fn process_whole_file_drop(
     pf: &PendingFile,
     data: &[u8],
     cat: file_categorizer::Categorization,
     tunables: &limnifs_core::codec::CodecTunables,
+    seekable_drops: bool,
 ) -> Result<ChunkedFileResult, WriteError> {
     let _ = pf;
     let drop_id = hash_section(data);
@@ -820,8 +876,10 @@ fn process_whole_file_drop(
         }
     }
 
+    let (best_compressed, flags) =
+        seekable_or_monolithic(best_codec, data, best_compressed, tunables, seekable_drops);
     Ok(ChunkedFileResult {
-        drops: vec![(drop_id, data.to_vec(), best_compressed, best_codec)],
+        drops: vec![(drop_id, data.to_vec(), best_compressed, best_codec, flags)],
         slices: vec![PendingSlice {
             drop_id,
             file_byte_start: 0,
@@ -935,6 +993,8 @@ fn process_file(
     tournament: &TournamentSpec,
     base_drop_index: Option<&std::collections::HashSet<[u8; 32]>>,
     inline_threshold: usize,
+    max_drop_size: usize,
+    seekable_drops: bool,
 ) -> Result<ChunkedFileResult, WriteError> {
     // For files above MMAP_READ_THRESHOLD, map them rather than reading
     // into a Vec via std::fs::read. Pages load on demand from the
@@ -980,8 +1040,10 @@ fn process_file(
                 Ok(c) if c.len() < data.len() => (preferred_codec, c.into()),
                 _ => (limnifs_core::codec::CODEC_STORE, data.to_vec().into()),
             };
+        let (compressed, flags) =
+            seekable_or_monolithic(codec_id, &data, compressed, tunables, seekable_drops);
         return Ok(ChunkedFileResult {
-            drops: vec![(drop_id, data, compressed, codec_id)],
+            drops: vec![(drop_id, data, compressed, codec_id, flags)],
             slices: vec![PendingSlice {
                 drop_id,
                 file_byte_start: 0,
@@ -996,8 +1058,11 @@ fn process_file(
                 cat.codec_id,
                 limnifs_core::codec::CODEC_FLAC | limnifs_core::codec::CODEC_RICEPP
             );
-            if needs_whole_file || file_len <= WHOLE_FILE_MAX_SIZE {
-                return process_whole_file_drop(pf, &data, cat, tunables);
+            // max_drop_size bounds the decompressed unit: files over
+            // the cap fall through to chunking + tournament (0 = off).
+            let within_cap = max_drop_size == 0 || file_len <= max_drop_size;
+            if within_cap && (needs_whole_file || file_len <= WHOLE_FILE_MAX_SIZE) {
+                return process_whole_file_drop(pf, &data, cat, tunables, seekable_drops);
             }
         }
     }
@@ -1049,7 +1114,7 @@ fn process_file(
             // → skip compress entirely.
             if let Some(base) = base_drop_index {
                 if base.contains(drop_id) {
-                    return (*drop_id, Vec::new(), Vec::new().into(), CODEC_REFERENCED);
+                    return (*drop_id, Vec::new(), Vec::new().into(), CODEC_REFERENCED, 0);
                 }
             }
             let class = classifier.classify(chunk);
@@ -1081,7 +1146,7 @@ fn process_file(
                 });
                 new
             };
-            (*drop_id, chunk.to_vec(), compressed, codec_id)
+            (*drop_id, chunk.to_vec(), compressed, codec_id, 0)
         })
         .collect();
 
@@ -1108,6 +1173,10 @@ struct PendingDrop {
     /// the post-parallel dict re-compression pass. Cleared after
     /// re-compression to free memory before slab assembly.
     plaintext: Option<Vec<u8>>,
+    /// Record flags. Bit0 = SEEKABLE (window bytes are a
+    /// `limnifs_core::seekable` container); 0 = plain monolithic
+    /// codec stream.
+    flags: u8,
 }
 
 impl PendingDrop {
@@ -1321,7 +1390,7 @@ impl WriteContext {
     /// Merge a parallel-processed chunked file's results into the
     /// context. Dedup: only new `DropId`s get added to the drops list.
     fn merge_chunked_file(&mut self, pf: &PendingFile, result: ChunkedFileResult) {
-        for (drop_id, plaintext, compressed, codec) in result.drops {
+        for (drop_id, plaintext, compressed, codec, flags) in result.drops {
             if self.drop_index.insert(drop_id) {
                 // When dictionary training is enabled, classify the
                 // plaintext and retain it for per-class dictionary
@@ -1351,6 +1420,7 @@ impl WriteContext {
                     } else {
                         None
                     },
+                    flags,
                 });
             }
         }
@@ -1392,6 +1462,7 @@ impl WriteContext {
             codec,
             dict_id: limnifs_core::drop_record::NO_DICT,
             plaintext: None,
+            flags: 0,
         }
     }
 
@@ -2054,7 +2125,8 @@ fn encode_slab(ordinal: u64, drops: &[&PendingDrop]) -> SlabArtifact {
     // + offset_in_window(4) + window_len(4) + dict_id(1). Pre-sizing
     // the records Vec avoids per-drop realloc and amortises to a
     // single memcpy per field rather than bounds-check per call.
-    const DROP_RECORD_LEN: usize = 49;
+    // v2: 49-byte v1 record + trailing flags byte.
+    const DROP_RECORD_LEN: usize = 50;
     let mut drop_records = Vec::with_capacity(drops.len() * DROP_RECORD_LEN);
     let mut solid_window = Vec::new();
     let mut drop_ids = Vec::with_capacity(drops.len());
@@ -2071,6 +2143,7 @@ fn encode_slab(ordinal: u64, drops: &[&PendingDrop]) -> SlabArtifact {
         drop_records.extend_from_slice(&offset_in_window.to_le_bytes());
         drop_records.extend_from_slice(&window_len.to_le_bytes());
         drop_records.push(drop.dict_id); // dict_id: NO_DICT (0xFF) or trained id (0..=254)
+        drop_records.push(drop.flags); // flags: bit0 = SEEKABLE container
         solid_window.extend_from_slice(&drop.compressed);
         drop_ids.push(drop.id);
         offset_in_window = offset_in_window
@@ -2085,7 +2158,7 @@ fn encode_slab(ordinal: u64, drops: &[&PendingDrop]) -> SlabArtifact {
     let total_length = SLAB_HEADER_LEN + slab_content.len();
     let mut slab_bytes = Vec::with_capacity(total_length);
     slab_bytes.extend_from_slice(b"LIM1");
-    slab_bytes.extend_from_slice(&1u16.to_le_bytes());
+    slab_bytes.extend_from_slice(&1u16.to_le_bytes()); // the slab format version
     slab_bytes.extend_from_slice(&slab_id.to_bytes());
     slab_bytes.extend_from_slice(
         &u64::try_from(total_length)
@@ -2538,7 +2611,10 @@ mod tests {
         let slab_bytes = &artifact.slabs[0].bytes;
         let mut cursor = ManifestCursor::new(slab_bytes);
         let slab_header = limnifs_core::parse_slab_header(&mut cursor).expect("slab header parses");
-        assert_eq!(slab_header.format_version, 1);
+        assert_eq!(
+            slab_header.format_version,
+            limnifs_core::slab::SLAB_FORMAT_VERSION
+        );
         assert!(!slab_header.is_sealed());
         assert!(!slab_header.has_erasure_coding());
 

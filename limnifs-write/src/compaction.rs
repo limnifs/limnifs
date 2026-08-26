@@ -70,6 +70,9 @@ struct ExtractedDrop {
     compressed: Vec<u8>,
     codec: u8,
     plaintext_len: u32,
+    /// Record flags carried through from the source slab (bit0 =
+    /// SEEKABLE container).
+    flags: u8,
 }
 
 /// Compact an image by removing unreferenced drops from its slab.
@@ -131,6 +134,7 @@ pub fn compact_image(
                 compressed: slab_bytes[start..end].to_vec(),
                 codec: record.representation.codec,
                 plaintext_len: record.plaintext_len,
+                flags: record.flags,
             });
         }
     }
@@ -188,6 +192,7 @@ fn encode_compacted_slab(drops: &[ExtractedDrop]) -> (Vec<u8>, SlabId) {
         drop_records.extend_from_slice(&offset.to_le_bytes());
         drop_records.extend_from_slice(&win_len.to_le_bytes());
         drop_records.push(limnifs_core::drop_record::NO_DICT); // dict_id: no dictionary
+        drop_records.push(drop.flags); // flags: bit0 = SEEKABLE container
         solid_window.extend_from_slice(&drop.compressed);
     }
 
@@ -198,7 +203,7 @@ fn encode_compacted_slab(drops: &[ExtractedDrop]) -> (Vec<u8>, SlabId) {
     let total_length = 56 + slab_content.len();
     let mut slab_bytes = Vec::with_capacity(total_length);
     slab_bytes.extend_from_slice(b"LIM1");
-    slab_bytes.extend_from_slice(&1u16.to_le_bytes());
+    slab_bytes.extend_from_slice(&1u16.to_le_bytes()); // the slab format version
     slab_bytes.extend_from_slice(&slab_id.to_bytes());
     slab_bytes.extend_from_slice(&(total_length as u64).to_le_bytes());
     slab_bytes.push(0x00); // ec_descriptor
