@@ -4,6 +4,7 @@
 //! help, all above the inline threshold so they land in slabs.
 
 use limnifs_write::{write_directory_with_config, WriteConfig};
+use std::fmt::Write as _;
 
 fn fixture(src: &std::path::Path) {
     std::fs::create_dir_all(src).expect("mkdir");
@@ -11,8 +12,8 @@ fn fixture(src: &std::path::Path) {
         let mut s = String::with_capacity(16 * 1024);
         let mut line = 0usize;
         while s.len() < 16 * 1024 {
-            s.push_str(&format!(
-                "2026-08-{:02}T12:{:02}:{:02}.{:-06} service=api req_id=req-{}-{} status={} bytes={} region=us-east-1\n",
+            let _ = writeln!(s,
+                "2026-08-{:02}T12:{:02}:{:02}.{:-06} service=api req_id=req-{}-{} status={} bytes={} region=us-east-1",
                 line % 28 + 1,
                 line % 60,
                 (line * 7) % 60,
@@ -21,7 +22,7 @@ fn fixture(src: &std::path::Path) {
                 line,
                 200 + (line % 3) * 100,
                 (line * 997) % 50_000,
-            ));
+            );
             line += 1;
         }
         s
@@ -55,14 +56,12 @@ fn zstd_dictionary_improves_tiny_text_file_ratio() {
 
     let plain = pack(&src, false);
     let dict = pack(&src, true);
-    let input: usize = std::fs::read_dir(&src)
+    let input: u64 = std::fs::read_dir(&src)
         .expect("list")
-        .map(|e| {
-            e.map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
-                .unwrap_or(0)
-        })
-        .sum::<u64>() as usize;
+        .map(|e| e.map_or(0, |e| e.metadata().map_or(0, |m| m.len())))
+        .sum::<u64>();
 
+    #[allow(clippy::cast_precision_loss)]
     let improvement = (plain as f64 - dict as f64) / plain.max(1) as f64 * 100.0;
     println!(
         "dict-ratio: input {input} B, plain {plain} B, dict {dict} B → {improvement:.1}% smaller with dictionaries"

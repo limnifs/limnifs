@@ -3,7 +3,7 @@
 //! must agree on every byte of every file.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use limnifs_core::read::{extract_file, ReadConfig};
 use limnifs_write::{write_directory_with_config, WriteConfig};
@@ -15,7 +15,7 @@ fn build_image(src: &PathBuf) -> PathBuf {
     let payload = |i: usize| -> Vec<u8> {
         let mut v = Vec::with_capacity(i);
         for j in 0..i {
-            v.push(((j * 31 + i) % 251) as u8);
+            v.push(u8::try_from((j * 31 + i) % 251).unwrap_or(0));
         }
         v
     };
@@ -45,15 +45,14 @@ fn build_image(src: &PathBuf) -> PathBuf {
 
 /// Recursively list all files under `dir`, returning (relative path,
 /// bytes). Stable across both extract paths.
-fn collect(dir: &PathBuf) -> Vec<(String, Vec<u8>)> {
+fn collect(dir: &Path) -> Vec<(String, Vec<u8>)> {
     use std::path::Path;
     fn walk(p: &Path, base: &Path, out: &mut Vec<(String, Vec<u8>)>) {
-        let entries = match std::fs::read_dir(p) {
-            Ok(it) => it,
-            Err(_) => return,
+        let Ok(entries) = std::fs::read_dir(p) else {
+            return;
         };
-        let mut names: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-        names.sort_by_key(|e| e.file_name());
+        let mut names: Vec<_> = entries.flatten().collect();
+        names.sort_by_key(std::fs::DirEntry::file_name);
         for e in names {
             let path = e.path();
             let rel = path
