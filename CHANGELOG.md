@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+### Changed
+
+- Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
+
+
 ## [0.3.1] — 2026-08-26
 
 ### Fixed

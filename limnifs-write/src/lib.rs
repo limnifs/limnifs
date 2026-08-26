@@ -29,8 +29,6 @@ pub mod dictionary;
 pub mod file_categorizer;
 use file_categorizer::FileCategorizer;
 pub mod flatten;
-#[cfg(feature = "pipeline-parallelism")]
-pub mod pipeline;
 pub mod rw;
 #[cfg(feature = "sparse-index")]
 pub mod sparse_index;
