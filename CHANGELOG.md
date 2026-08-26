@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.4] — 2026-08-27
+
+### Changed
+
+- **Perf: create path borrows its mmap.** `process_file` previously
+  mapped every file ≥ 1 MiB and immediately copied it with
+  `Vec::from(&mmap[..])` — one full memcpy per file that defeated the
+  mapping and doubled peak RSS vs the design. Chunking, hashing, and
+  compression now run on a borrowed slice; only the retained per-drop
+  plaintexts are copied. Biggest effect on big-file trees (container
+  layers, model weights).
+
+### CI
+
+- **Native Windows check in the PR path** (`windows-latest`, default
+  features = what the release ships). Prevents a recurrence of the
+  0.3.2 break, where a unix-only API shipped through 14 green
+  Linux/macOS checks and only the release matrix caught it — after
+  crates.io publish.
+
 ## [0.3.3] — 2026-08-26
 
 ### Fixed
