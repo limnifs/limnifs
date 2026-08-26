@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 limnifs-core = { workspace = true, features = ["signing"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 limnifs-write.workspace = true
 clap.workspace = true
 fuser = { version = "0.18", optional = true, default-features = false }

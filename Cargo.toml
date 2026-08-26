@@ -4,7 +4,7 @@ exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.65"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0 OR MIT"
@@ -32,13 +32,16 @@ missing_panics_doc = "allow"
 return_self_not_must_use = "allow"
 
 [workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
 # Internal crates (omnizip-style: members reference these as
 # `limnifs-core.workspace = true`; release-plz bumps the shared
 # workspace version once and publishes in DAG order).
-limnifs-format = { path = "limnifs-format", version = "0.2.64" }
-limnifs-ocb3 = { path = "limnifs-ocb3", version = "0.2.64" }
-limnifs-core = { path = "limnifs-core", version = "0.2.64" }
-limnifs-write = { path = "limnifs-write", version = "0.2.64" }
+limnifs-format = { path = "limnifs-format", version = "0.3.0" }
+limnifs-ocb3 = { path = "limnifs-ocb3", version = "0.3.0" }
+limnifs-core = { path = "limnifs-core", version = "0.3.0" }
+limnifs-write = { path = "limnifs-write", version = "0.3.0" }
 aes-gcm = "0.10"
 blake3 = { version = "1.8.7", default-features = false, features = ["std", "rayon"] }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "getrandom"] }
@@ -49,7 +52,6 @@ hkdf = { version = "0.12", default-features = false }
 memmap2 = "0.9"
 rand_core = { version = "0.6", default-features = false }
 rayon = "1.10"
-serde = { version = "1.0", features = ["derive"] }
 sha2 = { version = "0.10", default-features = false }
 toml = "0.8"
 x25519-dalek = { version = "2.0", default-features = false, features = ["static_secrets", "getrandom"] }

@@ -62,7 +62,7 @@ cargo build --release
 | 0x00 | store | yes | yes | yes |
 | 0x01 | LZ4 | yes | yes | yes (`lz4_flex`) |
 | 0x02 | ZSTD | yes (L1) | yes | yes (`ruzstd`) |
-| 0x03 | XZ/LZMA2 | no | yes | yes (`omnizip-lzma`) |
+| 0x03 | XZ/LZMA2 | yes (L6) | yes | yes (`omnizip-lzma`) |
 | 0x04 | Brotli | yes (q11) | yes | yes (`brotli`) |
 | 0x05 | DEFLATE | yes (L6) | yes | yes (`miniz_oxide`) |
 | 0x06 | Snappy | yes | yes | yes (`omnizip-snappy` → `snap`) |

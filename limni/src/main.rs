@@ -210,6 +210,9 @@ enum Command {
     Inspect {
         /// Path to the `.lim` image to inspect.
         image: PathBuf,
+        /// Emit machine-readable JSON instead of human text.
+        #[arg(long)]
+        json: bool,
     },
     /// Inspect a slab file: list drop records, codecs, and sizes.
     Slab {
@@ -382,7 +385,7 @@ fn run() -> Result<(), CliError> {
         } => rw_delete(&image, &path, profile),
         Command::Turnover { image, profile } => turnover_cmd(&image, &profile),
         Command::Diff { parent, child } => diff(&parent, &child),
-        Command::Inspect { image } => inspect(&image),
+        Command::Inspect { image, json } => inspect(&image, json),
         Command::Slab { slab } => slab_cmd(&slab),
         Command::Gc { image } => gc_cmd(&image),
         Command::History { image } => history_cmd(&image),
@@ -1428,7 +1431,7 @@ fn mount(image: &Path, mountpoint: &Path) -> Result<(), CliError> {
 /// Print a comprehensive overview of an image: manifest header, feature
 /// flags, metadata blob stats, slab stats, and per-class drop counts.
 #[allow(clippy::too_many_lines)]
-fn inspect(image: &Path) -> Result<(), CliError> {
+fn inspect(image: &Path, json: bool) -> Result<(), CliError> {
     let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
         path: image.to_path_buf(),
         source,
@@ -1443,20 +1446,42 @@ fn inspect(image: &Path) -> Result<(), CliError> {
     let _ = parse_feature_flags_section(&mut cursor).map_err(map_err)?;
     let meta_ref = parse_metadata_reference(&mut cursor).map_err(map_err)?;
     let slab_index = parse_slab_index(&mut cursor).map_err(map_err)?;
+    let history = parse_history(&mut cursor)
+        .map_err(map_err)
+        .unwrap_or_default();
 
-    println!("image: {}", image.display());
-    println!(
-        "  format versions: drop_store={} metadata={} manifest={}",
-        header.drop_store_version, header.metadata_version, header.manifest_version
-    );
-    println!(
-        "  metadata: {}",
-        if meta_ref.is_inlined() {
-            "inlined"
-        } else {
-            "external"
-        }
-    );
+    #[derive(serde::Serialize)]
+    struct SlabInfo {
+        index: usize,
+        drops: usize,
+        bytes_on_disk: u64,
+        plaintext_bytes: u64,
+        ratio: f64,
+        file: Option<std::path::PathBuf>,
+    }
+    let mut slab_infos: Vec<SlabInfo> = Vec::with_capacity(slab_index.entries.len());
+
+    if !json {
+        println!("image: {}", image.display());
+    }
+
+    if !json {
+        println!(
+            "  format versions: drop_store={} metadata={} manifest={}",
+            header.drop_store_version, header.metadata_version, header.manifest_version
+        );
+    }
+
+    if !json {
+        println!(
+            "  metadata: {}",
+            if meta_ref.is_inlined() {
+                "inlined"
+            } else {
+                "external"
+            }
+        );
+    }
 
     if meta_ref.is_inlined() {
         if let Some(blob_bytes) = &meta_ref.inline_metadata {
@@ -1466,25 +1491,33 @@ fn inspect(image: &Path) -> Result<(), CliError> {
                     let root = blob
                         .root_inode_number()
                         .map_or_else(|| "?".to_string(), |n| n.to_string());
-                    println!(
-                        "  metadata blob: {} inodes, {} dir nodes, root inode = {}",
-                        blob.inodes.len(),
-                        blob.dir_nodes.len(),
-                        root
-                    );
+                    if !json {
+                        println!(
+                            "  metadata blob: {} inodes, {} dir nodes, root inode = {}",
+                            blob.inodes.len(),
+                            blob.dir_nodes.len(),
+                            root
+                        );
+                    }
 
                     let files = blob.inodes.iter().filter(|i| i.is_regular()).count();
                     let dirs = blob.inodes.iter().filter(|i| i.is_directory()).count();
-                    println!("    files: {files}, directories: {dirs}");
+                    if !json {
+                        println!("    files: {files}, directories: {dirs}");
+                    }
                 }
                 Err(e) => {
-                    println!("  metadata blob: parse error: {e}");
+                    if !json {
+                        println!("  metadata blob: parse error: {e}");
+                    }
                 }
             }
         }
     }
 
-    println!("  slab index: {} entries", slab_index.len());
+    if !json {
+        println!("  slab index: {} entries", slab_index.len());
+    }
 
     // Try to load and inspect slabs
     for (i, entry) in slab_index.entries.iter().enumerate() {
@@ -1516,7 +1549,8 @@ fn inspect(image: &Path) -> Result<(), CliError> {
                         } else {
                             1.0
                         };
-                        println!(
+                        if !json {
+                            println!(
                                 "    slab[{}]: {} drops, {} bytes on disk, {} bytes plaintext, ratio {:.2}",
                                 i,
                                 view.drop_records().len(),
@@ -1524,20 +1558,199 @@ fn inspect(image: &Path) -> Result<(), CliError> {
                                 total_plaintext,
                                 ratio
                             );
+                        }
+
+                        slab_infos.push(SlabInfo {
+                            index: i,
+                            drops: view.drop_records().len(),
+                            bytes_on_disk: slab_bytes.len() as u64,
+                            plaintext_bytes: total_plaintext,
+                            ratio,
+                            file: Some(slab_path.clone()),
+                        });
                     }
                     Err(e) => {
-                        println!("    slab[{i}]: parse error: {e}");
+                        if !json {
+                            println!("    slab[{i}]: parse error: {e}");
+                        }
+
+                        slab_infos.push(SlabInfo {
+                            index: i,
+                            drops: 0,
+                            bytes_on_disk: slab_bytes.len() as u64,
+                            plaintext_bytes: 0,
+                            ratio: 1.0,
+                            file: None,
+                        });
                     }
                 },
                 Err(_) => {
-                    println!("    slab[{i}]: file not found: {}", slab_path.display());
+                    if !json {
+                        println!("    slab[{i}]: file not found: {}", slab_path.display());
+                    }
+
+                    slab_infos.push(SlabInfo {
+                        index: i,
+                        drops: 0,
+                        bytes_on_disk: 0,
+                        plaintext_bytes: 0,
+                        ratio: 1.0,
+                        file: None,
+                    });
                 }
             }
         }
     }
 
-    println!("  limni version: {VERSION}");
+    let chain_depth = history
+        .entries
+        .iter()
+        .filter(|e| e.op == HistoryOp::Delta)
+        .count();
+    let base_root = history
+        .entries
+        .iter()
+        .find(|e| e.op == HistoryOp::Delta)
+        .and_then(|e| e.inputs.first())
+        .map(|r| hex_encode(r.as_bytes()));
+
+    if json {
+        #[derive(serde::Serialize)]
+        struct Inspected {
+            image: std::path::PathBuf,
+            versions: Versions,
+            metadata: MetaInfo,
+            metadata_blob: Option<MetaBlob>,
+            slab_index_len: usize,
+            slabs: Vec<SlabInfo>,
+            history: Vec<serde_json::Value>,
+            chain_depth: usize,
+            base_root: Option<String>,
+            limni_version: &'static str,
+        }
+        #[derive(serde::Serialize)]
+        struct Versions {
+            drop_store: u16,
+            metadata: u16,
+            manifest: u16,
+        }
+        #[derive(serde::Serialize)]
+        struct MetaInfo {
+            inline: bool,
+        }
+        #[derive(serde::Serialize)]
+        struct MetaBlob {
+            inodes: usize,
+            dir_nodes: usize,
+            files: usize,
+            dirs: usize,
+            root_inode: Option<u64>,
+        }
+        let blob_info = if meta_ref.is_inlined() {
+            meta_ref
+                .inline_metadata
+                .as_ref()
+                .and_then(|bytes| {
+                    let mut c = ManifestCursor::new(bytes);
+                    parse_metadata_blob(&mut c).ok()
+                })
+                .map(|blob| {
+                    let files = blob.inodes.iter().filter(|i| i.is_regular()).count();
+                    let dirs = blob.inodes.iter().filter(|i| i.is_directory()).count();
+                    MetaBlob {
+                        inodes: blob.inodes.len(),
+                        dir_nodes: blob.dir_nodes.len(),
+                        files,
+                        dirs,
+                        root_inode: blob.root_inode_number(),
+                    }
+                })
+        } else {
+            None
+        };
+        let history_entries: Vec<serde_json::Value> = history
+            .entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "op": history_op_name(e.op),
+                    "timestamp_ns": e.timestamp_ns,
+                    "inputs": e.inputs.iter().map(|r| hex_encode(r.as_bytes())).collect::<Vec<_>>(),
+                    "params_len": e.params.len(),
+                })
+            })
+            .collect();
+        let out = Inspected {
+            image: image.to_path_buf(),
+            versions: Versions {
+                drop_store: header.drop_store_version,
+                metadata: header.metadata_version,
+                manifest: header.manifest_version,
+            },
+            metadata: MetaInfo {
+                inline: meta_ref.is_inlined(),
+            },
+            metadata_blob: blob_info,
+            slab_index_len: slab_index.entries.len(),
+            slabs: slab_infos,
+            history: history_entries,
+            chain_depth,
+            base_root,
+            limni_version: VERSION,
+        };
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&out).map_err(|e| {
+                CliError::FormatFailed {
+                    path: image.to_path_buf(),
+                    source: CoreError::Corrupt {
+                        reason: format!("json: {e}"),
+                    },
+                }
+            })?
+        );
+    } else {
+        if history.is_empty() {
+            if !json {
+                println!("  history: <empty> (standalone image)");
+            }
+        } else {
+            if !json {
+                println!(
+                    "  history: {} entries, chain depth = {} (Delta ops)",
+                    history.len(),
+                    chain_depth
+                );
+            }
+
+            match &base_root {
+                Some(h) => println!("  base root: {h}"),
+                None => println!("  base root: <none>"),
+            }
+        }
+        if !json {
+            println!("  limni version: {VERSION}");
+        }
+    }
     Ok(())
+}
+
+fn history_op_name(op: HistoryOp) -> &'static str {
+    match op {
+        HistoryOp::Build => "build",
+        HistoryOp::Delta => "delta",
+        HistoryOp::Flatten => "flatten",
+        HistoryOp::Turnover => "turnover",
+        HistoryOp::Deepen => "deepen",
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
 }
 
 /// Print an inode's metadata.
@@ -3163,8 +3376,8 @@ mod tests {
         let extracted_rep = std::fs::read(dest.join("repeated.txt")).expect("read extracted rep");
         assert_eq!(orig_rep, extracted_rep, "repeated.txt round-trip mismatch");
 
-        // Inspect.
-        inspect(&img).expect("inspect succeeds");
+        // Inspect (human-readable).
+        inspect(&img, false).expect("inspect succeeds");
 
         // History.
         history_cmd(&img).expect("history succeeds");

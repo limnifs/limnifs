@@ -6,6 +6,41 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+## [0.3.0] — 2026-08-26
+
+Minor bump: the v0.2.65 image format is INCOMPATIBLE with ≤ 0.2.64
+(single-format decision — tebako asked for the version to say so).
+Old images must be re-packed once.
+
+### Added
+
+- `limni inspect --json` — machine-readable image overview with
+  layered-aware fields (`history`, `chain_depth`, `base_root`).
+- Content-derived sidecar names (`slab-<ordinal>-<hash8>.bin`,
+  `metadata-<hash8>.bin`): RW commits never overwrite files a live
+  manifest references.
+- ZSTD dictionary ratio measurement: 45.4% smaller images on a
+  2000 × 16 KiB structured-text workload (target was ≥ 20%).
+
+### Fixed
+
+- **RW concurrent-reader safety (3 real races, found by the new
+  concurrent commit test):** readers could delete a live writer's
+  staging directory; slab/metadata sidecars were overwritten in
+  place across commits (torn reads for already-open readers); a
+  stale WAL could be replayed against a newer manifest, corrupting
+  the inode map. Fixes: unique staging dirs + age-based stale
+  cleanup, content-derived sidecar names, WAL generation tags, and
+  `read_file` now serves WAL-replayed pending content.
+
+### Tests
+
+- `extract_file` vs `limni extract` strict differential
+  (byte-identical trees); FUSE windowed-read smoke (8 KiB windows
+  over a 3 MiB multi-drop file through the exact `FuseVfs::read`
+  path); concurrent-reader commit safety; dictionary ratio gate.
+
+
 
 ### Added
 

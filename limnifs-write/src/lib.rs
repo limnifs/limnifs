@@ -1789,7 +1789,18 @@ impl WriteContext {
             .min(limnifs_core::metadata_reference::DEFAULT_INLINE_METADATA_MAX_BYTES as usize);
         let (metadata_sidecar, inline_data, metadata_locator_count) =
             if on_wire_blob.len() > externalize_at {
-                let locator = "file:metadata.bin".to_owned();
+                // Content-derived sidecar name: an RW commit NEVER
+                // overwrites the metadata file an already-open
+                // reader's manifest references (same name, different
+                // bytes = torn blob). Identical trees reuse the same
+                // name; divergent generations accumulate until
+                // turnover / gc reclaims them.
+                let h = hash_section(&on_wire_blob);
+                let mut h8 = String::with_capacity(8);
+                for b in &h[..4] {
+                    h8.push_str(&format!("{b:02x}"));
+                }
+                let locator = format!("file:metadata-{h8}.bin");
                 let sidecar = MetadataSidecar {
                     bytes: on_wire_blob.clone(),
                     locator,
@@ -2169,7 +2180,14 @@ fn encode_slab(ordinal: u64, drops: &[&PendingDrop]) -> SlabArtifact {
     slab_bytes.push(0x00);
     slab_bytes.extend_from_slice(&slab_content);
 
-    let locator = format!("file:slab-{ordinal}.bin");
+    // Content-derived slab name — see the metadata sidecar comment
+    // in `assemble`: RW commits must not overwrite slabs that live
+    // manifests still reference.
+    let mut h8 = String::with_capacity(8);
+    for b in &slab_id.hash[..4] {
+        h8.push_str(&format!("{b:02x}"));
+    }
+    let locator = format!("file:slab-{ordinal}-{h8}.bin");
 
     SlabArtifact {
         id: slab_id,

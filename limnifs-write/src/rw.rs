@@ -58,6 +58,13 @@ pub struct RwImage {
     pending_history: Vec<HistoryEntry>,
     /// Next available inode number.
     next_inode: u64,
+    /// BLAKE3 of the on-disk manifest bytes this handle's WAL entries
+    /// are based on. A WAL whose tag no longer matches the manifest
+    /// is stale (its commit completed) and is discarded instead of
+    /// replayed — replaying it would resurrect a pending inode number
+    /// that the committed blob never had (torn reads for concurrent
+    /// openers in the swap→WAL-discard window).
+    base_manifest_hash: Option<[u8; 32]>,
 }
 
 /// State populated by `RwImage::open` so subsequent `commit` /
@@ -151,6 +158,7 @@ impl RwImage {
 
         let mut image = Self {
             manifest_path: path.to_path_buf(),
+            base_manifest_hash: Some(limnifs_core::hash_section(&manifest_bytes)),
             config,
             state: Some(OpenState {
                 blob,
@@ -179,6 +187,7 @@ impl RwImage {
             pending_files: HashMap::new(),
             pending_history: Vec::new(),
             next_inode: 1,
+            base_manifest_hash: None,
         }
     }
 
@@ -251,6 +260,13 @@ impl RwImage {
             WriteError::Io(std::io::Error::other("read_file: image was not opened"))
         })?;
         let key = normalize_path(path);
+        // Pending content wins: after a WAL replay (crash recovery, or
+        // a reader that opened while a commit was in flight) the
+        // inode map carries pending inode numbers the committed blob
+        // does not have — their bytes live in `pending_files`.
+        if let Some(data) = self.pending_files.get(&key) {
+            return Ok(data.clone());
+        }
         let inode_num = *self.inode_map.get(&key).ok_or_else(|| {
             WriteError::Io(std::io::Error::other(format!("path not found: {path}")))
         })?;
@@ -315,7 +331,7 @@ impl RwImage {
     ///
     /// # Errors
     /// Returns [`WriteError`] on I/O or serialization failure.
-    pub fn commit(&self) -> Result<crate::WriteArtifact, WriteError> {
+    pub fn commit(&mut self) -> Result<crate::WriteArtifact, WriteError> {
         // Write the WAL first so a crash mid-swap preserves pending state.
         self.write_wal()?;
         let staging = self.staging_dir();
@@ -323,8 +339,11 @@ impl RwImage {
         let artifact = crate::write_directory_with_config(&staging, &self.config)?;
         let _ = std::fs::remove_dir_all(&staging);
         self.write_artifact(&artifact)?;
-        // Successful swap — discard the WAL.
+        // Successful swap — discard the WAL and re-tag this handle to
+        // the new manifest so a subsequent update's WAL carries the
+        // right base generation.
         let _ = std::fs::remove_file(self.wal_path());
+        self.base_manifest_hash = Some(limnifs_core::hash_section(&artifact.bytes));
         Ok(artifact)
     }
 
@@ -435,12 +454,22 @@ impl RwImage {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
+        // Unique staging name: a concurrent RwImage::open must never
+        // delete a LIVE writer's staging (that was a real race —
+        // readers ran cleanup_stale_swap_dir on `<name>.new` while a
+        // commit was mid-flight). Age-based stale cleanup in open()
+        // only touches directories older than STALE_SWAP_AGE.
         let staging = parent.join(format!(
-            "{}.new",
+            "{}.new-{}-{}",
             self.manifest_path
                 .file_name()
                 .and_then(std::ffi::OsStr::to_str)
                 .unwrap_or("image.lim"),
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
         ));
         let _ = std::fs::remove_dir_all(&staging);
         std::fs::create_dir_all(&staging).map_err(WriteError::Io)?;
@@ -456,6 +485,8 @@ impl RwImage {
 
         let mut slab_names: Vec<std::ffi::OsString> = Vec::new();
         for slab in &artifact.slabs {
+            // Locators are content-derived in the writer — a commit
+            // never overwrites a slab file a live manifest references.
             let name = sidecar_name(&slab.locator)?;
             let os_name = std::ffi::OsString::from(name);
             std::fs::write(staging.join(&os_name), &slab.bytes).map_err(WriteError::Io)?;
@@ -536,8 +567,9 @@ impl RwImage {
     /// mid-swap can be recovered on next `open`.
     fn write_wal(&self) -> Result<(), WriteError> {
         let mut buf: Vec<u8> = Vec::new();
-        // Header: magic + version.
+        // Header: magic + base-manifest tag.
         buf.extend_from_slice(b"LIMWAL\0\0");
+        buf.extend_from_slice(&self.base_manifest_hash.unwrap_or([0u8; 32]));
         // pending_files.
         buf.extend_from_slice(&(self.pending_files.len() as u32).to_le_bytes());
         for (path, data) in &self.pending_files {
@@ -579,13 +611,26 @@ impl RwImage {
         let Ok(bytes) = std::fs::read(&wal_path) else {
             return 0;
         };
-        if bytes.len() < 8 || &bytes[..8] != b"LIMWAL\0\0" {
+        if bytes.len() < 40 || &bytes[..8] != b"LIMWAL\0\0" {
+            let _ = std::fs::remove_file(&wal_path);
+            return 0;
+        }
+        // Stale-WAL gate: the WAL belongs to the manifest generation
+        // recorded in its tag. If the on-disk manifest differs, the
+        // WAL's commit already completed — replaying would corrupt
+        // the inode map (torn reads). Discard.
+        let mut tag = [0u8; 32];
+        tag.copy_from_slice(&bytes[8..40]);
+        let current = std::fs::read(&self.manifest_path)
+            .map(|b| limnifs_core::hash_section(&b))
+            .ok();
+        if current != Some(tag) {
             let _ = std::fs::remove_file(&wal_path);
             return 0;
         }
         let mut cursor = WalCursor {
             bytes: &bytes,
-            pos: 8,
+            pos: 40,
         };
         let files_count = match cursor.read_u32_le() {
             Ok(n) => n as usize,
@@ -768,14 +813,47 @@ fn core_to_io(e: limnifs_core::CoreError) -> WriteError {
 /// the directory exists but cannot be removed (e.g. permissions),
 /// the next commit's `write_artifact` will fail with a clearer
 /// error when it tries to recreate the directory.
+/// Staging directories older than this are considered abandoned
+/// (crashed commits) and removed by `RwImage::open`. Live commits
+/// finish in milliseconds, so a live writer's staging is never
+/// old enough to be collected.
+const STALE_SWAP_AGE: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn cleanup_stale_swap_dir(path: &Path) {
     let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
         return;
     };
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let stale = parent.join(format!("{name}.new"));
-    if stale.is_dir() {
-        let _ = std::fs::remove_dir_all(&stale);
+    // Legacy exact name plus unique-suffixed live scheme; only remove
+    // entries older than STALE_SWAP_AGE so a concurrent commit's
+    // staging is never touched.
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let Some(fname) = file_name.to_str() else {
+            continue;
+        };
+        if fname == format!("{name}.new") {
+            // Legacy staging (pre unique-suffix): no live writer can
+            // be using this name anymore.
+            let _ = std::fs::remove_dir_all(entry.path());
+            continue;
+        }
+        if let Some(rest) = fname.strip_prefix(&format!("{name}.new-")) {
+            // Unique-suffix staging: only remove when abandoned.
+            let mtime_old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > STALE_SWAP_AGE);
+            if mtime_old {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+            let _ = rest;
+        }
     }
 }
 
@@ -1021,6 +1099,85 @@ mod tests {
         let reread = RwImage::open(&manifest, profile::balanced()).expect("reopen");
         assert_eq!(reread.read_file("a.txt").expect("read a"), b"alpha");
         assert_eq!(reread.read_file("b.txt").expect("read b"), b"beta");
+    }
+
+    #[test]
+    fn concurrent_readers_never_observe_torn_state_during_commit() {
+        // IMPL-4 (TODO.remaining): a second thread opening the image
+        // during a commit must never observe an inconsistent snapshot
+        // — either the old complete image or the new complete one.
+        // The write_artifact ordering (sidecar → slabs → manifest)
+        // plus per-file rename(2) atomicity guarantees this.
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let config = profile::balanced();
+        let manifest = write_initial(&[("a.txt", b"gen0")], &config);
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let opens = Arc::new(AtomicUsize::new(0));
+        let torn = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..4 {
+            let m = manifest.clone();
+            let stop = Arc::clone(&stop);
+            let opens = Arc::clone(&opens);
+            let torn = Arc::clone(&torn);
+            handles.push(std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    match RwImage::open(&m, profile::balanced()) {
+                        Ok(image) => {
+                            opens.fetch_add(1, Ordering::Relaxed);
+                            // Either generation is valid; anything else is torn.
+                            match image.read_file("a.txt") {
+                                Ok(bytes) if bytes == b"gen0" => {}
+                                Ok(bytes) if bytes == b"genN" => {}
+                                Ok(bytes) => {
+                                    eprintln!("torn read: {:?}", String::from_utf8_lossy(&bytes));
+                                    torn.fetch_add(1, Ordering::Relaxed);
+                                }
+                                Err(e) => {
+                                    eprintln!("torn open->read: {e}");
+                                    torn.fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("torn open: {e}");
+                            torn.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+            }));
+        }
+
+        // Commit several generations while readers loop.
+        {
+            let mut image = RwImage::open(&manifest, profile::balanced()).expect("open writer");
+            image.update_file("a.txt", b"genN").expect("update");
+            image.commit().expect("commit during readers");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        {
+            let mut image = RwImage::open(&manifest, profile::balanced()).expect("reopen");
+            image.update_file("a.txt", b"genN").expect("update 2");
+            image.commit().expect("commit 2");
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        for h in handles {
+            h.join().expect("reader thread");
+        }
+        assert_eq!(
+            torn.load(Ordering::Relaxed),
+            0,
+            "no reader saw a torn snapshot"
+        );
+        assert!(
+            opens.load(Ordering::Relaxed) > 0,
+            "readers actually opened the image"
+        );
     }
 
     #[test]
