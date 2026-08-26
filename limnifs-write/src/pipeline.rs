@@ -291,8 +291,14 @@ fn process_whole_file_drop_inline(
         }
     }
     let file_len = u64::try_from(data.len()).unwrap_or(u64::MAX);
-    let (best_compressed, flags) =
-        crate::seekable_or_monolithic(best_codec, data, best_compressed, tunables, seekable_drops);
+    let (best_compressed, flags) = crate::seekable_or_monolithic(
+        best_codec,
+        data,
+        best_compressed,
+        tunables,
+        seekable_drops,
+        limnifs_core::seekable::SEEKABLE_EMISSION_THRESHOLD,
+    );
     let _ = pf;
     Ok(ChunkedFileResult {
         drops: vec![(drop_id, data.to_vec(), best_compressed, best_codec, flags)],

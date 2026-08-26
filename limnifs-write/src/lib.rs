@@ -27,6 +27,7 @@ pub mod config;
 pub mod delta_builder;
 pub mod dictionary;
 pub mod file_categorizer;
+use file_categorizer::FileCategorizer;
 pub mod flatten;
 #[cfg(feature = "pipeline-parallelism")]
 pub mod pipeline;
@@ -553,6 +554,13 @@ fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<
                 inline_threshold,
                 max_drop_size,
                 seekable_drops,
+                config.categorizers.as_slice(),
+                &|name| {
+                    config
+                        .codec_registry()
+                        .ok()
+                        .and_then(|r| r.lookup_by_name(name))
+                },
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -683,6 +691,13 @@ fn write_directory_streaming(
                     inline_threshold,
                     max_drop_size,
                     seekable_drops,
+                    config.categorizers.as_slice(),
+                    &|name| {
+                        config
+                            .codec_registry()
+                            .ok()
+                            .and_then(|r| r.lookup_by_name(name))
+                    },
                 );
                 (i, pf, r)
             })
@@ -792,17 +807,27 @@ pub(crate) fn seekable_or_monolithic(
     compressed: std::sync::Arc<[u8]>,
     tunables: &limnifs_core::codec::CodecTunables,
     seekable_drops: bool,
+    threshold: usize,
 ) -> (std::sync::Arc<[u8]>, u8) {
     use limnifs_core::seekable::{
-        encode_seekable, is_seekable_codec, DROP_FLAG_SEEKABLE, SEEKABLE_EMISSION_THRESHOLD,
+        encode_seekable, is_seekable_codec, DROP_FLAG_SEEKABLE as FLAG, SEEKABLE_EMISSION_THRESHOLD,
     };
-    if seekable_drops && plaintext.len() > SEEKABLE_EMISSION_THRESHOLD && is_seekable_codec(codec) {
+    if seekable_drops && plaintext.len() > threshold && is_seekable_codec(codec) {
         if let Ok(container) = encode_seekable(codec, plaintext, tunables) {
-            return (container.into(), DROP_FLAG_SEEKABLE);
+            return (container.into(), FLAG);
         }
     }
     (compressed, 0)
 }
+
+/// Per-chunk emission threshold. FastCDC chunks are bounded by
+/// `max_chunk_size` (default 1 MiB) so the whole-file 1 MiB
+/// threshold can never fire per chunk — limnifs#195. Chunk drops as
+/// small as one frame (256 KiB) still gain the covering-frames
+/// decode bound: an 8 KiB window inside a 256 KiB drop decodes one
+/// 8 KiB-ish frame instead of the whole drop.
+pub(crate) const SEEKABLE_CHUNK_EMISSION_THRESHOLD: usize =
+    limnifs_core::seekable::SEEKABLE_FRAME_SIZE;
 
 fn process_whole_file_drop(
     pf: &PendingFile,
@@ -876,8 +901,14 @@ fn process_whole_file_drop(
         }
     }
 
-    let (best_compressed, flags) =
-        seekable_or_monolithic(best_codec, data, best_compressed, tunables, seekable_drops);
+    let (best_compressed, flags) = seekable_or_monolithic(
+        best_codec,
+        data,
+        best_compressed,
+        tunables,
+        seekable_drops,
+        limnifs_core::seekable::SEEKABLE_EMISSION_THRESHOLD,
+    );
     Ok(ChunkedFileResult {
         drops: vec![(drop_id, data.to_vec(), best_compressed, best_codec, flags)],
         slices: vec![PendingSlice {
@@ -995,6 +1026,8 @@ fn process_file(
     inline_threshold: usize,
     max_drop_size: usize,
     seekable_drops: bool,
+    categorizer_config: &[crate::config::CategorizerConfig],
+    codec_name_resolver: &dyn Fn(&str) -> Option<u8>,
 ) -> Result<ChunkedFileResult, WriteError> {
     // For files above MMAP_READ_THRESHOLD, map them rather than reading
     // into a Vec via std::fs::read. Pages load on demand from the
@@ -1040,8 +1073,14 @@ fn process_file(
                 Ok(c) if c.len() < data.len() => (preferred_codec, c.into()),
                 _ => (limnifs_core::codec::CODEC_STORE, data.to_vec().into()),
             };
-        let (compressed, flags) =
-            seekable_or_monolithic(codec_id, &data, compressed, tunables, seekable_drops);
+        let (compressed, flags) = seekable_or_monolithic(
+            codec_id,
+            &data,
+            compressed,
+            tunables,
+            seekable_drops,
+            SEEKABLE_CHUNK_EMISSION_THRESHOLD,
+        );
         return Ok(ChunkedFileResult {
             drops: vec![(drop_id, data, compressed, codec_id, flags)],
             slices: vec![PendingSlice {
@@ -1053,6 +1092,27 @@ fn process_file(
     }
 
     if use_categorizers {
+        // Config entries FIRST (limnifs#196): the user's
+        // `[[categorizers]]` rules override the built-ins.
+        let config_cat = file_categorizer::ConfigCategorizer::new(categorizer_config.to_vec());
+        if let Some(cat) = config_cat.categorize(&pf.path, &data) {
+            if let Some(codec_id) = file_categorizer::resolve_config_categorization(
+                &cat,
+                categorizer_config,
+                codec_name_resolver,
+            ) {
+                let within_cap = max_drop_size == 0 || file_len <= max_drop_size;
+                let needs_whole_file = matches!(
+                    codec_id,
+                    limnifs_core::codec::CODEC_FLAC | limnifs_core::codec::CODEC_RICEPP
+                );
+                if within_cap && (needs_whole_file || file_len <= WHOLE_FILE_MAX_SIZE) {
+                    let mut cat = cat;
+                    cat.codec_id = codec_id;
+                    return process_whole_file_drop(pf, &data, cat, tunables, seekable_drops);
+                }
+            }
+        }
         if let Some(cat) = file_categorizer::default_registry().categorize(&pf.path, &data) {
             let needs_whole_file = matches!(
                 cat.codec_id,
@@ -1146,7 +1206,20 @@ fn process_file(
                 });
                 new
             };
-            (*drop_id, chunk.to_vec(), compressed, codec_id, 0)
+            // limnifs#195: chunk drops go through the same
+            // seekable-container emission as whole-file drops, with a
+            // chunk-appropriate threshold (chunks are bounded by
+            // max_chunk_size, so the whole-file 1 MiB gate can never
+            // fire here).
+            let (compressed, flags) = seekable_or_monolithic(
+                codec_id,
+                chunk,
+                compressed,
+                tunables,
+                seekable_drops,
+                SEEKABLE_CHUNK_EMISSION_THRESHOLD,
+            );
+            (*drop_id, chunk.to_vec(), compressed, codec_id, flags)
         })
         .collect();
 

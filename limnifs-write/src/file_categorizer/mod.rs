@@ -124,3 +124,108 @@ pub trait FileCategorizer: Sync + Send {
         None
     }
 }
+
+/// A `FileCategorizer` built from a slice of `CategorizerConfig`
+/// entries (the user-facing TOML surface). Each entry is matched
+/// by extension (lowercased file suffix) or by the leading
+/// `magic_bytes`; the first match wins. Used alongside the static
+/// built-in registry so users can route `.bin` / `.dat` /
+/// extensionless executables without recompiling. Fixes
+/// `limnifs#196`.
+#[derive(Debug)]
+pub struct ConfigCategorizer {
+    entries: Vec<super::config::CategorizerConfig>,
+}
+
+impl ConfigCategorizer {
+    #[must_use]
+    pub fn new(entries: Vec<super::config::CategorizerConfig>) -> Self {
+        Self { entries }
+    }
+}
+
+impl FileCategorizer for ConfigCategorizer {
+    fn name(&self) -> &'static str {
+        "config"
+    }
+    fn categories(&self) -> &'static [&'static str] {
+        &["config"]
+    }
+    fn categorize(&self, path: &Path, data: &[u8]) -> Option<Categorization> {
+        use super::config::CategorizerConfig;
+        // Extension match (lowercased suffix, no leading dot).
+        let ext_lower: Option<String> = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase());
+        for entry in &self.entries {
+            if !entry.enabled {
+                continue;
+            }
+            let by_ext = ext_lower
+                .as_deref()
+                .is_some_and(|e| entry.extensions.iter().any(|x| x == e));
+            let by_magic = !entry.magic_bytes.is_empty() && data.starts_with(&entry.magic_bytes);
+            if !by_ext && !by_magic {
+                continue;
+            }
+            if let Some(max) = entry.max_size {
+                if u64::try_from(data.len()).unwrap_or(u64::MAX) > u64::from(max) {
+                    continue;
+                }
+            }
+            // Resolve the codec by name from the writer's registry.
+            // (The caller — process_file — does the resolution; here
+            // we tag a flag and the writer handles the lookup via
+            // a separate helper. See `resolve_codec`.)
+            return Some(Categorization {
+                codec_id: 0, // sentinel; resolved by caller
+                codec_params: encode_config_ref(entry),
+                category: "config",
+            });
+        }
+        None
+    }
+}
+
+fn encode_config_ref(entry: &super::config::CategorizerConfig) -> Vec<u8> {
+    // Small length-prefixed encoding: u32 name_len, name bytes,
+    // u8 enabled. The caller uses the entry's `name` to look up
+    // the codec — the Vec is just a handle to identify the
+    // matched CategorizerConfig.
+    let mut out = Vec::with_capacity(4 + entry.name.len() + 1);
+    let len = u32::try_from(entry.name.len()).unwrap_or(0);
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(entry.name.as_bytes());
+    out.push(u8::from(entry.enabled));
+    out
+}
+
+/// Resolve a `Categorization::category == "config"` back to the
+/// original `CategorizerConfig` and its codec id via the writer's
+/// `WriteConfig::codec_registry`. Returns the codec id and the
+/// raw `codec_params` from the config entry (not the encoded
+/// handle).
+pub fn resolve_config_categorization(
+    cat: &Categorization,
+    entries: &[super::config::CategorizerConfig],
+    codec_resolver: &dyn Fn(&str) -> Option<u8>,
+) -> Option<u8> {
+    if cat.category != "config" {
+        return None;
+    }
+    if cat.codec_params.len() < 5 {
+        return None;
+    }
+    let name_len = u32::from_le_bytes(cat.codec_params[..4].try_into().ok()?) as usize;
+    let rest = &cat.codec_params[4..];
+    if rest.len() < name_len + 1 {
+        return None;
+    }
+    let name = std::str::from_utf8(&rest[..name_len]).ok()?;
+    let entry = entries.iter().find(|c| c.name == name)?;
+    if !entry.enabled {
+        return None;
+    }
+    codec_resolver(&entry.codec)
+}
