@@ -72,8 +72,25 @@ code never changes (open/closed via [`CodecRegistry`]).
 
 ## Performance
 
-Read path (CI-gated canaries, `limnifs-bench readperf`): 2200 MB/s
-sequential extract, 7800 MB/s warm 8 KiB random windows.
+Read path, v0.2.65 (Apple M-series, release build):
+
+- **CI-gated canaries** (`limnifs-bench readperf`, hard gates
+  windowed ≥ 200 MB/s and extract ≥ 100 MB/s): **2269 MB/s**
+  sequential extract, **7793 MB/s** warm 8 KiB random windows.
+- **Cold random reads** (`limnifs-bench readcompare`, same 19.5 MiB
+  drop through 8 KiB windows — monolithic vs seekable layout):
+
+| metric | monolithic | seekable | delta |
+|---|---:|---:|---:|
+| first 8 KiB window | 58.3 ms | 0.60 ms | **98x** |
+| cold windowed | 0.1 MB/s | 11.4 MB/s | **83x** |
+| warm windowed | 9099 MB/s | 6383 MB/s | 0.70x |
+| sequential extract | 336 MB/s | 368 MB/s | 1.10x |
+| image size | 14.52 MiB | 14.49 MiB | 1.00x |
+
+A cold window decodes 1.03 × 256 KiB frames, never the whole drop —
+the failure mode behind limnifs#192 (~48 GiB of wasted decode) is
+gone by construction.
 
 Benchmarked against DwarFS 0.15.6 on a 440 MB text corpus:
 
