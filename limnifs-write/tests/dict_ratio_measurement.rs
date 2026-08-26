@@ -58,7 +58,7 @@ fn zstd_dictionary_improves_tiny_text_file_ratio() {
     let dict = pack(&src, true);
     let input: u64 = std::fs::read_dir(&src)
         .expect("list")
-        .map(|e| e.map(|e| e.metadata().map_or(0, |m| m.len())).unwrap_or(0))
+        .map(|e| e.map_or(0, |e| e.metadata().map_or(0, |m| m.len())))
         .sum::<u64>();
 
     #[allow(clippy::cast_precision_loss)]
