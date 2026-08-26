@@ -32,3 +32,24 @@ jobs:
   rust:
     name: Rust matrix
     uses: limnifs/.github/.github/workflows/rust-ci.yml@main
+
+  # Native Windows build check. The Linux+macOS matrices above do not
+  # compile Windows-only cfg branches; v0.3.2 shipped a broken Windows
+  # build (unix-only memmap2::Advice) through 14 green PR checks
+  # because only the release workflow's 7-platform matrix caught it —
+  # after crates.io publish had already happened. This job gates the
+  # same class of break at PR time.
+  windows:
+    name: Windows check
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-check
+      - name: cargo check (all targets, all features)
+        run: cargo check --workspace --all-features --all-targets
