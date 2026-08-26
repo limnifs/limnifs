@@ -77,7 +77,7 @@ fn v2_image_round_trips_and_cold_windows_decode_one_frame() {
     // container. The small file stays inline, so the image mixes
     // seekable + inline content.
     let big = xorshift_compressible(19 * 1024 * 1024 + 512 * 1024); // 19.5 MiB
-    let big_len = u64::try_from(big.len()).expect("fits u64");
+    let big_len = big.len();
     let src = scratch("v2");
     std::fs::write(src.join("big.bin"), &big).expect("write big");
     std::fs::write(src.join("small.txt"), b"tiny inline payload").expect("write small");
@@ -120,7 +120,7 @@ fn v2_image_round_trips_and_cold_windows_decode_one_frame() {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
-        let off = state % (big_len - 8192);
+        let off = state % (big_len as u64 - 8192);
         let before = seekable::frames_decoded();
         let n = file.read_at(off, &mut window).expect("read_at");
         let touched = seekable::frames_decoded() - before;
