@@ -58,20 +58,40 @@ fn build_slab() -> SlabFixture {
     slab.push(0x00);
     // record 1: seekable
     slab.extend_from_slice(&seekable_id);
-    slab.extend_from_slice(&(seekable_pt.len() as u32).to_le_bytes());
+    slab.extend_from_slice(
+        &u32::try_from(seekable_pt.len())
+            .expect("fits u32")
+            .to_le_bytes(),
+    );
     slab.extend_from_slice(&[codec::CODEC_ZSTD, 0x00, 0x00]);
     slab.push(0x00);
     slab.extend_from_slice(&0u32.to_le_bytes());
-    slab.extend_from_slice(&(container.len() as u32).to_le_bytes());
+    slab.extend_from_slice(
+        &u32::try_from(container.len())
+            .expect("fits u32")
+            .to_le_bytes(),
+    );
     slab.push(NO_DICT);
     slab.push(DROP_FLAG_SEEKABLE);
     // record 2: plain
     slab.extend_from_slice(&plain_id);
-    slab.extend_from_slice(&(plain_pt.len() as u32).to_le_bytes());
+    slab.extend_from_slice(
+        &u32::try_from(plain_pt.len())
+            .expect("fits u32")
+            .to_le_bytes(),
+    );
     slab.extend_from_slice(&[codec::CODEC_LZ4, 0x00, 0x00]);
     slab.push(0x00);
-    slab.extend_from_slice(&(container.len() as u32).to_le_bytes());
-    slab.extend_from_slice(&(plain_comp.len() as u32).to_le_bytes());
+    slab.extend_from_slice(
+        &u32::try_from(container.len())
+            .expect("fits u32")
+            .to_le_bytes(),
+    );
+    slab.extend_from_slice(
+        &u32::try_from(plain_comp.len())
+            .expect("fits u32")
+            .to_le_bytes(),
+    );
     slab.push(NO_DICT);
     slab.push(0x00);
     // window
@@ -113,7 +133,8 @@ fn slab_full_and_ranged_decode_identity() {
             .plaintext_range(&f.seekable_id, off, len)
             .expect("drop")
             .expect("range");
-        assert_eq!(r, f.seekable_pt[off as usize..off as usize + len]);
+        let off = usize::try_from(off).expect("fits usize");
+        assert_eq!(r, f.seekable_pt[off..off + len]);
     }
 }
 

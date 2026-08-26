@@ -77,7 +77,7 @@ fn v2_image_round_trips_and_cold_windows_decode_one_frame() {
     // container. The small file stays inline, so the image mixes
     // seekable + inline content.
     let big = xorshift_compressible(19 * 1024 * 1024 + 512 * 1024); // 19.5 MiB
-    let big_len = big.len();
+    let big_len = u64::try_from(big.len()).expect("fits u64");
     let src = scratch("v2");
     std::fs::write(src.join("big.bin"), &big).expect("write big");
     std::fs::write(src.join("small.txt"), b"tiny inline payload").expect("write small");
@@ -120,11 +120,12 @@ fn v2_image_round_trips_and_cold_windows_decode_one_frame() {
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
-        let off = (state % (big_len as u64 - 8192)) as usize;
+        let off = state % (big_len - 8192);
         let before = seekable::frames_decoded();
-        let n = file.read_at(off as u64, &mut window).expect("read_at");
+        let n = file.read_at(off, &mut window).expect("read_at");
         let touched = seekable::frames_decoded() - before;
         total_frames += touched;
+        let off = usize::try_from(off).expect("off fits usize");
         assert_eq!(&window[..n], &big[off..off + n], "off={off}");
         assert!(
             touched <= 1,
@@ -159,13 +160,21 @@ fn pre_frozen_layout_slabs_fail_closed() {
     slab.push(0x00);
     slab.push(0x00);
     slab.extend_from_slice(&drop_id);
-    slab.extend_from_slice(&(plaintext.len() as u32).to_le_bytes());
+    slab.extend_from_slice(
+        &u32::try_from(plaintext.len())
+            .expect("fits u32")
+            .to_le_bytes(),
+    );
     slab.push(limnifs_core::codec::CODEC_LZ4);
     slab.push(0x00);
     slab.push(0x00);
     slab.push(0x00);
     slab.extend_from_slice(&0u32.to_le_bytes());
-    slab.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+    slab.extend_from_slice(
+        &u32::try_from(compressed.len())
+            .expect("fits u32")
+            .to_le_bytes(),
+    );
     slab.push(limnifs_core::drop_record::NO_DICT);
     slab.extend_from_slice(&compressed);
 
@@ -193,7 +202,8 @@ fn frame_cache_makes_repeat_windows_free() {
     let n = file.read_at(frame_base, &mut window).expect("first read");
     assert_eq!(
         &window[..n],
-        &big[frame_base as usize..frame_base as usize + n]
+        &big[usize::try_from(frame_base).expect("fits usize")
+            ..usize::try_from(frame_base + n as u64).expect("fits usize")]
     );
     let first_cost = seekable::frames_decoded() - before;
     assert!(first_cost >= 1, "first window must decode its frame");
@@ -206,7 +216,8 @@ fn frame_cache_makes_repeat_windows_free() {
             .expect("repeat read");
         assert_eq!(
             &window[..n],
-            &big[(frame_base + delta) as usize..(frame_base + delta) as usize + n]
+            &big[usize::try_from(frame_base + delta).expect("fits usize")
+                ..usize::try_from(frame_base + delta + n as u64).expect("fits usize")]
         );
     }
     let repeat_cost = seekable::frames_decoded() - before;

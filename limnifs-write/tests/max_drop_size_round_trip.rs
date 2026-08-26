@@ -28,7 +28,7 @@ fn csv_fixture(bytes: usize) -> Vec<u8> {
             "{i},{:016x}{:016x},{:.3},active\n",
             next(),
             next(),
-            (i % 4096) as f32 / 7.0
+            f32::from((i % 4096) as u16) / 7.0
         );
         out.extend_from_slice(row.as_bytes());
         i += 1;
@@ -176,7 +176,9 @@ fn chunking_config_changes_emitted_chunk_sizes() {
     // validated but never applied — the writer hardcoded
     // FastCDC::default(). It must now be honoured.
     let payload: Vec<u8> = (0..3 * 1024 * 1024)
-        .map(|i: usize| ((i / 97) % 256) as u8 ^ ((i % 251) as u8))
+        .map(|i: usize| {
+            u8::try_from(i / 97 % 256).expect("fits u8") ^ u8::try_from(i % 251).expect("fits u8")
+        })
         .collect();
     let src = scratch("chunkcfg");
     std::fs::write(src.join("data.bin"), &payload).expect("write");
