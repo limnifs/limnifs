@@ -436,19 +436,10 @@ impl CachedSlabStore {
         }
         let want = buf.len();
         let avail_total = usize::try_from(total - off).unwrap_or(0).min(want);
-        let mut starts = Vec::with_capacity(footer.uncomp_lens.len());
-        let mut acc = 0u64;
-        for &l in &footer.uncomp_lens {
-            starts.push(acc);
-            acc += u64::from(l);
-        }
-        let first = starts.partition_point(|&s| s <= off).saturating_sub(1);
+        let first = footer.frame_containing(off);
         let mut written = 0usize;
-        let mut comp_pos = footer.comp_lens[..first]
-            .iter()
-            .map(|&l| l as usize)
-            .sum::<usize>();
-        let mut cum = starts[first];
+        let mut comp_pos = footer.compressed_offset_of(first);
+        let mut cum = footer.uncomp_offset(first);
         for i in first..footer.uncomp_lens.len() {
             let uncomp_len = footer.uncomp_lens[i];
             let comp_len = footer.comp_lens[i] as usize;
@@ -535,19 +526,10 @@ impl CachedSlabStore {
                 ),
             }));
         }
-        let mut starts = Vec::with_capacity(footer.uncomp_lens.len());
-        let mut acc = 0u64;
-        for &l in &footer.uncomp_lens {
-            starts.push(acc);
-            acc += u64::from(l);
-        }
-        let first = starts.partition_point(|&s| s <= off).saturating_sub(1);
+        let first = footer.frame_containing(off);
         let mut out = Vec::with_capacity(len);
-        let mut comp_pos = footer.comp_lens[..first]
-            .iter()
-            .map(|&l| l as usize)
-            .sum::<usize>();
-        let mut cum = starts[first];
+        let mut comp_pos = footer.compressed_offset_of(first);
+        let mut cum = footer.uncomp_offset(first);
         for i in first..footer.uncomp_lens.len() {
             let uncomp_len = footer.uncomp_lens[i];
             let comp_len = footer.comp_lens[i] as usize;
