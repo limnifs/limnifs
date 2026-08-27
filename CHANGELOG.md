@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.5] — 2026-08-27
+
+### Changed
+
+- **`FilterCodecComposite`**: one `impl Codec` now serves all seven
+  composite codecs (shuffle+lz4, shuffle+zstd, bitshuffle+lz4, four
+  BCJ). The seven become instances of a single deep type; wire
+  format unchanged (proven byte-equal to the shared pipeline).
+- **Per-codec tunables OCP proof**: a test-defined codec with its
+  own `Tunables` type plugs into `PerCodecTunables` with zero edits
+  to the flat `CodecTunables` — the extensibility contract is now
+  enforced by a test, not assumed.
+- **Cross-image sparse index wired** (`sparse-index` feature): layer
+  builds over a base with a `<base>.sparse` Bloom sidecar answer
+  membership in O(1) and only lazily load the exact drop set on a
+  probable hit — output byte-identical to the exact path (false
+  positives unobservable), low-overlap layers never open base slabs.
+
 ## [0.3.4] — 2026-08-27
 
 ### Changed
