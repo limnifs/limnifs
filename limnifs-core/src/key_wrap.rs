@@ -241,12 +241,7 @@ mod tests {
     use super::*;
 
     fn dev_urandom_rng(out: &mut [u8]) -> Result<(), KeyWrapError> {
-        use std::io::Read;
-        let mut f = std::fs::File::open("/dev/urandom")
-            .map_err(|e| KeyWrapError::Crypto(format!("/dev/urandom: {e}")))?;
-        f.read_exact(out)
-            .map_err(|e| KeyWrapError::Crypto(format!("read: {e}")))?;
-        Ok(())
+        getrandom::getrandom(out).map_err(|e| KeyWrapError::Crypto(format!("csprng: {e}")))
     }
 
     #[test]
