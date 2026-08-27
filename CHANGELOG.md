@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.6] — 2026-08-27
+
+### Changed
+
+- **Whole-file specialized codecs honor tunables**: the FLAC/RicePP
+  categorizer path now routes through `compress_with_tunables`; a
+  FLAC pin test asserts tunables stay output-neutral until a codec
+  actually gains knobs, and fails to remind the writer if that day
+  comes.
+- **`limnifs-bench bcj`**: real-workload BCJ benchmark — stages
+  ELF64 x86-64 binaries from a directory (hard-linked, 256 MiB
+  budget), packs them plain vs BCJ-categorized, and reports the
+  slab-byte delta. The benchmark canary runs it over `/usr/bin` on
+  Linux CI, putting real-binary data behind the BCJ ratio claim.
+- **Windows PR check extended**: a second job step checks all
+  features except fuse (`http`, `key-wrap`, `signing`,
+  `sparse-index`) on MSVC, so cfg-gated paths can no longer ship
+  Windows-broken (the v0.3.2 incident class).
+
 ## [0.3.5] — 2026-08-27
 
 ### Changed
