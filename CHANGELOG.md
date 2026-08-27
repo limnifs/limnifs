@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.10] — 2026-08-28
+
+### Changed
+
+- **Deps: omnizip 0.21.7 → 0.21.8** across all 19 codec
+  dependencies. The family wave completed cleanly on crates.io
+  (verified on the sparse index before bumping). Zero API drift;
+  full suite green; createperf 186 MB/s under host load with
+  byte-identical slab output on the fixture. Also carries the
+  Windows-side hygiene fix gating the `WriteError` test import
+  behind `cfg(unix)` (last Windows build warning).
+- Wire format unchanged; decoding handles frames from all prior
+  codec lines.
+
 ## [0.3.9] — 2026-08-27
 
 ### Changed
