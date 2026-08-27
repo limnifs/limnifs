@@ -12,6 +12,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.7] — 2026-08-27
+
+### Changed
+
+- **Perf: Phase-1 chunk hashing parallelizes across rayon workers.**
+  The write pipeline hashed every FastCDC chunk sequentially on one
+  core before fanning compression out; on a single large file
+  (multi-GB model weights, vmlinux) N−1 cores sat idle for the whole
+  hashing pass. Chunk BLAKE3s are independent, so the map now runs
+  `par_iter` (work stealing, same nesting Phase 2 already uses).
+  Output is byte-identical, pinned by a new pack-twice determinism
+  test.
+- **CI: self-healing release asset upload.** The v0.3.6 publish
+  failed on a transient GitHub 5xx uploading one `.sha256` sidecar
+  and needed a manual re-run. The softprops step is now
+  `continue-on-error` and a verify step creates the release if
+  missing, re-uploads every asset with `gh release upload --clobber`
+  (3 attempts with backoff), and asserts the published asset count
+  covers the built set.
+- **CI: Windows runs the test suite, not just cargo check.** The
+  Windows job gains `cargo test --workspace`. Its first run caught a
+  real portability bug immediately: the signing, key-wrap, and
+  shamir test helpers opened `/dev/urandom` directly and failed on
+  MSVC. They now use `getrandom` (already in the tree transitively);
+  production signing/keygen were already portable.
+
 ## [0.3.6] — 2026-08-27
 
 ### Changed
