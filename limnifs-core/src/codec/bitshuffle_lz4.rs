@@ -1,73 +1,26 @@
-//! Bitshuffle+LZ4 codec (id 0x0F): bit-level shuffle + LZ4 back-end.
+//! Bitshuffle+LZ4 composite codec (id 0x0F): bit-transpose then LZ4.
 //!
-//! Unlike byte-shuffle (which transposes bytes within blocks of N
-//! bytes), bit-shuffle transposes bits within blocks. Better for
-//! floating-point arrays where each bit plane has different
-//! statistical properties.
+//! BitShuffle moves the high-correlation bits of numeric data into
+//! contiguous byte lanes; LZ4 then compresses the long same-bit runs.
+//! Suited to low-entropy integer/bitmap-like arrays. Wire format is
+//! the shared composite pipeline with the filter's self-describing
+//! prefix inside the filtered stream.
 
-use crate::codec::{Codec, CODEC_BITSHUFFLE_LZ4, CODEC_LZ4};
-use crate::error::CoreError;
-use omnizip_filters::Filter;
+use crate::codec::composite;
+use crate::codec::CODEC_BITSHUFFLE_LZ4;
 
-const DEFAULT_ITEM_SIZE: usize = 8;
+/// Bitshuffle+LZ4 composite as an instance of
+/// [`FilterCodecComposite`](crate::codec::composite::FilterCodecComposite).
+pub type BitshuffleLz4Codec = composite::FilterCodecComposite<omnizip_filters::shuffle::BitShuffle>;
 
-pub struct BitshuffleLz4Codec {
-    item_size: usize,
-}
-
-impl BitshuffleLz4Codec {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            item_size: DEFAULT_ITEM_SIZE,
-        }
-    }
-
-    #[must_use]
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    pub fn with_item_size(item_size: usize) -> Self {
-        Self {
-            item_size: if item_size == 0 {
-                DEFAULT_ITEM_SIZE
-            } else {
-                item_size
-            },
-        }
-    }
-}
-
-impl Default for BitshuffleLz4Codec {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Codec for BitshuffleLz4Codec {
-    fn id(&self) -> u8 {
-        CODEC_BITSHUFFLE_LZ4
-    }
-
-    fn name(&self) -> &'static str {
-        "bitshuffle+lz4"
-    }
-
-    fn min_compress_size(&self) -> usize {
-        512
-    }
-
-    fn compress(&self, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
-        let filter = omnizip_filters::shuffle::BitShuffle::new(self.item_size);
-        crate::codec::composite::filter_then_compress(plaintext, &filter, CODEC_LZ4)
-    }
-
-    fn decompress(&self, compressed: &[u8], _expected_len: u32) -> Result<Vec<u8>, CoreError> {
-        let filter = omnizip_filters::shuffle::BitShuffle::new(self.item_size);
-        crate::codec::composite::decompress_then_filter(
-            compressed,
-            &filter,
-            CODEC_LZ4,
-            "bitshuffle+lz4",
-        )
-    }
+/// BitShuffle (default item_size) + LZ4.
+#[must_use]
+pub fn bitshuffle_lz4() -> BitshuffleLz4Codec {
+    BitshuffleLz4Codec::new(
+        omnizip_filters::shuffle::BitShuffle::new(8),
+        crate::codec::CODEC_LZ4,
+        CODEC_BITSHUFFLE_LZ4,
+        "bitshuffle+lz4",
+        512,
+    )
 }
