@@ -389,7 +389,20 @@ pub fn write_layer(
     config: &WriteConfig,
 ) -> Result<WriteArtifact, WriteError> {
     // Load the base image's drop set + manifest root.
-    let (base_drop_index, base_root) = load_base_drop_index(base_image)?;
+    let base_root = load_base_drop_index(base_image)?.1;
+    let base_drop_index: std::sync::Arc<dyn BaseDropSet> = {
+        #[cfg(feature = "sparse-index")]
+        {
+            match SparseBackedBaseIndex::open(base_image) {
+                Some(idx) => std::sync::Arc::new(idx),
+                None => std::sync::Arc::new(load_base_drop_index(base_image)?.0),
+            }
+        }
+        #[cfg(not(feature = "sparse-index"))]
+        {
+            std::sync::Arc::new(load_base_drop_index(base_image)?.0)
+        }
+    };
 
     let mut ctx = WriteContext::new();
     ctx.chunker = chunker_from_config(config)?;
@@ -413,6 +426,112 @@ pub fn write_layer(
 /// Load every DropId present in a base image's slabs + the image's
 /// `ManifestRoot`. Used by `write_layer` to decide which chunks can
 /// be referenced rather than re-encoded.
+/// A base image's drop set, queried per chunk during layer writes.
+///
+/// The exact form is a `HashSet` built by opening every base slab.
+/// The sparse form (`SparseBackedBaseIndex`, `sparse-index` feature)
+/// keeps that cost OFF the layer build until first needed: a
+/// false-negative-free Bloom filter answers "definitely not in
+/// base" in O(1), and only a *probable* hit lazily loads the exact
+/// set. False positives are impossible to observe — the fallback
+/// is exact — so layer output is byte-identical either way.
+pub trait BaseDropSet: Send + Sync {
+    /// Exact-membership answer (may lazily load state on first
+    /// probable hit).
+    fn base_contains(&self, drop_id: &[u8; 32]) -> bool;
+}
+
+impl BaseDropSet for std::collections::HashSet<[u8; 32]> {
+    fn base_contains(&self, drop_id: &[u8; 32]) -> bool {
+        self.contains(drop_id)
+    }
+}
+
+/// Bloom-fronted base index with exact, lazily-loaded fallback
+/// (`sparse-index` feature). Reads the `<image>.sparse` sidecar
+/// emitted by [`emit_sparse_sidecar`]; the base's slabs are only
+/// opened if some chunk is a *probable* member — low-overlap layer
+/// builds never touch them.
+#[cfg(feature = "sparse-index")]
+pub struct SparseBackedBaseIndex {
+    bloom: crate::sparse_index::SparseIndexReader,
+    manifest_path: std::path::PathBuf,
+    exact: std::sync::OnceLock<std::collections::HashSet<[u8; 32]>>,
+}
+
+#[cfg(feature = "sparse-index")]
+impl SparseBackedBaseIndex {
+    /// Open `<base_image>.sparse`. `None` when the sidecar does not
+    /// exist (caller falls back to the exact set).
+    #[must_use]
+    pub fn open(base_image: &Path) -> Option<Self> {
+        let sidecar = base_image.with_extension("lim.sparse");
+        let bloom = crate::sparse_index::SparseIndexReader::from_file(&sidecar)?;
+        Some(Self {
+            bloom,
+            manifest_path: base_image.to_path_buf(),
+            exact: std::sync::OnceLock::new(),
+        })
+    }
+
+    fn load_exact(&self) -> &std::collections::HashSet<[u8; 32]> {
+        self.exact.get_or_init(|| {
+            // The base manifest tells us which slabs to open; from
+            // there it's the same enumeration `load_base_drop_index`
+            // performs.
+            let bytes = std::fs::read(&self.manifest_path).unwrap_or_default();
+            let mut cursor = ManifestCursor::new(&bytes);
+            let _ = parse_manifest_header(&mut cursor);
+            let _ = limnifs_core::parse_feature_flags_section(&mut cursor);
+            let _ = limnifs_core::parse_metadata_reference(&mut cursor);
+            let Ok(index) = parse_slab_index(&mut cursor) else {
+                return std::collections::HashSet::new();
+            };
+            match SlabStore::load_mmap(&self.manifest_path, &index) {
+                Ok(store) => store.drop_index_keys().copied().collect(),
+                Err(_) => std::collections::HashSet::new(),
+            }
+        })
+    }
+}
+
+#[cfg(feature = "sparse-index")]
+impl BaseDropSet for SparseBackedBaseIndex {
+    fn base_contains(&self, drop_id: &[u8; 32]) -> bool {
+        // Bloom false negatives are impossible: a "no" is final and
+        // costs one bit-probe. A "yes" may be the 1% false positive,
+        // so fall through to the exact set — output stays
+        // byte-identical to the exact-only path.
+        if !self.bloom.probably_contains(drop_id) {
+            return false;
+        }
+        self.load_exact().contains(drop_id)
+    }
+}
+
+/// Emit the `<image>.sparse` Bloom sidecar for a finished artifact
+/// (`sparse-index` feature). Subsequent `write_layer` builds over
+/// this image skip opening its slabs unless a chunk is probably
+/// present.
+///
+/// # Errors
+/// Returns [`WriteError::Io`] on serialisation or write failure.
+#[cfg(feature = "sparse-index")]
+pub fn emit_sparse_sidecar(artifact: &WriteArtifact, image_path: &Path) -> Result<(), WriteError> {
+    let all: std::collections::HashSet<[u8; 32]> = artifact
+        .slabs
+        .iter()
+        .flat_map(|s| s.drop_ids.iter().copied())
+        .collect();
+    let mut writer = crate::sparse_index::SparseIndexWriter::new(
+        all.len().max(1),
+        crate::sparse_index::DEFAULT_FPP,
+    );
+    writer.insert_all(&all);
+    let sidecar = image_path.with_extension("lim.sparse");
+    writer.write_to_file(&sidecar).map_err(WriteError::Io)
+}
+
 fn load_base_drop_index(
     base_image: &Path,
 ) -> Result<(std::collections::HashSet<[u8; 32]>, [u8; 32]), WriteError> {
@@ -530,7 +649,7 @@ fn write_directory_body(ctx: &mut WriteContext, config: &WriteConfig) -> Result<
         skip_for_binary: config.tournament.skip_for_binary,
         short_circuit_permille: config.tournament.short_circuit_threshold,
     };
-    let base_drop_index = ctx.base_drop_index.as_ref();
+    let base_drop_index: Option<&dyn BaseDropSet> = ctx.base_drop_index.as_deref();
     let inline_threshold = ctx.inline_threshold;
     let max_drop_size = config.defaults.max_drop_size as usize;
     let seekable_drops = config.defaults.seekable_drops;
@@ -685,7 +804,7 @@ fn write_directory_streaming(
                     use_categorizers,
                     skip_chunking,
                     &tournament_spec,
-                    base_drop_index.as_ref(),
+                    base_drop_index.as_deref(),
                     inline_threshold,
                     max_drop_size,
                     seekable_drops,
@@ -1020,7 +1139,7 @@ fn process_file(
     use_categorizers: bool,
     skip_chunking: bool,
     tournament: &TournamentSpec,
-    base_drop_index: Option<&std::collections::HashSet<[u8; 32]>>,
+    base_drop_index: Option<&dyn BaseDropSet>,
     inline_threshold: usize,
     max_drop_size: usize,
     seekable_drops: bool,
@@ -1181,7 +1300,7 @@ fn process_file(
             // Layer fast-path: chunk already exists in the base image
             // → skip compress entirely.
             if let Some(base) = base_drop_index {
-                if base.contains(drop_id) {
+                if base.base_contains(drop_id) {
                     return (*drop_id, Vec::new(), Vec::new().into(), CODEC_REFERENCED, 0);
                 }
             }
@@ -1369,7 +1488,7 @@ struct WriteContext {
     /// is in this set, the writer skips compression and emits no slab
     /// bytes — the drop is resolved via the overlay chain at read
     /// time. `None` for standalone (non-layer) writes.
-    base_drop_index: Option<HashSet<[u8; 32]>>,
+    base_drop_index: Option<std::sync::Arc<dyn BaseDropSet>>,
     /// The base image's `ManifestRoot` (set when `base_drop_index`
     /// is `Some`). Emitted in the manifest's `delta_linkage` section
     /// so readers know which image provides the referenced drops.

@@ -432,22 +432,22 @@ impl Default for CodecRegistry {
         registry.register(Box::new(flac::FlacCodec));
         registry.register(Box::new(ricepp::RiceppCodec::fits_default()));
         registry.register(Box::new(fsst_brotli::FsstBrotliCodec));
-        registry.register(Box::new(shuffle_lz4::ShuffleLz4Codec::float32()));
+        registry.register(Box::new(shuffle_lz4::float32()));
         registry.register(Box::new(zpaq::ZpaqCodec));
         registry.register(Box::new(ppmd::PpmdCodec::new()));
         registry.register(Box::new(ppmd8::Ppmd8Codec::new()));
         registry.register(Box::new(glza::GlzaCodec));
-        registry.register(Box::new(shuffle_zstd::ShuffleZstdCodec::new()));
-        registry.register(Box::new(bitshuffle_lz4::BitshuffleLz4Codec::new()));
+        registry.register(Box::new(shuffle_zstd::shuffle_zstd()));
+        registry.register(Box::new(bitshuffle_lz4::bitshuffle_lz4()));
         registry.register(Box::new(bzip2::Bzip2Codec::new()));
         registry.register(Box::new(deflate64::Deflate64Codec::new()));
         // BCJ composite codecs — filter executable code then compress.
         // Categorizer picks the right one based on ELF/PE/Mach-O
         // architecture (see TODO.impl/04-bcj-categorizer-routing.md).
-        registry.register(Box::new(bcj_composites::BcjX86Lz4Codec));
-        registry.register(Box::new(bcj_composites::BcjX86ZstdCodec));
-        registry.register(Box::new(bcj_composites::BcjArm64Lz4Codec));
-        registry.register(Box::new(bcj_composites::BcjArm64ZstdCodec));
+        registry.register(Box::new(bcj_composites::bcj_x86_lz4()));
+        registry.register(Box::new(bcj_composites::bcj_x86_zstd()));
+        registry.register(Box::new(bcj_composites::bcj_arm64_lz4()));
+        registry.register(Box::new(bcj_composites::bcj_arm64_zstd()));
         registry
     }
 }
@@ -1108,5 +1108,116 @@ mod tests {
         assert!(registry.find(CODEC_DEFLATE).is_some());
         assert!(registry.find(CODEC_SNAPPY).is_some());
         assert!(registry.find(0xFF).is_none());
+    }
+}
+
+#[cfg(test)]
+mod per_codec_tunables_ocp_tests {
+    //! IMPL-10 acceptance: the OCP proof. A brand-new codec — defined
+    //! entirely in this test, with tunables this crate has never
+    //! heard of — plugs into the registry and honors its own knobs
+    //! through `PerCodecTunables`, with zero edits to the flat
+    //! `CodecTunables` struct or any existing codec. If adding a
+    //! tunable ever again requires touching shared code, this test
+    //! is the place to catch the regression.
+
+    use super::*;
+
+    /// Hypothetical future codec: delta-encoding with a user-chosen
+    /// stride. Its tunables type is unknown to `CodecTunables`.
+    #[derive(Clone, Debug)]
+    struct StrideTunables {
+        stride: usize,
+    }
+
+    struct DeltaStrideCodec;
+
+    impl Codec for DeltaStrideCodec {
+        fn id(&self) -> u8 {
+            0xFE // test-only id, never registered in default_registry
+        }
+        fn name(&self) -> &'static str {
+            "delta-stride(test)"
+        }
+        fn compress(&self, plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
+            // Default stride 1.
+            Ok(self.delta(plaintext, 1))
+        }
+        fn decompress(&self, compressed: &[u8], _expected_len: u32) -> Result<Vec<u8>, CoreError> {
+            let mut out = compressed.to_vec();
+            for i in 1..out.len() {
+                out[i] = out[i].wrapping_add(out[i - 1]);
+            }
+            Ok(out)
+        }
+    }
+
+    impl DeltaStrideCodec {
+        fn delta(&self, data: &[u8], stride: usize) -> Vec<u8> {
+            let mut out = data.to_vec();
+            let stride = stride.max(1);
+            for i in (stride..out.len()).rev() {
+                out[i] = out[i].wrapping_sub(out[i - stride]);
+            }
+            out
+        }
+    }
+
+    impl PerCodecTunables for DeltaStrideCodec {
+        type Tunables = StrideTunables;
+
+        fn compress_with_owned_tunables(
+            &self,
+            plaintext: &[u8],
+            t: &Self::Tunables,
+        ) -> Result<Vec<u8>, CoreError> {
+            Ok(self.delta(plaintext, t.stride))
+        }
+    }
+
+    #[test]
+    fn new_codec_tunables_require_no_edits_to_shared_struct() {
+        let codec = DeltaStrideCodec;
+        // 4-byte-periodic fixture: stride-4 delta collapses the
+        // repeated pattern to zeros; stride-1 does not.
+        let period: [u8; 4] = [0x11, 0x22, 0x33, 0x44];
+        let payload: Vec<u8> = period.iter().cycle().copied().take(4096).collect();
+
+        // Stride 4 must produce different (smaller-on-this-fixture)
+        // bytes than stride 1, proving the codec's OWN tunables flow
+        // through `compress_with_owned_tunables`.
+        let s1 = codec
+            .compress_with_owned_tunables(&payload, &StrideTunables { stride: 1 })
+            .expect("stride 1");
+        let s4 = codec
+            .compress_with_owned_tunables(&payload, &StrideTunables { stride: 4 })
+            .expect("stride 4");
+        assert_ne!(s1, s4, "different tunables must change the output");
+        // On the 4-byte-periodic fixture, stride-4 delta collapses to
+        // zeros — visibly different bytes from stride-1's ramp.
+        assert!(
+            s4.iter().filter(|&&b| b == 0).count() > s1.iter().filter(|&&b| b == 0).count(),
+            "stride 4 zeroes the periodic pattern; stride 1 does not"
+        );
+
+        // The stride-1 form round-trips through this codec's
+        // (stride-1) decompress. s4 needs stride-aware inversion —
+        // outside this proof's scope.
+        let recovered = codec
+            .decompress(&s1, payload.len() as u32)
+            .expect("decompress");
+        assert_eq!(recovered, payload);
+
+        // The OCP contract: `CodecTunables` (the flat struct) has no
+        // stride field and needed no edit for this codec to exist.
+        // (Compilation of this test with an unchanged struct IS the
+        // proof; this assert documents the intent.)
+        let flat = CodecTunables::from_quality(9);
+        let via_default = codec.compress(&payload).expect("default path ignores flat");
+        let _ = flat;
+        assert_eq!(
+            via_default, s1,
+            "default compress == owned tunables stride 1"
+        );
     }
 }
