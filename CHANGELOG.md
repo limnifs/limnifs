@@ -12,6 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.8] — 2026-08-27
+
+### Changed
+
+- **Perf: dictionary re-compression parallelizes.** After the walk/
+  tournament phases finished, dictionary training re-compressed
+  every ZSTD drop with its class dict in a serial loop — a second
+  full-tree compression pass on one core, plus a plaintext clone
+  per drop. Now `par_iter_mut` with a borrowed plaintext; output is
+  byte-identical.
+- **Perf: single-large-file extract decodes in parallel.**
+  `file_plaintext` decoded a file's slices sequentially; the CLI's
+  extract parallelizes across files, so one large file (multi-GB
+  weights, vmlinux) decoded on a single core. Multi-slice files
+  (≥ 8 slices) now decode in bounded 64-slice batches — peak extra
+  memory stays ~16 MiB rather than materializing the whole file.
+  Small files keep the sequential path.
+- **CI: createperf hard gate.** readperf gates the read path;
+  nothing gated create. Fixed 64 MiB synthetic tree, warm-cache pack
+  throughput, hard floor 50 MB/s, wired into the read-canary job —
+  the v0.3.3 materialization-bug class now fails CI instead of
+  shipping.
+
 ## [0.3.7] — 2026-08-27
 
 ### Changed
