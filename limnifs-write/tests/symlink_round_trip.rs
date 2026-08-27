@@ -4,7 +4,11 @@ use limnifs_core::{
     parse_feature_flags_section, parse_manifest_header, parse_metadata_blob,
     parse_metadata_reference, ContentHandle, ManifestCursor, S_IFLNK,
 };
-use limnifs_write::{write_directory_with_config, WriteConfig, WriteError};
+use limnifs_write::{write_directory_with_config, WriteConfig};
+// Only the socket test below matches on WriteError, and it is
+// unix-only (UnixListener) — ungated, this import warns on Windows.
+#[cfg(unix)]
+use limnifs_write::WriteError;
 
 fn load_blob(bytes: &[u8]) -> limnifs_core::MetadataBlob {
     let mut c = ManifestCursor::new(bytes);
