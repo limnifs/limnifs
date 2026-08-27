@@ -150,6 +150,45 @@ fn hex_prefix(bytes: &[u8]) -> String {
 ///
 /// Returns [`CoreError::Corrupt`] if a slice references a drop the
 /// slab store doesn't have, or decompression fails.
+/// Decode one slice's byte range from its drop. Shared by the
+/// sequential and batched-parallel assembly paths so both honor
+/// `SliceRef::drop_byte_start`/`drop_byte_len` identically.
+fn decode_slice<S: SlabSource + ?Sized>(
+    store: &S,
+    slice: &crate::inode::SliceRef,
+) -> Result<Vec<u8>, CoreError> {
+    let plaintext = store
+        .plaintext_for(slice.drop_id.as_bytes())
+        .ok_or_else(|| CoreError::Corrupt {
+            reason: format!(
+                "file_plaintext: drop {:02x?} not in any slab",
+                &slice.drop_id.as_bytes()[..4]
+            ),
+        })?
+        .map_err(|e| CoreError::Corrupt {
+            reason: format!("file_plaintext: decompress: {e}"),
+        })?;
+    let start = usize::try_from(slice.drop_byte_start).unwrap_or(0);
+    let len = usize::try_from(slice.drop_byte_len).unwrap_or(plaintext.len());
+    let end = start.saturating_add(len).min(plaintext.len());
+    if start > plaintext.len() || end > plaintext.len() {
+        return Err(CoreError::Corrupt {
+            reason: format!(
+                "file_plaintext: slice range {start}..{end} outside drop of len {}",
+                plaintext.len()
+            ),
+        });
+    }
+    Ok(plaintext[start..end].to_vec())
+}
+
+/// Slices per parallel decode batch. Bounded so peak extra memory
+/// stays ~one batch (64 × 256 KiB ≈ 16 MiB at default chunking)
+/// instead of materializing the whole file's decoded parts at once.
+const DECODE_BATCH_SLICES: usize = 64;
+/// Below this slice count the sequential loop beats task overhead.
+const DECODE_PARALLEL_THRESHOLD: usize = 8;
+
 pub fn file_plaintext<S: SlabSource + ?Sized>(
     inode: &Inode,
     slab_store: Option<&S>,
@@ -161,30 +200,27 @@ pub fn file_plaintext<S: SlabSource + ?Sized>(
                 reason: "file_plaintext: slice-backed file but no slab store provided".into(),
             })?;
             let mut out = Vec::new();
-            for slice in slices {
-                let plaintext = store
-                    .plaintext_for(slice.drop_id.as_bytes())
-                    .ok_or_else(|| CoreError::Corrupt {
-                        reason: format!(
-                            "file_plaintext: drop {:02x?} not in any slab",
-                            &slice.drop_id.as_bytes()[..4]
-                        ),
-                    })?
-                    .map_err(|e| CoreError::Corrupt {
-                        reason: format!("file_plaintext: decompress: {e}"),
-                    })?;
-                let start = usize::try_from(slice.drop_byte_start).unwrap_or(0);
-                let len = usize::try_from(slice.drop_byte_len).unwrap_or(plaintext.len());
-                let end = start.saturating_add(len).min(plaintext.len());
-                if start > plaintext.len() || end > plaintext.len() {
-                    return Err(CoreError::Corrupt {
-                        reason: format!(
-                            "file_plaintext: slice range {start}..{end} outside drop of len {}",
-                            plaintext.len()
-                        ),
-                    });
+            if slices.len() >= DECODE_PARALLEL_THRESHOLD {
+                // Batched parallel decode: a single large file's
+                // slices would otherwise decode on one core while
+                // the caller's cross-file parallelism idles — the
+                // read-side mirror of the write path's Phase-1
+                // finding. The cached slab store drops its lock
+                // during decompression, so concurrent decodes scale.
+                // Batches are appended in order; output is
+                // byte-identical to the sequential loop.
+                use rayon::prelude::*;
+                for batch in slices.chunks(DECODE_BATCH_SLICES) {
+                    let parts: Result<Vec<Vec<u8>>, CoreError> =
+                        batch.par_iter().map(|s| decode_slice(store, s)).collect();
+                    for part in parts? {
+                        out.extend_from_slice(&part);
+                    }
                 }
-                out.extend_from_slice(&plaintext[start..end]);
+                return Ok(out);
+            }
+            for slice in slices {
+                out.extend_from_slice(&decode_slice(store, slice)?);
             }
             Ok(out)
         }
