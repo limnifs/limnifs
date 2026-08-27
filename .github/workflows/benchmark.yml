@@ -48,6 +48,8 @@ jobs:
           key: read-canary
       - name: Run readperf canaries (hard gates)
         run: cargo run --release -p limnifs-bench -- readperf
+      - name: Run createperf canary (hard gate)
+        run: cargo run --release -p limnifs-bench -- createperf
       - name: Monolithic vs seekable A/B (informational)
         run: cargo run --release -p limnifs-bench -- readcompare
       - name: BCJ vs plain LZ4 over real ELF binaries (informational)
