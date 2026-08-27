@@ -55,3 +55,4 @@ rayon = "1.10"
 sha2 = { version = "0.10", default-features = false }
 toml = "0.8"
 x25519-dalek = { version = "2.0", default-features = false, features = ["static_secrets", "getrandom"] }
+
