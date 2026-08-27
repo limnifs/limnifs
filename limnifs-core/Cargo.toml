@@ -41,6 +41,7 @@ sha2 = { workspace = true, optional = true }
 x25519-dalek = { workspace = true, optional = true }
 
 [dev-dependencies]
+getrandom = { workspace = true }
 limnifs-write = { path = "../limnifs-write" }
 tempfile = "3"
 

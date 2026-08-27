@@ -2422,7 +2422,7 @@ fn benchmark() -> Result<(), CliError> {
 fn keygen() -> Result<(), CliError> {
     let mut key = vec![0u8; 32];
     getrandom::getrandom(&mut key).map_err(|e| CliError::FormatFailed {
-        path: PathBuf::from("/dev/urandom"),
+        path: PathBuf::from("csprng"),
         source: CoreError::Corrupt {
             reason: format!("keygen: CSPRNG failed: {e}"),
         },

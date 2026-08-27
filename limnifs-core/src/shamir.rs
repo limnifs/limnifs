@@ -288,14 +288,12 @@ mod tests {
 
     #[test]
     fn split_combine_with_real_csprng() {
-        // Pull bytes from /dev/urandom via std (avoids coupling the
-        // core crate to getrandom). This is a round-trip test, not a
-        // randomness-quality test — the latter would need NIST-style
-        // vectors and is out of scope.
+        // getrandom is the portable CSPRNG primitive (already in the
+        // dependency tree via ed25519-dalek). This is a round-trip
+        // test, not a randomness-quality test — the latter would need
+        // NIST-style vectors and is out of scope.
         let mut seed = vec![0u8; 256];
-        std::fs::File::open("/dev/urandom")
-            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut seed))
-            .expect("/dev/urandom available on Unix CI");
+        getrandom::getrandom(&mut seed).expect("csprng");
         let mut iter = seed.into_iter();
         let rng = |out: &mut [u8]| {
             for b in out.iter_mut() {
