@@ -23,10 +23,9 @@ default = []
 # compression across N read + M compress threads. Off by default —
 # the simple `par_iter().map(process_file)` shape is faster on
 # warm cache. Enable for cold-cache or network-attached workloads.
-# Opt-in: cross-image Bloom-filter dedup index. Standalone today
-# (no writer integration); emit `<image>.sparse` alongside
-# `<image>.lim` so consumers can ask "is this drop already in
-# image X?" without scanning the slabs.
+# Opt-in: cross-image Bloom-filter dedup index. Emits/wires
+# `<image>.sparse` so layer builds answer "is this drop already in
+# the base?" without opening its slabs (see `BaseDropSet`).
 sparse-index = []
 
 [lints]

@@ -57,3 +57,10 @@ jobs:
       # is never published.
       - name: cargo check (all targets, default features)
         run: cargo check --workspace --all-targets
+      - name: cargo check (all features except fuse)
+        # fuser cannot build on Windows; exercise everything else so
+        # cfg-gated code paths (http, key-wrap, signing, sparse-index)
+        # compile on this target.
+        run: >-
+          cargo check --workspace --all-targets
+          --features limnifs-core/http,limnifs-core/key-wrap,limnifs-core/signing,limnifs-write/sparse-index
