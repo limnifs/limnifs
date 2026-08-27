@@ -1872,34 +1872,42 @@ impl WriteContext {
             }
         }
 
-        // Re-compress each ZSTD drop with the dict for its class.
-        // Keep the smaller representation.
-        for d in self.drops.iter_mut() {
+        // Re-compress each ZSTD drop with the dict for its class,
+        // keeping the smaller representation. This is a second full
+        // compression pass over the tree, so it runs in parallel —
+        // serially it would be the tail after every rayon worker has
+        // finished the walk/tournament phases (the same one-core-tail
+        // shape Phase 2 fixed for chunk compression). Per-drop
+        // decisions are independent and par_iter_mut mutates in
+        // place, so drop order and output bytes are unchanged.
+        use rayon::prelude::*;
+        let classifier = self.classifier;
+        self.drops.par_iter_mut().for_each(|d| {
             if d.codec != limnifs_core::codec::CODEC_ZSTD {
-                continue;
+                return;
             }
-            let Some(plaintext) = d.plaintext.clone() else {
-                continue;
+            let Some(plaintext) = d.plaintext.as_ref() else {
+                return;
             };
-            let class = self.classifier.classify(&plaintext);
+            let class = classifier.classify(plaintext);
             let dict_class = if text_classes.contains(&class) {
                 crate::classifier::Class::Text
             } else if binary_classes.contains(&class) {
                 crate::classifier::Class::Binary
             } else {
-                continue;
+                return;
             };
             let Some(dict) = self.trained_dicts_by_class.get(&dict_class) else {
-                continue;
+                return;
             };
-            let Ok(dict_compressed) = dict.compress(&plaintext) else {
-                continue;
+            let Ok(dict_compressed) = dict.compress(plaintext) else {
+                return;
             };
             if dict_compressed.len() < d.compressed.len() {
                 d.compressed = dict_compressed.into();
                 d.dict_id = dict.id;
             }
-        }
+        });
 
         cleanup(self);
     }
