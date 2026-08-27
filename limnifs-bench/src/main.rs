@@ -13,6 +13,7 @@
 #![allow(unsafe_code)]
 #![allow(warnings)]
 
+mod bcj_bench;
 mod datasets;
 mod metrics;
 mod readcompare;
@@ -43,6 +44,13 @@ enum Command {
     /// Monolithic vs seekable A/B on the 19.5 MiB #192 fixture
     /// (informational; gates live in readperf).
     Readcompare,
+    /// BCJ vs plain-LZ4 over real ELF64 x86-64 binaries
+    /// (informational; `--dir` defaults to /usr/bin).
+    Bcj {
+        /// Directory of ELF executables to pack.
+        #[arg(long, default_value = "/usr/bin")]
+        dir: PathBuf,
+    },
     Download {
         #[arg(long)]
         all: bool,
@@ -75,6 +83,23 @@ fn main() {
     let paths = runners::WorkspacePaths::new(&workspace);
 
     match cli.command {
+        Command::Bcj { dir } => {
+            let scratch = paths.cache_dir.join("bcj-bench");
+            std::fs::create_dir_all(&scratch).expect("create scratch");
+            match bcj_bench::run(&dir, &scratch) {
+                Some((plain, bcj, files)) => {
+                    let pct = if plain > 0 {
+                        (plain as f64 - bcj as f64) / plain as f64 * 100.0
+                    } else {
+                        0.0
+                    };
+                    println!(
+                        "bcj-bench: {files} ELF64 files — plain {plain} B, bcj {bcj} B → {pct:.1}% smaller with BCJ"
+                    );
+                }
+                None => eprintln!("bcj-bench: nothing to measure"),
+            }
+        }
         Command::Readcompare => {
             let scratch = paths.cache_dir.join("readcompare");
             std::fs::create_dir_all(&scratch).expect("create scratch");

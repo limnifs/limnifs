@@ -176,4 +176,24 @@ mod tests {
         let result = c.compress(b"not a wav file at all");
         assert!(result.is_err());
     }
+
+    use crate::codec::CodecTunables;
+
+    /// FLAC has no tunables — every
+    /// parameter is derived from the WAV/AIFF header. If FLAC ever
+    /// gains a `compress_with_tunables` override, this test fails to
+    /// remind the whole-file categorizer path (limnifs-write) to
+    /// route through tunables accordingly.
+    #[test]
+    fn flac_ignores_tunables_by_default() {
+        let wav = make_test_wav(44_100, 1, 16, 4096);
+        let plain = FlacCodec.compress(&wav).expect("plain");
+        let tuned = FlacCodec
+            .compress_with_tunables(&wav, &CodecTunables::from_quality(11))
+            .expect("tuned");
+        assert_eq!(
+            plain, tuned,
+            "default routing: tunables must not change FLAC output"
+        );
+    }
 }

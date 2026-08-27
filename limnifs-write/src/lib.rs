@@ -1008,7 +1008,10 @@ fn process_whole_file_drop(
         let spec_result = if cat.codec_id == limnifs_core::codec::CODEC_FSST_BROTLI {
             limnifs_core::codec::fsst_brotli::compress_with_baseline(data, Some(&best_compressed))
         } else {
-            limnifs_core::codec::compress(cat.codec_id, data)
+            // Tunables-routed so future codec knobs (FLAC/RicePP have
+            // none today — all parameters come from the file header)
+            // are honored here automatically (TODO.remaining item 2).
+            limnifs_core::codec::compress_with_tunables(cat.codec_id, data, tunables)
         };
         if let Ok(spec_c) = spec_result {
             if spec_c.len() < best_compressed.len() {

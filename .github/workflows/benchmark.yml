@@ -50,6 +50,8 @@ jobs:
         run: cargo run --release -p limnifs-bench -- readperf
       - name: Monolithic vs seekable A/B (informational)
         run: cargo run --release -p limnifs-bench -- readcompare
+      - name: BCJ vs plain LZ4 over real ELF binaries (informational)
+        run: cargo run --release -p limnifs-bench -- bcj --dir /usr/bin
 
   benchmark:
     name: Benchmark (${{ matrix.os }})
