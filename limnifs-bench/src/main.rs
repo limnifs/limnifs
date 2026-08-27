@@ -14,6 +14,7 @@
 #![allow(warnings)]
 
 mod bcj_bench;
+mod createperf;
 mod datasets;
 mod metrics;
 mod readcompare;
@@ -41,6 +42,10 @@ enum Command {
     /// Read-path performance canaries with hard gates (exit nonzero
     /// below thresholds). Fixed synthetic workload, < 60 s.
     Readperf,
+    /// Create-path performance canary with a hard throughput gate
+    /// (exit nonzero below threshold). Fixed synthetic workload,
+    /// < 30 s.
+    Createperf,
     /// Monolithic vs seekable A/B on the 19.5 MiB #192 fixture
     /// (informational; gates live in readperf).
     Readcompare,
@@ -113,6 +118,15 @@ fn main() {
                 windowed >= readperf::WINDOWED_GATE_MBPS && extract >= readperf::EXTRACT_GATE_MBPS;
             if !ok {
                 eprintln!("readperf: GATE FAILURE");
+                std::process::exit(1);
+            }
+        }
+        Command::Createperf => {
+            let scratch = paths.cache_dir.join("createperf");
+            std::fs::create_dir_all(&scratch).expect("create scratch");
+            let mbps = createperf::run(&scratch);
+            if mbps < createperf::CREATE_GATE_MBPS {
+                eprintln!("createperf: GATE FAILURE");
                 std::process::exit(1);
             }
         }
