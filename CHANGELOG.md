@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.11] — 2026-08-28
+
+### Changed
+
+- **Deps: omnizip 0.21.8 → 0.21.9** across all 19 codec
+  dependencies. Upstream headline: zstd L13-15 now run the optimal
+  parser (the three worst contest cells beat the reference;
+  outputs system-zstd byte-exact), and release waves complete in
+  one run. LimniFS's tournament runs zstd at L6 (quality 6 →
+  `Default`), so the new parser tiers sit outside the default
+  path — verified by an A/B pin of zstd back to 0.21.8 (create
+  throughput unchanged). Slab outputs byte-identical across
+  0.21.7/8/9 on the create fixture. Wire format unchanged.
+
 ## [0.3.10] — 2026-08-28
 
 ### Changed
