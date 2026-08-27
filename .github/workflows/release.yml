@@ -244,6 +244,10 @@ jobs:
           ls -la release/sbom-flat/
       - name: Create or update release
         uses: softprops/action-gh-release@v2
+        # A transient GitHub 5xx on one asset must not fail the
+        # release: the verify step below re-uploads everything with
+        # --clobber (idempotent) and fails only if assets stay missing.
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -255,3 +259,33 @@ jobs:
             release/sbom-flat/*.cdx.json
           generate_release_notes: true
           fail_on_unmatched_files: false
+      - name: Ensure release assets complete (idempotent retry)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          tag="${{ needs.context.outputs.tag || github.ref_name }}"
+          repo="${GITHUB_REPOSITORY}"
+          # Create the release if the action died before creating it.
+          gh release view "$tag" -R "$repo" >/dev/null 2>&1 || \
+            gh release create "$tag" -R "$repo" --generate-notes --verify-tag
+          # Expected asset set (no spaces in names by construction).
+          mapfile -t files < <(find release/limni-* release/sbom-flat -type f \
+            \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' -o -name '*.cdx.json' \) | sort)
+          echo "expected ${#files[@]} assets for $tag"
+          for attempt in 1 2 3; do
+            if gh release upload "$tag" -R "$repo" --clobber "${files[@]}"; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "asset upload failed after 3 attempts"
+              exit 1
+            fi
+            sleep $((attempt * 10))
+          done
+          have=$(gh release view "$tag" -R "$repo" --json assets --jq '.assets | length')
+          if [ "$have" -lt "${#files[@]}" ]; then
+            echo "release has $have assets, expected at least ${#files[@]}"
+            exit 1
+          fi
+          echo "release $tag complete: $have assets"

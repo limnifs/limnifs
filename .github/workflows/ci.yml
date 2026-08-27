@@ -64,3 +64,9 @@ jobs:
         run: >-
           cargo check --workspace --all-targets
           --features limnifs-core/http,limnifs-core/key-wrap,limnifs-core/signing,limnifs-write/sparse-index
+      - name: cargo test (default features)
+        # Check proves compilation; tests prove behavior — path
+        # separators, mmap semantics, and hard-link fallbacks can all
+        # compile green and fail at runtime. This upgrades the Windows
+        # gate from "it builds" to "it round-trips".
+        run: cargo test --workspace --quiet
