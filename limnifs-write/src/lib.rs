@@ -1258,17 +1258,25 @@ fn process_file(
     }
 
     let chunks = chunker.chunk_slice(&data);
+
+    // Phase 1: hash all chunks in parallel, then build slices + filter
+    // duplicates sequentially. Each chunk's BLAKE3 is independent, so
+    // the map parallelizes across rayon workers (work stealing — Phase
+    // 2 nests par_iter inside a worker the same way). This closes the
+    // sequential hashing tail that left N-1 cores idle on
+    // single-large-file workloads. Drop ids are per-chunk values and
+    // the collect preserves chunk order, so output is byte-identical
+    // to the sequential loop.
+    use rayon::prelude::*;
+    let drop_ids: Vec<[u8; 32]> = chunks.par_iter().map(|chunk| hash_section(chunk)).collect();
+
     let mut slices = Vec::with_capacity(chunks.len());
     let mut file_offset: u64 = 0;
     let mut seen_in_file: std::collections::HashSet<[u8; 32]> =
         std::collections::HashSet::with_capacity(chunks.len());
-
-    // Phase 1: hash all chunks + build slices + filter duplicates (sequential).
-    // FastCDC boundaries must be deterministic, and BLAKE3 hashing is fast.
     let mut unique_chunks: Vec<(&[u8], [u8; 32])> = Vec::with_capacity(chunks.len());
-    for chunk in &chunks {
+    for (chunk, drop_id) in chunks.iter().zip(drop_ids) {
         let chunk_len = u64::try_from(chunk.len()).expect("chunk len fits u64");
-        let drop_id = hash_section(chunk);
         slices.push(PendingSlice {
             drop_id,
             file_byte_start: file_offset,
@@ -1291,7 +1299,6 @@ fn process_file(
     // and skips the compress pass entirely. Cache is bounded by entry
     // count; eviction is "stop inserting once full" — simple and
     // correct, misses are bounded by worker count.
-    use rayon::prelude::*;
     thread_local! {
         static COMPRESS_CACHE: std::cell::RefCell<std::collections::HashMap<[u8; 32], (u8, std::sync::Arc<[u8]>)>> =
             std::cell::RefCell::new(std::collections::HashMap::new());
