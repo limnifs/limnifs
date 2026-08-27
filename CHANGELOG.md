@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.9] — 2026-08-27
+
+### Changed
+
+- **Deps: omnizip 0.16.96 → 0.21.7** across all 19 codec
+  dependencies (18 in limnifs-core + flac in limnifs-write). Zero
+  API drift; full suite green from registry sources including the
+  zstd omnizip#315 round-trip canary under the new decoder. The
+  0.21 codec line (brotli quality-tier overhaul, determinism fix,
+  emit performance, q6-9 ladder 14-31% under reference) lands
+  directly on LimniFS's tournament, metadata, and dictionary
+  paths. Compressed outputs may differ from 0.16-era images; both
+  decode — the wire format is unchanged.
+
 ## [0.3.8] — 2026-08-27
 
 ### Changed
