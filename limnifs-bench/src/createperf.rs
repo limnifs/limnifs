@@ -88,19 +88,40 @@ pub fn run(root: &PathBuf) -> f64 {
     config.defaults.binary_codec = "lz4".into();
 
     // One unmeasured warm-up pack to populate the page cache; the
-    // measured pass reads warm, matching how readperf measures.
+    // measured passes read warm, matching how readperf measures.
     let _ = write_directory_with_config(&src, &config).expect("warm-up pack");
 
-    let start = Instant::now();
-    let art = write_directory_with_config(&src, &config).expect("pack fixture");
-    let secs = start.elapsed().as_secs_f64();
-    let mbps = total_bytes as f64 / (1024.0 * 1024.0) / secs.max(f64::EPSILON);
+    // Three measured packs, median judged: a single reading from a
+    // shared host carries no confidence interval — this week produced
+    // three separate forensic sessions over "regression or co-tenant?"
+    // that a spread line would have settled at a glance.
+    let mut mbps_samples = [0.0f64; 3];
+    for slot in &mut mbps_samples {
+        let start = Instant::now();
+        let _ = write_directory_with_config(&src, &config).expect("pack fixture");
+        let secs = start.elapsed().as_secs_f64();
+        *slot = total_bytes as f64 / (1024.0 * 1024.0) / secs.max(f64::EPSILON);
+    }
+    mbps_samples.sort_by(|a, b| a.total_cmp(b));
+    let (min, median, max) = (mbps_samples[0], mbps_samples[1], mbps_samples[2]);
+    let spread = if median > 0.0 {
+        (max - min) / median
+    } else {
+        0.0
+    };
 
+    let art = write_directory_with_config(&src, &config).expect("pack fixture");
     let slab_bytes: u64 = art.slabs.iter().map(|s| s.bytes.len() as u64).sum();
+    let noise_note = if spread > 0.25 {
+        " [noisy host — CI canary is the arbiter]"
+    } else {
+        ""
+    };
     println!(
-        "createperf: pack {mbps:.0} MB/s (gate ≥ {CREATE_GATE_MBPS:.0}), \
-         64 MiB tree → {slab_bytes} slab bytes"
+        "createperf: pack {median:.0} MB/s ({min:.0}…{max:.0}, spread {:.0}%) \
+         (gate ≥ {CREATE_GATE_MBPS:.0}){noise_note}, 64 MiB tree → {slab_bytes} slab bytes",
+        spread * 100.0
     );
     let _ = std::fs::remove_dir_all(&src);
-    mbps
+    median
 }

@@ -127,7 +127,11 @@ pub fn max_ratio() -> WriteConfig {
                 quality: 11,
                 window: 24,
             },
-            zstd: crate::config::ZstdTunables::default(),
+            // The profile's documented contract is "ZSTD L19
+            // tournament" — quality 19 (optimal parser) is the
+            // deliberate choice here; speed belongs to other
+            // profiles.
+            zstd: crate::config::ZstdTunables { quality: 19 },
             lzma: crate::config::LzmaTunables {
                 lc: 3,
                 lp: 0,

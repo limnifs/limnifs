@@ -69,7 +69,12 @@ impl Codec for XzCodec {
         plaintext: &[u8],
         t: &CodecTunables,
     ) -> Result<Vec<u8>, CoreError> {
-        let level = if t.quality > 0 { t.quality.min(9) } else { 6 };
+        // Own knob — never the flat (brotli) quality: xz's 0..=9
+        // scale shares nothing with brotli's 0..=11, and reading the
+        // flat field silently ran xz at level 9 under the default
+        // brotli q11 (the same coupling bug zstd shed in v0.3.14).
+        // 0 = xz's balanced preset 6.
+        let level = if t.xz_level > 0 { t.xz_level.min(9) } else { 6 };
         compress_at_level(plaintext, level)
     }
 }
