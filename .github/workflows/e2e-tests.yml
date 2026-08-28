@@ -33,6 +33,9 @@ jobs:
           mkdir -p /tmp/e2e-input
           echo "hello world" > /tmp/e2e-input/hello.txt
           echo "test data" > /tmp/e2e-input/test.txt
+          # Above the 4 KiB inline threshold, so the image carries
+          # real slabs for the deep-verify step to hash.
+          dd if=/dev/urandom of=/tmp/e2e-input/payload.bin bs=1024 count=100 2>/dev/null
           # Positional SOURCE OUTPUT (no -o flag).
           ./target/release/limni limn /tmp/e2e-input /tmp/e2e-test.lim
 
