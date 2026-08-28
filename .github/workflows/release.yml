@@ -92,6 +92,29 @@ jobs:
             echo "no release-plz tag for v${ver} — binary jobs skip"
           fi
 
+  # Hard perf gates run inside the release itself: the publish job
+  # requires this job's success, so a create/read regression (the
+  # v0.3.3 materialization class, or a codec-dependency cliff)
+  # cannot reach crates.io with a red canary.
+  perf-gate:
+    name: Perf gate (readperf + createperf)
+    needs: context
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/') || needs.context.outputs.tag != '') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: perf-gate
+      - name: Read-path canaries (hard gates)
+        run: cargo run --release -p limnifs-bench -- readperf
+      - name: Create-path canary (hard gate)
+        run: cargo run --release -p limnifs-bench -- createperf
+
   license-scan:
     name: License scan (cargo-deny)
     needs: context
@@ -224,8 +247,11 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [license-scan, sbom, build, context]
-    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/') || needs.context.outputs.tag != '') }}
+    needs: [license-scan, sbom, build, context, perf-gate]
+    # !cancelled() keeps the existing semantics (a partial build
+    # failure doesn't block the rest), but the perf gate is absolute:
+    # a red canary skips the publish and the release fails closed.
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/') || needs.context.outputs.tag != '') && needs.perf-gate.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

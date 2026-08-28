@@ -138,6 +138,34 @@ mod tests {
     /// 0.16.79). If this regresses, the write-side decompress-verify
     /// guard documented in the v0.2.53 changelog must come back.
     #[test]
+    fn quality_to_level_band_map_is_pinned() {
+        // The band map is a product decision, not an accident: the
+        // tournament default (quality 6) and the dictionary pass both
+        // run at `Default` (L6), deliberately BELOW omnizip's
+        // optimal-parser band (L8+ since omnizip 0.21.11) where
+        // compression is several times slower for a ratio our
+        // tournament rarely selects. If omnizip moves a parser
+        // boundary, or a default crosses into `Better`/`Best`,
+        // update this pin consciously — with a createperf reading.
+        use omnizip_zstd::ZstdLevel;
+        for q in 0..=2 {
+            assert_eq!(level_for_quality(q), ZstdLevel::Fastest, "q{q}");
+        }
+        for q in 3..=5 {
+            assert_eq!(level_for_quality(q), ZstdLevel::Fast, "q{q}");
+        }
+        for q in 6..=11 {
+            assert_eq!(level_for_quality(q), ZstdLevel::Default, "q{q}");
+        }
+        for q in 12..=21 {
+            assert_eq!(level_for_quality(q), ZstdLevel::Better, "q{q}");
+        }
+        for q in 22..=255 {
+            assert_eq!(level_for_quality(q), ZstdLevel::Best, "q{q}");
+        }
+    }
+
+    #[test]
     fn omnizip_315_blob_round_trips_at_all_levels() {
         const B64: &str = "AgAAAAIAAAAAAAAApIEAAAAAAAAAAAAAjfBCgS8IzhiN8EKBLwjOGAEAAAAEpQAAAGR1cGxpY2F0ZSBpbmxpbmUgY29udGVudDogdGhlIHNhbWUgMjAwLWlzaCBieXRlcyBpbiB0aHJlZSBmaWxlcywgc28gdGhlIHdyaXRlcidzIGlubGluZSBkZWR1cCBmaWxlcyBvbiBldmVyeSByZWFsaXN0aWMgdHJlZS4gUGFkZGluZyBwYWRkaW5nIHBhZGRpbmcgcGFkZGluZyBwYWRkaW5nIQEAAAAAAAAA7UEAAAAAAAAAAAAABelAgS8IzhgF6UCBLwjOGAEAAAAA0n/vT8wNhb/EicVbOmpyaI3ka3H9+fam7ksII2Ipyd4BAAAAAQEAAAAJAAAAZHVwLWEudHh0AgAAAAAAAAAB";
         let blob = b64(B64);
