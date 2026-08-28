@@ -39,6 +39,9 @@ jobs:
       - name: Verify image
         run: ./target/release/limni verify /tmp/e2e-test.lim
 
+      - name: Deep-verify image (content hashes)
+        run: ./target/release/limni verify /tmp/e2e-test.lim --deep
+
       - name: Inspect image
         run: ./target/release/limni inspect /tmp/e2e-test.lim
 
