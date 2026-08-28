@@ -12,6 +12,10 @@ on:
     branches: [main]
     tags:
       - "v*"
+  # PRs run the hard-gate canary only (the dataset matrix below is
+  # excluded via its `if`) — a create/read regression surfaces in the
+  # PR, not after the release ships.
+  pull_request:
   workflow_dispatch:
     inputs:
       mode:
@@ -27,7 +31,9 @@ on:
         type: string
 
 permissions:
-  contents: write
+  # Only the dataset-matrix job (release artifact upload) writes;
+  # the canary is read-only so PR runs stay least-privilege.
+  contents: read
 
 concurrency:
   group: benchmark-${{ github.ref }}
@@ -57,11 +63,16 @@ jobs:
 
   benchmark:
     name: Benchmark (${{ matrix.os }})
+    # Dataset matrix is main/tag/dispatch only — PRs get the canary.
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    permissions:
+      # Attaches bench artifacts to tag releases.
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
