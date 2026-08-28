@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.19] — 2026-08-29
+
+### Changed
+
+- **README performance section leads with the gates.** The section
+  had quoted v0.2.65-era Apple M-series numbers labeled as
+  "CI-gated canaries" — they predated the canaries, and the
+  windowed claim was 56% of what the gate prints today. It now
+  opens with the enforced-claims table (v0.3.18 readings, 2-core
+  runner, median of three: 13,980 MB/s warm windowed · 1,635 MB/s
+  extract · 209 MB/s pack), keeps the 98× cold-read and DwarFS
+  tables explicitly dated as era measurements, and links the
+  configuration reference.
+
 ## [0.3.18] — 2026-08-28
 
 ### Added
