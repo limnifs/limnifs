@@ -34,11 +34,7 @@ omnizip-ppmd = "0.21.13"
 omnizip-ricepp = "0.21.13"
 omnizip-snappy = "0.21.13"
 omnizip-zpaq = "0.21.13"
-# HELD at 0.21.11: 0.21.12/0.21.13 moved the optimal parser down to
-# L3+, repricing our Default(L6) tier at 16x slower for ~4% tighter
-# slabs (createperf 6-11 MB/s, gate 50). Un-pin only with a conscious
-# default-tier decision — see the band pin in codec/zstd.rs.
-omnizip-zstd = "0.21.11"
+omnizip-zstd = "0.21.13"
 rand_core = { workspace = true, optional = true }
 rayon.workspace = true
 sha2 = { workspace = true, optional = true }

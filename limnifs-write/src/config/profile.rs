@@ -127,6 +127,7 @@ pub fn max_ratio() -> WriteConfig {
                 quality: 11,
                 window: 24,
             },
+            zstd: crate::config::ZstdTunables::default(),
             lzma: crate::config::LzmaTunables {
                 lc: 3,
                 lp: 0,

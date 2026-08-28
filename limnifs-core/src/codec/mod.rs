@@ -138,9 +138,16 @@ pub const CODEC_REFERENCED: u8 = 0xFE;
 /// `compress_with_*` function per codec (OCP).
 #[derive(Clone, Debug)]
 pub struct CodecTunables {
-    /// Brotli quality (0..=11) and ZSTD level proxy (1..=22).
-    /// Codecs without a quality parameter ignore this.
+    /// Brotli quality (0..=11). Codecs without a quality
+    /// parameter ignore this. Historically this also served as a
+    /// ZSTD level proxy — decoupled below since the two scales
+    /// diverged (omnizip 0.21.12+ runs the optimal parser at every
+    /// zstd level >= L3, so brotli's default q11 was silently
+    /// pushing zstd into the slow band).
     pub quality: u8,
+    /// ZSTD quality (0..=22 via `level_for_quality`). 0 = fast-tier
+    /// default. Independent of `quality` (brotli) by design.
+    pub zstd_quality: u8,
     /// PPMd7 / PPMd8 context-model order (1..=16).
     pub ppmd_order: u8,
     /// PPMd7 context-tree memory budget in bytes. 0 = codec default.
@@ -163,6 +170,7 @@ impl CodecTunables {
     pub fn from_quality(quality: u8) -> Self {
         Self {
             quality,
+            zstd_quality: quality,
             ppmd_order: 0,
             ppmd7_budget: 0,
             ppmd8_budget: 0,
@@ -176,6 +184,7 @@ impl Default for CodecTunables {
     fn default() -> Self {
         Self {
             quality: 0,
+            zstd_quality: 0,
             ppmd_order: 0,
             ppmd7_budget: 0,
             ppmd8_budget: 0,
@@ -680,6 +689,7 @@ mod tests {
 
         let small = CodecTunables {
             quality: 0,
+            zstd_quality: 0,
             ppmd_order: 4,
             ppmd7_budget: 8 * 1024 * 1024,
             ppmd8_budget: 0,

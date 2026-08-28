@@ -31,7 +31,11 @@ pub fn train_dictionary_fastcover(samples: &[&[u8]], target_size: usize) -> Vec<
 #[allow(dead_code)]
 pub fn compress_with_dict(plaintext: &[u8], dict_bytes: &[u8]) -> Result<Vec<u8>, CoreError> {
     let dict = omnizip_zstd::ZstdDictionary::from_raw(0, dict_bytes);
-    omnizip_zstd::compress_with_dict(plaintext, omnizip_zstd::ZstdLevel::Default, &dict).map_err(
+    // Fastest (L1/L2): omnizip ≥0.21.12 runs the optimal parser at
+    // every level ≥ L3, which reprices the old Default(L6) dict pass
+    // at ~16x slower for ~4% tighter drops — the dictionary front-
+    // loads the matches, so the fast tier keeps most of the dict win.
+    omnizip_zstd::compress_with_dict(plaintext, omnizip_zstd::ZstdLevel::Fastest, &dict).map_err(
         |e| CoreError::Corrupt {
             reason: format!("zstd compress_with_dict failed: {e}"),
         },
