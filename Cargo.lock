@@ -721,9 +721,9 @@ dependencies = [
 
 [[package]]
 name = "omnizip-brotli"
-version = "0.21.16"
+version = "0.21.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22d73894faf81d59e6a2a365bf3f1f50e5d1fbef879d7399a2c26d3be3c0a2a"
+checksum = "586b3e5f7f823565f98fa3a909de25679e42f656f9ee936ca2dbbae0036f2617"
 dependencies = [
  "omnizip-codecs",
 ]

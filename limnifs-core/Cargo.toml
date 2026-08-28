@@ -18,7 +18,15 @@ ed25519-dalek = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
 libc = "0.2"
 omnizip-blosc = "0.21.16"
-omnizip-brotli = "0.21.16"
+# HELD at 0.21.14: 0.21.15/0.21.16 raised the brotli DP
+# MATCH_LEN_CAP 1951 -> 65536 ("measured: 65536 is safe" —
+# falsified). On the issue #195/#196 fixture content the
+# relaxation sweeps explode: the Windows CI test suite hung
+# 23+ minutes to job timeout (macOS completes, which is why
+# local gates passed). Tarball-diff isolation: brotli is the
+# ONLY crate with source changes between 0.21.14 and 0.21.16.
+# Un-pin when upstream re-measures the cap.
+omnizip-brotli = "0.21.14"
 omnizip-bzip2 = "0.21.16"
 omnizip-codecs = "0.21.16"
 omnizip-deflate = "0.21.16"
