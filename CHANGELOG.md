@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.17] — 2026-08-28
+
+### Added
+
+- **`limni verify --deep`** — content verification. `verify`
+  previously parsed the manifest and returned success even with
+  corrupted slabs; no command ever checked a content hash, though
+  drop ids being BLAKE3 of the plaintext is the format's core
+  promise. `--deep` checks that every metadata-referenced drop
+  resolves in the slab store and that every stored drop decompresses
+  and hashes to its content-addressed id — parallel across drops,
+  reusing the cached slab store and dictionary plumbing. Cost: one
+  extraction pass. Failures name the drop and exit nonzero.
+
 ## [0.3.16] — 2026-08-28
 
 ### Changed
