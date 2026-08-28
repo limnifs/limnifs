@@ -72,13 +72,24 @@ code never changes (open/closed via [`CodecRegistry`]).
 
 ## Performance
 
-Read path, v0.2.65 (Apple M-series, release build):
+**Gated in CI.** Every claim below is a hard gate that runs on every
+pull request and blocks every release (v0.3.18 readings, 2-core
+GitHub runner, median of three):
 
-- **CI-gated canaries** (`limnifs-bench readperf`, hard gates
-  windowed ≥ 200 MB/s and extract ≥ 100 MB/s): **2269 MB/s**
-  sequential extract, **7793 MB/s** warm 8 KiB random windows.
-- **Cold random reads** (`limnifs-bench readcompare`, same 19.5 MiB
-  drop through 8 KiB windows — monolithic vs seekable layout):
+| Gate | Floor | v0.3.18 reading |
+|---|---:|---:|
+| Warm 8 KiB random windows (`readperf`) | ≥ 200 MB/s | **13,980 MB/s** |
+| Sequential extract (`readperf`) | ≥ 100 MB/s | **1,635 MB/s** |
+| Create / pack throughput (`createperf`) | ≥ 50 MB/s | **209 MB/s** |
+| Content hashes (`verify --deep`, E2E) | all match | green, every PR |
+| BCJ-x86 on real ELF binaries | informational | 4.3% smaller than plain LZ4 |
+| ZSTD dictionary win on text corpora | measured | positive, never larger |
+
+**Why the reads are fast** — measured at v0.2.65 (Apple M-series)
+and unchanged in shape since: a cold 8 KiB window into a 19.5 MiB
+drop decodes ~1.03 × 256 KiB seekable frames, never the whole drop.
+The failure mode behind limnifs#192 (~48 GiB of wasted decode) is
+gone by construction:
 
 | metric | monolithic | seekable | delta |
 |---|---:|---:|---:|
@@ -88,17 +99,16 @@ Read path, v0.2.65 (Apple M-series, release build):
 | sequential extract | 336 MB/s | 368 MB/s | 1.10x |
 | image size | 14.52 MiB | 14.49 MiB | 1.00x |
 
-A cold window decodes 1.03 × 256 KiB frames, never the whole drop —
-the failure mode behind limnifs#192 (~48 GiB of wasted decode) is
-gone by construction.
-
-Benchmarked against DwarFS 0.15.6 on a 440 MB text corpus:
+**Versus DwarFS** (v0.2.x era, DwarFS 0.15.6, 440 MB text corpus):
 
 | Operation | LimniFS | DwarFS | Ratio |
 |---|---|---|---|
 | Create | 0.62s (700 MB/s) | 1.00s | 1.6x faster |
 | Extract | 0.59s (8500 files/s) | 1.37s | 2.3x faster |
 | Image size | 8% smaller | baseline | — |
+
+Codec tuning (profiles, the zstd tier map, per-codec quality knobs)
+is documented in [docs/configuration.md](docs/configuration.md).
 
 ## Crate structure
 
