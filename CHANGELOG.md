@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.18] — 2026-08-28
+
+### Added
+
+- **`docs/configuration.md`** — the configuration reference. The
+  full TOML surface with source-checked defaults, the nine-profile
+  table, the CLI/library split, the zstd tier map with the
+  optimal-parser cliff and fast-tier default story, and the
+  verify / `verify --deep` contract. Previously the tuning surface
+  was documented only in doc-comments.
+
+### Changed
+
+- **E2E gains `verify --deep`** with a slab-carrying fixture
+  (100 KiB payload above the inline threshold): the content-hash
+  contract runs on every PR and main push, not just at release.
+
 ## [0.3.17] — 2026-08-28
 
 ### Added
