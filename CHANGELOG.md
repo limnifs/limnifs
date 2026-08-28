@@ -12,6 +12,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.13] — 2026-08-28
+
+### Changed
+
+- **Deps: omnizip 0.21.10 → 0.21.11** across all 19 codec
+  dependencies. Upstream: zstd Lazy2 L8-12 moved to the optimal
+  parser — every zstd level now meets or beats the reference on
+  every measured fixture — with a targetLength floor fixing level
+  monotonicity. The new band sits above LimniFS's default path
+  (tournament L6, dict pass L6); slab outputs remain
+  byte-identical across 0.21.7-0.21.11.
+
+### Added
+
+- **Perf gates block the release.** A `perf-gate` job runs the
+  readperf + createperf hard gates inside the Release workflow,
+  and the publish job requires its success — a red canary skips
+  the publish and the release fails closed. The benchmark canary
+  additionally runs on every pull request (dataset matrix stays
+  on main/tags), and a pinned quality→level map documents that
+  LimniFS's defaults deliberately sit below the optimal-parser
+  band.
+
 ## [0.3.12] — 2026-08-28
 
 ### Changed
