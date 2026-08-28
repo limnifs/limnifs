@@ -87,6 +87,13 @@ enum Command {
         /// Emit machine-readable JSON instead of human text.
         #[arg(long)]
         json: bool,
+        /// Deep content verification: decompress every drop in
+        /// every slab and check its BLAKE3 against the
+        /// content-addressed drop id, plus check every
+        /// metadata-referenced drop exists. Cost: one full
+        /// extraction pass over the image.
+        #[arg(long)]
+        deep: bool,
     },
     /// Build a `.lim` image from a directory tree.
     ///
@@ -341,7 +348,13 @@ enum Command {
 fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Verify { image, json } => verify(&image, json),
+        Command::Verify { image, json, deep } => {
+            verify(&image, json)?;
+            if deep {
+                verify_deep(&image)?;
+            }
+            Ok(())
+        }
         Command::Limn {
             source,
             output,
@@ -633,6 +646,111 @@ fn sidecar_name<'a>(uri: &'a str) -> Result<&'a str, CliError> {
         path: PathBuf::from(uri),
         source,
     })
+}
+
+/// Deep content verification. Two checks over and above the
+/// manifest parse: (1) every drop id referenced by the metadata
+/// resolves in the slab store; (2) every drop in every slab
+/// decompresses and BLAKE3-hashes to its content-addressed id.
+/// Parallel across drops — same shape as extract.
+fn verify_deep(image: &Path) -> Result<(), CliError> {
+    use rayon::prelude::*;
+
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, _root_inode, slab_index, dict_section) =
+        load_image(&manifest_bytes, image, map_err)?;
+    if slab_index.is_empty() {
+        println!("verify --deep: no slabs (inline-only image) — nothing to hash");
+        return Ok(());
+    }
+
+    let mut store =
+        limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?;
+    if let Some(d) = &dict_section {
+        install_dicts(&mut store, d);
+    }
+    // Existence checks and key enumeration on the raw store (the
+    // cache wrapper has no `contains`); the hashing pass then moves
+    // the store into the cache.
+    let ids: Vec<[u8; 32]> = store.drop_index_keys().copied().collect();
+
+    // (1) Referenced drops must exist.
+    let mut missing: Vec<String> = Vec::new();
+    for inode in &blob.inodes {
+        if let limnifs_core::ContentHandle::SliceMap(slices) = &inode.content_handle {
+            for s in slices {
+                if !store.contains(s.drop_id.as_bytes()) {
+                    missing.push(format!(
+                        "inode {} references drop {:02x?} missing from every slab",
+                        inode.number,
+                        &s.drop_id.as_bytes()[..4]
+                    ));
+                }
+            }
+        }
+    }
+    if !missing.is_empty() {
+        for m in &missing {
+            eprintln!("verify --deep: {m}");
+        }
+        return Err(CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!("{} referenced drops missing from slabs", missing.len()),
+            },
+        });
+    }
+
+    let store = limnifs_core::slab_cache::CachedSlabStore::with_default_capacity(store);
+
+    // (2) Every stored drop must hash to its id.
+    let total = ids.len();
+    let failures: Vec<String> = ids
+        .par_iter()
+        .filter_map(|id| match store.plaintext_for(id) {
+            None => Some(format!(
+                "drop {:02x?}: index entry has no slab record",
+                &id[..4]
+            )),
+            Some(Err(e)) => Some(format!("drop {:02x?}: decompress: {e}", &id[..4])),
+            Some(Ok(plaintext)) => {
+                if limnifs_core::merkle::hash_section(&plaintext) != *id {
+                    Some(format!("drop {:02x?}: content hash mismatch", &id[..4]))
+                } else {
+                    None
+                }
+            }
+        })
+        .collect();
+
+    if failures.is_empty() {
+        println!("verify --deep: {total} drops — all content hashes match");
+        Ok(())
+    } else {
+        for f in failures.iter().take(8) {
+            eprintln!("verify --deep: {f}");
+        }
+        if failures.len() > 8 {
+            eprintln!("verify --deep: … and {} more", failures.len() - 8);
+        }
+        Err(CliError::FormatFailed {
+            path: image.to_path_buf(),
+            source: CoreError::Corrupt {
+                reason: format!(
+                    "{}/{} drops failed deep verification",
+                    failures.len(),
+                    total
+                ),
+            },
+        })
+    }
 }
 
 fn limsig_path(image: &Path) -> PathBuf {
