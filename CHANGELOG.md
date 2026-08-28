@@ -12,6 +12,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.16] — 2026-08-28
+
+### Changed
+
+- **Quality decoupling completed.** The `max_ratio` profile's
+  documented "ZSTD L19 tournament" contract is restored (quality 19
+  set deliberately — the optimal parser belongs in the ratio
+  profile). xz no longer reads the flat (brotli) quality, which had
+  it silently running at level 9 under the default brotli q11; it
+  gains its own `xz_level` knob (0 = preset 6). The zstd module
+  header now documents the tier-map reality instead of 0.14.10-era
+  history.
+- **Self-describing createperf**: median (min…max, spread%) over
+  three measured packs; spread > 25% prints an explicit "noisy host
+  — CI canary is the arbiter" annotation. Gates judge the median.
+- **Tests recalibrated to omnizip 0.21.14 evidence**: zstd level
+  monotonicity guards gross inversions only (the reference itself
+  inverts by a byte on tiny repetitive inputs), and the
+  dictionary-ratio soft floor moves 5% → 1% with the Fastest-tier
+  repricing cited (measured 1.5% on the fixture; the never-larger
+  assertion stays absolute).
+
 ## [0.3.15] — 2026-08-28
 
 ### Changed
