@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.12] — 2026-08-28
+
+### Changed
+
+- **Deps: omnizip 0.21.9 → 0.21.10** across all 19 codec
+  dependencies. Upstream: brotli q10/q11 literal block splitter
+  restored (a shortcut had silently disabled it; q10/q11 sizes
+  drop 23-31% on the regression corpus) and the zstd L16 ultra
+  price model. Both tiers sit above LimniFS's default path
+  (metadata brotli q5/q2, tournament brotli q6, zstd L6) — slab
+  outputs remain byte-identical on the create fixture across
+  0.21.7-0.21.10. Explicit high-quality tunables pick up the
+  improved ratios. Wire format unchanged.
+
 ## [0.3.11] — 2026-08-28
 
 ### Changed
