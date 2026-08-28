@@ -141,10 +141,11 @@ mod tests {
     fn quality_to_level_band_map_is_pinned() {
         // The band map is a product decision, not an accident: the
         // tournament default (quality 6) and the dictionary pass both
-        // run at `Default` (L6), deliberately BELOW omnizip's
-        // optimal-parser band (L8+ since omnizip 0.21.11) where
-        // compression is several times slower for a ratio our
-        // tournament rarely selects. If omnizip moves a parser
+        // run at `Default` (L6). NOTE: omnizip 0.21.12/0.21.13 moved
+        // the optimal parser down to L3+, which reprices `Default`
+        // (16x slower, ~4% tighter on the create fixture) —
+        // LimniFS holds omnizip-zstd at 0.21.11 until the default
+        // tier is consciously re-picked. If omnizip moves a parser
         // boundary, or a default crosses into `Better`/`Best`,
         // update this pin consciously — with a createperf reading.
         use omnizip_zstd::ZstdLevel;

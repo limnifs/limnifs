@@ -17,23 +17,27 @@ memmap2.workspace = true
 ed25519-dalek = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
 libc = "0.2"
-omnizip-blosc = "0.21.11"
-omnizip-brotli = "0.21.11"
-omnizip-bzip2 = "0.21.11"
-omnizip-codecs = "0.21.11"
-omnizip-deflate = "0.21.11"
-omnizip-deflate64 = "0.21.11"
-omnizip-filters = "0.21.11"
-omnizip-flac = "0.21.11"
-omnizip-fsst = "0.21.11"
-omnizip-glza = "0.21.11"
-omnizip-libdeflate = "0.21.11"
-omnizip-lz4 = "0.21.11"
-omnizip-lzma = "0.21.11"
-omnizip-ppmd = "0.21.11"
-omnizip-ricepp = "0.21.11"
-omnizip-snappy = "0.21.11"
-omnizip-zpaq = "0.21.11"
+omnizip-blosc = "0.21.13"
+omnizip-brotli = "0.21.13"
+omnizip-bzip2 = "0.21.13"
+omnizip-codecs = "0.21.13"
+omnizip-deflate = "0.21.13"
+omnizip-deflate64 = "0.21.13"
+omnizip-filters = "0.21.13"
+omnizip-flac = "0.21.13"
+omnizip-fsst = "0.21.13"
+omnizip-glza = "0.21.13"
+omnizip-libdeflate = "0.21.13"
+omnizip-lz4 = "0.21.13"
+omnizip-lzma = "0.21.13"
+omnizip-ppmd = "0.21.13"
+omnizip-ricepp = "0.21.13"
+omnizip-snappy = "0.21.13"
+omnizip-zpaq = "0.21.13"
+# HELD at 0.21.11: 0.21.12/0.21.13 moved the optimal parser down to
+# L3+, repricing our Default(L6) tier at 16x slower for ~4% tighter
+# slabs (createperf 6-11 MB/s, gate 50). Un-pin only with a conscious
+# default-tier decision — see the band pin in codec/zstd.rs.
 omnizip-zstd = "0.21.11"
 rand_core = { workspace = true, optional = true }
 rayon.workspace = true
