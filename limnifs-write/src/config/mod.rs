@@ -325,6 +325,8 @@ pub struct CodecTunables {
     #[serde(default)]
     pub brotli: BrotliTunables,
     #[serde(default)]
+    pub zstd: ZstdTunables,
+    #[serde(default)]
     pub lzma: LzmaTunables,
     #[serde(default)]
     pub bzip2: Bzip2Tunables,
@@ -375,6 +377,22 @@ impl Default for BrotliTunables {
             quality: 11,
             window: 22,
         }
+    }
+}
+
+/// ZSTD tunables: quality (level proxy). Default 2 (Fastest) —
+/// since omnizip 0.21.12+ every level >= L3 runs the optimal parser
+/// (~16x slower at our chunk sizes), so the default deliberately
+/// sits in the only remaining fast tier. Independent of the brotli
+/// quality knob; the two scales diverged and were decoupled.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ZstdTunables {
+    pub quality: u8,
+}
+
+impl Default for ZstdTunables {
+    fn default() -> Self {
+        Self { quality: 2 }
     }
 }
 
@@ -675,6 +693,7 @@ impl WriteConfig {
     pub fn to_core_tunables(&self) -> limnifs_core::codec::CodecTunables {
         limnifs_core::codec::CodecTunables {
             quality: self.codec_tunables.brotli.quality,
+            zstd_quality: self.codec_tunables.zstd.quality,
             ppmd_order: self
                 .codec_tunables
                 .ppmd7

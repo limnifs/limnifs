@@ -863,9 +863,9 @@ dependencies = [
 
 [[package]]
 name = "omnizip-zstd"
-version = "0.21.11"
+version = "0.21.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a54eb0b3630bbf9dfb20dfe7d39f6d386d1731e804d291958265607be714d89"
+checksum = "af07f37b5493f8118fb03da98c38d9ac2c0930bf23fbbbb5b111ed456c88b1f7"
 dependencies = [
  "omnizip-codecs",
 ]

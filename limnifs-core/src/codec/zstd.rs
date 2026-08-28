@@ -20,8 +20,14 @@ pub struct ZstdTunables {
 
 impl Default for ZstdTunables {
     fn default() -> Self {
-        // quality 6 → ZstdLevel::Default (libzstd's default).
-        Self { quality: 6 }
+        // quality 2 → ZstdLevel::Fastest (L1/L2). Since omnizip
+        // 0.21.12/0.21.13 every level ≥ L3 runs the optimal parser
+        // (~16x slower at our chunk sizes for ~4% tighter output) —
+        // L1/L2 is the only fast tier left, and the tournament's
+        // short-circuit + brotli fallback absorb its ratio cost.
+        // Raise this consciously, with a createperf reading (the
+        // band pin test below guards the map, not this default).
+        Self { quality: 2 }
     }
 }
 
@@ -85,7 +91,17 @@ impl Codec for ZstdCodec {
         plaintext: &[u8],
         t: &CodecTunables,
     ) -> Result<Vec<u8>, CoreError> {
-        let quality = if t.quality > 0 { t.quality } else { 6 };
+        // Decoupled from the flat (brotli) quality: brotli's default
+        // q11 used to leak in here as a zstd level proxy and, since
+        // omnizip 0.21.12+, dropped zstd into the optimal-parser
+        // band (~16x slower). 0 = fast-tier default; raise
+        // consciously with a createperf reading (band pin test
+        // guards the map).
+        let quality = if t.zstd_quality > 0 {
+            t.zstd_quality
+        } else {
+            2
+        };
         let level = level_for_quality(quality);
         compress_verified(plaintext, level)
     }
@@ -104,16 +120,17 @@ impl PerCodecTunables for ZstdCodec {
     }
 }
 
-/// Compress with Zstandard at `Default` (level 6). This matches
-/// libzstd's CLI default and gives the right speed/ratio balance
-/// for source code, CSV, and general text.
+/// Compress with Zstandard at `Fastest` (L1/L2). Since omnizip
+/// 0.21.12/0.21.13, `Default` (L6) runs the optimal parser — the
+/// wrong trade for the no-tunables default path, where speed is
+/// the contract (see `ZstdTunables::default`).
 ///
 /// # Errors
 ///
 /// Returns [`CoreError::Corrupt`] on encoder failure or when the
 /// frame fails the omnizip#315 round-trip self-check.
 pub(crate) fn compress(plaintext: &[u8]) -> Result<Vec<u8>, CoreError> {
-    compress_verified(plaintext, omnizip_zstd::ZstdLevel::Default)
+    compress_verified(plaintext, omnizip_zstd::ZstdLevel::Fastest)
 }
 
 /// Compress at an explicit level. Used by callers that want a
@@ -139,16 +156,19 @@ mod tests {
     /// guard documented in the v0.2.53 changelog must come back.
     #[test]
     fn quality_to_level_band_map_is_pinned() {
-        // The band map is a product decision, not an accident: the
-        // tournament default (quality 6) and the dictionary pass both
-        // run at `Default` (L6). NOTE: omnizip 0.21.12/0.21.13 moved
-        // the optimal parser down to L3+, which reprices `Default`
-        // (16x slower, ~4% tighter on the create fixture) —
-        // LimniFS holds omnizip-zstd at 0.21.11 until the default
-        // tier is consciously re-picked. If omnizip moves a parser
-        // boundary, or a default crosses into `Better`/`Best`,
-        // update this pin consciously — with a createperf reading.
+        // The band map is a product decision, not an accident.
+        // Since omnizip 0.21.12/0.21.13 every level ≥ L3 runs the
+        // optimal parser (~16x slower at our chunk sizes), so the
+        // defaults (ZstdTunables quality 2, the no-tunables
+        // compress, and the dictionary pass) all sit at Fastest —
+        // the only fast tier left. Raising a default into the
+        // optimal-parser band is a conscious trade: update this pin
+        // and the defaults together, with a createperf reading.
         use omnizip_zstd::ZstdLevel;
+        assert_eq!(
+            level_for_quality(ZstdTunables::default().quality),
+            ZstdLevel::Fastest
+        );
         for q in 0..=2 {
             assert_eq!(level_for_quality(q), ZstdLevel::Fastest, "q{q}");
         }
