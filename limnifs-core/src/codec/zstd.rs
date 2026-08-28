@@ -1,12 +1,13 @@
-//! Zstandard codec (0x02): pure Rust via `omnizip-zstd` 0.14.10.
+//! Zstandard codec (0x02): pure Rust via `omnizip-zstd` 0.21.x.
 //!
-//! `omnizip-zstd` 0.14.10 ships a real encoder and decoder. The
-//! `Default` (L6), `Better` (L12), and `Best` (L22) levels had a
-//! regression in 0.14.8 on highly-repetitive inputs (50 KB output
-//! and 14+ s runtime for 90 KB of repeated text). The 0.14.10 fix
-//! (omnizip-rs PR #90) restores correct level differentiation; see
-//! `docs/omnizip-proposals/zstd-default-broken.md` for the original
-//! report.
+//! The load-bearing fact for this module is the LEVEL-TIER MAP
+//! (`level_for_quality` + the band pin test): since omnizip
+//! 0.21.12/0.21.13 every level ≥ L3 runs the optimal parser, so
+//! LimniFS's defaults sit at Fastest (L1/L2) — the only fast tier —
+//! and raising a default into the parser band is a conscious,
+//! createperf-measured decision. The zstd quality knob is decoupled
+//! from the flat (brotli) quality; see `ZstdTunables::default` and
+//! `compress_with_tunables` for the incident history.
 
 use crate::codec::{Codec, CodecTunables, PerCodecTunables};
 use crate::error::CoreError;

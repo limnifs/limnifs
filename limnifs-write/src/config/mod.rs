@@ -694,6 +694,7 @@ impl WriteConfig {
         limnifs_core::codec::CodecTunables {
             quality: self.codec_tunables.brotli.quality,
             zstd_quality: self.codec_tunables.zstd.quality,
+            xz_level: 0,
             ppmd_order: self
                 .codec_tunables
                 .ppmd7

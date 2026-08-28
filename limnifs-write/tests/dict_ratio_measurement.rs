@@ -72,12 +72,19 @@ fn zstd_dictionary_improves_tiny_text_file_ratio() {
         dict <= plain,
         "dictionary-trained image ({dict} B) larger than plain ({plain} B)"
     );
-    // The ≥20% target from TODO.impl/04-zstd-dictionary-training.
-    // Soft-gated at ≥5% so environment/library drift can't flake CI;
-    // the headline number is printed above.
+    // The ≥20% target from TODO.impl/04-zstd-dictionary-training was
+    // measured when the dict pass ran at Default (L6, lazy2). Since
+    // v0.3.14 the pass runs Fastest (L1/L2 — omnizip ≥0.21.12 made
+    // every level ≥ L3 the ~16x-slower optimal parser), which
+    // repriced the win to ~1.5% on this fixture: the tournament's
+    // fast-tier output already captures most of the redundancy a
+    // dictionary exploits. Soft-gated at ≥1% so library drift can't
+    // flake CI; the headline number is printed above. Raising the
+    // dict tier is a conscious knob decision with this test as the
+    // measurement.
     assert!(
-        improvement >= 5.0,
-        "dictionary win {improvement:.1}% below the 5% soft floor"
+        improvement >= 1.0,
+        "dictionary win {improvement:.1}% below the 1% soft floor"
     );
 
     let _ = std::fs::remove_dir_all(&src);
