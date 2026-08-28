@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.15] — 2026-08-28
+
+### Changed
+
+- **Deps: omnizip 0.21.13 → 0.21.14** across all 19 codec
+  dependencies. The faithful zstd fast-tier port (L1/L2, the
+  4-position pipeline from `zstd_fast.c`) lands directly on
+  LimniFS's default path (zstd Fastest since v0.3.14): create
+  slabs drop another 0.8% (4.0% under the 0.21.11 baseline) at
+  unchanged speed. Upstream standings: zstd L1-L22 all meet or
+  beat the reference on nearly the whole sweep corpus; brotli at
+  or under reference everywhere.
+
 ## [0.3.14] — 2026-08-28
 
 ### Changed
