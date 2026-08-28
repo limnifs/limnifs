@@ -12,6 +12,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.14] — 2026-08-28
+
+### Changed
+
+- **Deps: omnizip 0.21.11 → 0.21.13** across all 19 codec
+  dependencies (zstd L3-L22 all meet or beat the reference; only
+  L1/L2 remain over). The ride-in exposed and fixed a LimniFS bug:
+  the flat quality knob was fed from brotli's default q11 and read
+  by zstd as a level proxy — 11 lands in the 6..=11 band
+  (`Default`/L6), which omnizip 0.21.12+ runs as the optimal
+  parser, collapsing create throughput to 6-12 MB/s. The two
+  scales happened to align in the old world; the tier migration
+  broke the coincidence.
+- **zstd quality is decoupled**: `CodecTunables` gains
+  `zstd_quality` and `WriteConfig` gains `[codec_tunables.zstd]
+  quality` (default 2 = Fastest, the only remaining fast tier).
+  zstd no longer reads the flat (brotli) quality. Result on the
+  create fixture: 87 MB/s with slabs **3.2% smaller** than the
+  0.21.11 baseline — the 0.21.13 codecs win at the fast tier.
+  The band-pin test asserts the fast-tier default.
+
 ## [0.3.13] — 2026-08-28
 
 ### Changed
