@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.23] — 2026-08-29
+
+### Changed
+
+- **Deps: omnizip 0.21.18 → 0.21.20** across all 19 codec
+  dependencies. Tarball-diff scope: `omnizip-codecs` (matchfinder),
+  `omnizip-bzip2` (huffman), and `omnizip-lzma` (new `fast_parse`
+  encoder tier) changed source; the rest are version-only. None sit
+  on the default hot path. createperf 214 MB/s with the tightest
+  local spread recorded (13%) and slab bytes identical to the
+  0.21.14 baseline; Windows CI green.
+
 ## [0.3.22] — 2026-08-29
 
 ### Changed
