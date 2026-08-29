@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.21] — 2026-08-29
+
+### Changed
+
+- **Upstream: brotli DP regression filed** as
+  [omnizip-rs#388](https://github.com/omnizip/omnizip-rs/issues/388)
+  — the `MATCH_LEN_CAP` 65,536 blow-up from 0.21.15/16, with the
+  tarball-diff isolation, the Windows CI hang evidence, and a
+  reproducer. The omnizip-brotli hold at 0.21.14 stays until it
+  lands; 0.21.17 was assessed (block-splitter bank tuning only,
+  rest of the family byte-identical) and deliberately not ridden.
+- **Windows test step gets `timeout-minutes: 15`** — the #388 hang
+  burned the full 30-minute job budget with "operation canceled"
+  as the only signal; a healthy run is 4-6 min, so anything past
+  15 is a hang by definition and now fails fast, named.
+
 ## [0.3.20] — 2026-08-29
 
 ### Changed
