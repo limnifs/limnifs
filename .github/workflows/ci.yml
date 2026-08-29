@@ -69,4 +69,10 @@ jobs:
         # separators, mmap semantics, and hard-link fallbacks can all
         # compile green and fail at runtime. This upgrades the Windows
         # gate from "it builds" to "it round-trips".
+        #
+        # Step-level timeout: a healthy run is 4-6 min; past 15 is a
+        # hang by definition (the omnizip-brotli 0.21.15 DP hang —
+        # omnizip-rs#388 — burned the full 30-min job budget before
+        # cancelling). Fails fast, named, runner freed.
+        timeout-minutes: 15
         run: cargo test --workspace --quiet
