@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.22] — 2026-08-29
+
+### Changed
+
+- **Deps: omnizip 0.21.18 — brotli hold lifted.** The upstream fix
+  for [omnizip-rs#388](https://github.com/omnizip/omnizip-rs/issues/388)
+  (MATCH_LEN_CAP restored to 1,951) was verified in the tarball
+  before riding in; the previously-hanging #195/#196 tests pass in
+  32 s, and the Windows CI gate that caught the regression is
+  green at 0.21.18. All 18 crates align, picking up the
+  0.21.15-0.21.17 improvements (reference histogram clustering at
+  q10+, binary block-splitter bank sizing) with the hang excluded.
+  createperf slab bytes remain identical to the 0.21.14 baseline.
+
 ## [0.3.21] — 2026-08-29
 
 ### Changed
