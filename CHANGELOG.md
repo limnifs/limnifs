@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.20] — 2026-08-29
+
+### Changed
+
+- **Deps: omnizip 0.21.14 → 0.21.16**, with **omnizip-brotli
+  held at 0.21.14**. The 0.21.15/16 change raising the brotli DP
+  `MATCH_LEN_CAP` 1951 → 65,536 (shipped with "measured: 65536 is
+  safe") explodes the DP relaxation sweeps on repetitive content:
+  the issue #195/#196 tests hung the Windows CI suite for 23+
+  minutes to job timeout — macOS completes, which is why local
+  gates passed. Tarball-diff isolation shows brotli was the only
+  crate with source changes between 0.21.14 and 0.21.16; the other
+  17 ride in (identical source, version-aligned). The held
+  dependency carries the full evidence; un-pin when upstream
+  re-measures the cap.
+
 ## [0.3.19] — 2026-08-29
 
 ### Changed
