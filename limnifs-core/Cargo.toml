@@ -17,31 +17,24 @@ memmap2.workspace = true
 ed25519-dalek = { workspace = true, optional = true }
 hkdf = { workspace = true, optional = true }
 libc = "0.2"
-omnizip-blosc = "0.21.26"
-# HELD at 0.21.20: 0.21.26 replaced the #388-era hard MATCH_LEN_CAP
-# (1951) with an env-var knob defaulting to 16,779,211 — effectively
-# UNCAPPED — justified by fixture wins ("8.7KB on bin1") with no
-# worst-case analysis. Same regression class as omnizip-rs#388: local
-# gates pass at 0.21.26 (28s, as the 65K cap did on macOS) while the
-# unbounded DP sweep stays a landmine for downstream content on
-# slower machines. Un-pin when the cap regains a bounded default.
-omnizip-brotli = "0.21.20"
-omnizip-bzip2 = "0.21.26"
-omnizip-codecs = "0.21.26"
-omnizip-deflate = "0.21.26"
-omnizip-deflate64 = "0.21.26"
-omnizip-filters = "0.21.26"
-omnizip-flac = "0.21.26"
-omnizip-fsst = "0.21.26"
-omnizip-glza = "0.21.26"
-omnizip-libdeflate = "0.21.26"
-omnizip-lz4 = "0.21.26"
-omnizip-lzma = "0.21.26"
-omnizip-ppmd = "0.21.26"
-omnizip-ricepp = "0.21.26"
-omnizip-snappy = "0.21.26"
-omnizip-zpaq = "0.21.26"
-omnizip-zstd = "0.21.26"
+omnizip-blosc = "0.21.27"
+omnizip-brotli = "0.21.27"
+omnizip-bzip2 = "0.21.27"
+omnizip-codecs = "0.21.27"
+omnizip-deflate = "0.21.27"
+omnizip-deflate64 = "0.21.27"
+omnizip-filters = "0.21.27"
+omnizip-flac = "0.21.27"
+omnizip-fsst = "0.21.27"
+omnizip-glza = "0.21.27"
+omnizip-libdeflate = "0.21.27"
+omnizip-lz4 = "0.21.27"
+omnizip-lzma = "0.21.27"
+omnizip-ppmd = "0.21.27"
+omnizip-ricepp = "0.21.27"
+omnizip-snappy = "0.21.27"
+omnizip-zpaq = "0.21.27"
+omnizip-zstd = "0.21.27"
 rand_core = { workspace = true, optional = true }
 rayon.workspace = true
 sha2 = { workspace = true, optional = true }
