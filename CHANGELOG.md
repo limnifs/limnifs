@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.26] — 2026-08-31
+
+### Changed
+
+- **Deps: omnizip 0.21.27 → 0.21.29** (brotli only changed source:
+  the deterministic per-input work budget degrading btopt's probe
+  cap, ~16.4K compare-bytes/position ceiling regardless of
+  content). This also resolves the timing note from omnizip-rs#408:
+  the #388/#408 reproducer tests run in 43 s (from 161 s at
+  0.21.27, ~30 s at 0.21.20) — the probe budget recovered most of
+  the q11 slowdown on repetitive structured text. createperf
+  140 MB/s (spread 10%), slab bytes byte-identical to the 0.21.14
+  baseline — now held across ten omnizip versions.
+
 ## [0.3.25] — 2026-08-31
 
 ### Changed
