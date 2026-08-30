@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.24] — 2026-08-30
+
+### Changed
+
+- **Deps: omnizip 0.21.20 → 0.21.26**, with **omnizip-brotli held
+  at 0.21.20**. The 0.21.26 brotli change replaces the #388-era
+  hard `MATCH_LEN_CAP` (1,951) with an env knob defaulting to
+  16,779,211 — effectively uncapped — justified by fixture wins
+  with no worst-case analysis: the same regression class as
+  omnizip-rs#388, larger ceiling, filed upstream as
+  [omnizip-rs#408](https://github.com/omnizip/omnizip-rs/issues/408).
+  Local gates pass at 0.21.26 (as the 65K cap did on macOS before
+  the Windows-only hang), so the hold is preventive. Riding in:
+  the lz4 faithful C fast-loop port (output-neutral on our
+  fixture) and libdeflate multi-block Huffman. createperf 200 MB/s
+  (spread 14%), slab bytes byte-identical to the 0.21.14 baseline.
+
 ## [0.3.23] — 2026-08-29
 
 ### Changed
