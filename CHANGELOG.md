@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.25] — 2026-08-31
+
+### Changed
+
+- **Deps: omnizip 0.21.27 — brotli hold lifted.** The #408 fix
+  (`match_len_cap` default restored to 1,951, `BROTLI_MLEN_CAP`
+  opt-in, an in-tree gate locking the bounded default) was
+  verified in the tarball before riding in. The #388/#408
+  reproducer tests pass at 161 s local (~30 s at 0.21.20 — a
+  bounded ~5× slowdown on this q11 fixture class, reported
+  upstream as timing feedback); Windows CI green at 16m40s under
+  the 15-minute step timeout's margin. createperf 104 MB/s with
+  the tightest spread recorded (6%), slab bytes byte-identical to
+  the 0.21.14 baseline. Upstream now runs LimniFS's full suite
+  against the omnizip workspace on every omnizip PR (Downstream
+  workflow) — the #388/#408 class breaks their build before it
+  reaches us next time.
+
 ## [0.3.24] — 2026-08-30
 
 ### Changed
