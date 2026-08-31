@@ -1873,41 +1873,77 @@ impl WriteContext {
         }
 
         // Re-compress each ZSTD drop with the dict for its class,
-        // keeping the smaller representation. This is a second full
-        // compression pass over the tree, so it runs in parallel —
-        // serially it would be the tail after every rayon worker has
-        // finished the walk/tournament phases (the same one-core-tail
-        // shape Phase 2 fixed for chunk compression). Per-drop
-        // decisions are independent and par_iter_mut mutates in
-        // place, so drop order and output bytes are unchanged.
+        // collecting candidates. The swap decision is taken serially
+        // below: a dictionary must PAY FOR ITSELF — the per-drop
+        // savings must exceed the bytes the dictionary section adds
+        // to the image. Since omnizip 0.21.32's fast-tier match
+        // finding, the plain path is good enough that a dictionary
+        // can lose overall on repetitive-text corpora (its 64 KiB
+        // section costs more than it saves); without this gate the
+        // dictionary made images LARGER. The collection pass runs in
+        // parallel — the same one-core-tail shape Phase 2 fixed —
+        // and position-stable, so output is deterministic either
+        // way.
         use rayon::prelude::*;
         let classifier = self.classifier;
-        self.drops.par_iter_mut().for_each(|d| {
-            if d.codec != limnifs_core::codec::CODEC_ZSTD {
-                return;
+        let dicts = &self.trained_dicts_by_class;
+        let candidates: Vec<Option<(std::sync::Arc<[u8]>, u8)>> = self
+            .drops
+            .par_iter()
+            .map(|d| {
+                if d.codec != limnifs_core::codec::CODEC_ZSTD {
+                    return None;
+                }
+                let Some(plaintext) = d.plaintext.as_ref() else {
+                    return None;
+                };
+                let class = classifier.classify(plaintext);
+                let dict_class = if text_classes.contains(&class) {
+                    crate::classifier::Class::Text
+                } else if binary_classes.contains(&class) {
+                    crate::classifier::Class::Binary
+                } else {
+                    return None;
+                };
+                let Some(dict) = dicts.get(&dict_class) else {
+                    return None;
+                };
+                let Ok(dict_compressed) = dict.compress(plaintext) else {
+                    return None;
+                };
+                if dict_compressed.len() < d.compressed.len() {
+                    Some((dict_compressed.into(), dict.id))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let saving: isize = candidates
+            .iter()
+            .zip(self.drops.iter())
+            .map(|(c, d)| {
+                c.as_ref().map_or(0, |(bytes, _)| {
+                    d.compressed.len() as isize - bytes.len() as isize
+                })
+            })
+            .sum();
+        let dict_bytes: usize = dicts.values().map(|d| d.content.len()).sum();
+        if saving > dict_bytes as isize {
+            for (d, candidate) in self.drops.iter_mut().zip(candidates) {
+                if let Some((bytes, dict_id)) = candidate {
+                    d.compressed = bytes;
+                    d.dict_id = dict_id;
+                }
             }
-            let Some(plaintext) = d.plaintext.as_ref() else {
-                return;
-            };
-            let class = classifier.classify(plaintext);
-            let dict_class = if text_classes.contains(&class) {
-                crate::classifier::Class::Text
-            } else if binary_classes.contains(&class) {
-                crate::classifier::Class::Binary
-            } else {
-                return;
-            };
-            let Some(dict) = self.trained_dicts_by_class.get(&dict_class) else {
-                return;
-            };
-            let Ok(dict_compressed) = dict.compress(plaintext) else {
-                return;
-            };
-            if dict_compressed.len() < d.compressed.len() {
-                d.compressed = dict_compressed.into();
-                d.dict_id = dict.id;
-            }
-        });
+        } else {
+            // The dictionaries don't pay for themselves on this
+            // corpus: discard them so assemble emits no dictionary
+            // section and every drop keeps its tournament
+            // representation — the image is never larger because of
+            // the dictionary pass.
+            self.trained_dicts_by_class.clear();
+        }
 
         cleanup(self);
     }
