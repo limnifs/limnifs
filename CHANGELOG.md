@@ -12,6 +12,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.27] — 2026-08-31
+
+### Changed
+
+- **Deps: omnizip 0.21.29 → 0.21.32** (zstd only changed source:
+  the C fast-tier match-finder fill discipline and a proper
+  `max_dist` window). createperf 228 MB/s — the fastest local
+  reading ever — and the first slab-byte move in ten versions,
+  slightly smaller.
+- **Pay-for-itself dictionary gate.** With 0.21.32's improved
+  plain zstd-fastest, the dictionary's per-drop savings no longer
+  covered its own 64 KiB section on repetitive-text corpora — the
+  dict pass made images LARGER (measured −1.6%). The pass now
+  collects candidates in parallel and applies them only when the
+  total saving exceeds the dictionary bytes; otherwise the trained
+  dictionaries are discarded, no section is emitted, and drops
+  keep their tournament representations. Never-larger holds by
+  construction.
+- CI timeout recalibrations from measured runs: the benchmark
+  canary job 10 → 20 min (the informational BCJ bench needs 9-12
+  min on loaded runners), the Windows test step 15 → 25 min (the
+  suite legitimately runs 12-15 min; the 23+-minute hang signal
+  from the #388 class is preserved).
+
 ## [0.3.26] — 2026-08-31
 
 ### Changed
