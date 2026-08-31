@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.28] — 2026-08-31
+
+### Changed
+
+- **Deps: omnizip 0.21.32 → 0.21.34.** Brotli gains the whole-match
+  jump — one constant-work relaxation at the full finder length
+  when it exceeds the capped DP sweep: the monster-match ratio win
+  the 0.21.26 uncap wanted, without unbounding anything (the
+  capped sweep is untouched). Zstd's change is env-gated debug
+  instrumentation only. The #388/#408 reproducer tests are back at
+  the 31 s pre-regression baseline; createperf slab bytes identical
+  to the 0.21.32 baseline; 27 suites green.
+
 ## [0.3.27] — 2026-08-31
 
 ### Changed

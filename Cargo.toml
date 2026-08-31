@@ -4,7 +4,7 @@ exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.27"
+version = "0.3.28"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0 OR MIT"
@@ -38,10 +38,10 @@ serde_json = "1.0"
 # Internal crates (omnizip-style: members reference these as
 # `limnifs-core.workspace = true`; release-plz bumps the shared
 # workspace version once and publishes in DAG order).
-limnifs-format = { path = "limnifs-format", version = "0.3.27" }
-limnifs-ocb3 = { path = "limnifs-ocb3", version = "0.3.27" }
-limnifs-core = { path = "limnifs-core", version = "0.3.27" }
-limnifs-write = { path = "limnifs-write", version = "0.3.27" }
+limnifs-format = { path = "limnifs-format", version = "0.3.28" }
+limnifs-ocb3 = { path = "limnifs-ocb3", version = "0.3.28" }
+limnifs-core = { path = "limnifs-core", version = "0.3.28" }
+limnifs-write = { path = "limnifs-write", version = "0.3.28" }
 aes-gcm = "0.10"
 blake3 = { version = "1.8.7", default-features = false, features = ["std", "rayon"] }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "getrandom"] }
