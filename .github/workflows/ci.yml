@@ -70,9 +70,11 @@ jobs:
         # compile green and fail at runtime. This upgrades the Windows
         # gate from "it builds" to "it round-trips".
         #
-        # Step-level timeout: a healthy run is 4-6 min; past 15 is a
-        # hang by definition (the omnizip-brotli 0.21.15 DP hang —
-        # omnizip-rs#388 — burned the full 30-min job budget before
-        # cancelling). Fails fast, named, runner freed.
-        timeout-minutes: 15
+        # Step-level timeout: the suite legitimately runs 12-15 min
+        # on windows-latest (measured v0.3.25-v0.3.27 era). The
+        # timeout's job is hang detection — the omnizip-brotli #388
+        # hang was 23+ minutes of a single test with no progress —
+        # so 25 min keeps that signal while accommodating the grown
+        # suite. Recalibrate from measured runs, not guesses.
+        timeout-minutes: 25
         run: cargo test --workspace --quiet
