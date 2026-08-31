@@ -43,7 +43,11 @@ jobs:
   read-canary:
     name: Read-path canary
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The hard gates finish by ~minute 2; the informational BCJ
+    # bench (two full packs of 256 MiB staged ELF) needs 9-12 min
+    # on a loaded runner — 10 min canceled it after it had already
+    # printed its result. 20 keeps headroom.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
