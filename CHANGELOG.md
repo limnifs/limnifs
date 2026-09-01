@@ -12,6 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.29] — 2026-09-01
+
+### Changed
+
+- **Deps: omnizip 0.21.34 → 0.21.36** — brotli only changed
+  source: the dictionary transform-length finder/decoder agreement
+  fix (an actual chunk-overrun panic on arial q10), SIGNED
+  context modeling for q10+ non-UTF8 input, decoder stats, and
+  CostModel positional handling. All gates green; slab bytes at
+  the 0.21.32 baseline.
+
+### Removed
+
+- **The obsolete weekly Fuzz workflow** — failed on every run
+  since 2026-08-10 (the repo's `rust-toolchain.toml` pins stable;
+  cargo-fuzz's `-Z` sanitizer flags are nightly-only), unnoticed
+  because `nightly-fuzz` already runs all 9 targets daily at 30
+  minutes each. Recoverable from git history.
+
 ## [0.3.28] — 2026-08-31
 
 ### Changed
