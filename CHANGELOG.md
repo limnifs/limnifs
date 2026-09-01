@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.30] — 2026-09-01
+
+### Changed
+
+- **Deps: omnizip 0.21.36 → 0.21.38** — brotli (q1 routing
+  flipped to the from-spec parse: ratio over ~4× speed at that
+  tier; q1 is not on LimniFS's default paths) and zstd (RLE
+  sequence-table mode selection). The omnizip Downstream gate had
+  already verified this tree's full suite green against 0.21.38
+  before the ride-in. createperf 188 MB/s with the tightest
+  spread recorded (5%); slab bytes at the 0.21.32 baseline.
+
 ## [0.3.29] — 2026-09-01
 
 ### Changed
