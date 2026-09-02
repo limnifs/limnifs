@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.31] — 2026-09-02
+
+### Changed
+
+- **Deps: omnizip 0.21.38 → 0.21.45** (seven waves) — zstd's
+  C-faithful hash3 formula (the `(v << 8) * prime3bytes` window,
+  fixing short-match candidate discovery), a real-position-0
+  sentinel, and huffman/literals/sequences encoder work; brotli's
+  context mode below q10 flipped LSB6 → UTF8 (−161 KB on fits q5,
+  −45 KB on arial q5). Both bounded, no tier moves. Slab bytes
+  tighten again: 25,606,810 → 25,581,531 (cumulative ~3.4% under
+  the 0.21.14-era baseline at higher speed). All gates green.
+
 ## [0.3.30] — 2026-09-01
 
 ### Changed
