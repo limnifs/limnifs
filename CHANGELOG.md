@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.32] — 2026-09-03
+
+### Changed
+
+- **Deps: omnizip 0.21.45 → 0.21.46** — brotli's q9 tier routing:
+  text ≥ 1 MiB routes to the DP (beats the reference's single-pass
+  zopfli there), binary keeps the greedy tier. q9 is not on
+  LimniFS's default paths. All gates green; slab bytes unchanged.
+
 ## [0.3.31] — 2026-09-02
 
 ### Changed
