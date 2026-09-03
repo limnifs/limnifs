@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.33] — 2026-09-03
+
+### Changed
+
+- **Deps: omnizip 0.21.46 → 0.21.49** — brotli only: static-
+  dictionary candidates priced through the correct `CODE_DICT`
+  relax (were overpaying as huge real distances), dict-hash bucket
+  handling, emission work. Bounded DP relaxations, no caps
+  touched. Slab bytes unchanged; all gates green.
+
 ## [0.3.32] — 2026-09-03
 
 ### Changed
