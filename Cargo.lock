@@ -711,9 +711,9 @@ dependencies = [
 
 [[package]]
 name = "omnizip-blosc"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d59248ee729a879a5c84e88ac0390ff85a3d6c8069b7501635cbea33ae5b769"
+checksum = "baa3c19400bce38918376d81d592499f391127e8b920089a7270c6ac9283b147"
 dependencies = [
  "omnizip-codecs",
  "omnizip-lz4",
@@ -721,33 +721,33 @@ dependencies = [
 
 [[package]]
 name = "omnizip-brotli"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0676b88677619dd92d1ffb0fbc87f4eeebc783578cc09b459d278d266dade00"
+checksum = "03a80f4a9da08ea53f600b6a420660a239070873a666fc105f07251c7b2b86ea"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-bzip2"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "373efe5368005cff38bf94fba32e520bfc283a8089fb907c03dfa00f95dae268"
+checksum = "680613ba012ef83168886c357575d3e237b23e48be4381afb325bad41a9c5ff0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-codecs"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d997c792e12e1a060527acba137418fcf1f0e04d89fd684af62508705e857e67"
+checksum = "be3af74441003fd224bbe3d4f51189816908cdcd5523d2e80320b3eb056767e5"
 
 [[package]]
 name = "omnizip-deflate"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01e1f2a6d169857565cf10940fbb19b1b7d0f63e1ede67a998fbfcc290301e6d"
+checksum = "7f4ec31dcdc73e71cc9eb50f139409d9c8b25b5c17dd0055b6358c85e1cfff32"
 dependencies = [
  "omnizip-codecs",
  "omnizip-libdeflate",
@@ -755,117 +755,117 @@ dependencies = [
 
 [[package]]
 name = "omnizip-deflate64"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd12599d092bf40137f6c33584cc594a68c03c227d281f5c8a0d4e7fd4023e6d"
+checksum = "6bd358c54c9fb14145c7c344fccadd8ead590a28be2b5696b04e3b71315baf96"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-filters"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a96f4cac05ac35eb81f7f8fa06f05fbc271df9a505b711a5a268b1c3ee2a4d8"
+checksum = "c90786125a59aaf63d052aa5b534729304181481aecc11cfed05b7b95c5e66d0"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-flac"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5347febeeb32cc435fa83660f80ba6ba5544423a19994f3c01ffc772e78c443"
+checksum = "a9122e3da9cfd1c5bef133c4b33f748e3b2fc1eb42d230ff69b7904214c2724f"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-fsst"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd3400433eea1a96a7c66014b1113240addc25b6bad44f2ce41f443823c25254"
+checksum = "24cb6a34f022cc66c8c8ba0bc20da079ef5ae7db2527538b1313ca940d4f54ff"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-glza"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37ddec1e4d5454cbbc8d67fb33f88c26c5181e086a98dc224942537f9a9f391a"
+checksum = "6458d3aabe48aea89f2530680964ca3cad9509d57b230212aad6c1e7ad618446"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-libdeflate"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5645b2a50b3c68e575df62fe8e5f90c36faac6702e0fa4404bc24b08f0b161b"
+checksum = "c7f773f1f84d610178e3fb9d2b2fb94f7aacad733da0d8cda65fbc6e8c8caa95"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-lz4"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be5484c6f231b6e03891e2b91375a126ed925431921eaa57593c9bad2255e539"
+checksum = "f2daa6b0c54c88cae61e6f5d2bf78135056dc1e250020dc65c96e74387cba313"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-lzma"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50611a3c7ae487319dda3bc44d0f9ff1205523eb9aa82b6cd8e44fff2f47fb29"
+checksum = "edb7885e16e3c6f8117fb6778aef2852355db30215f4e089f3c7c72d93c1923c"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-ppmd"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b548b0b06d7ff773c6f146f900d88aec4dbf2556cc38ef579222646910b5d4ed"
+checksum = "2b69bc7633b5f308d16a13e06447947485f0752c00aa08162e85394edb1ce12c"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-ricepp"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a24f18fa58b38afda21985fc1dd3d487dc378cdc8c6f19b9b150c59e9c1c0c3"
+checksum = "1a58e06c36ab7ad735ff2b67096537f06d4db38612ea7d07ba4cd6d86d2e2a1a"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-snappy"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e033927fccbee9884af680a85a262a75f4b5b110c0281d38172b7af10aba1bf3"
+checksum = "2f31e9090b74e8ff1a5f84af2ae15295557042991d7d6d2f5a6e1c10be1deef9"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-zpaq"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17b80cd8f6f03bbd905706dc3d3bf5a288009bc7d89060178539f2fc48b71924"
+checksum = "18fa3ffedf839f29a73fb7ea349cba1396e4212374a87366c276b944cd7b4ae1"
 dependencies = [
  "omnizip-codecs",
 ]
 
 [[package]]
 name = "omnizip-zstd"
-version = "0.21.49"
+version = "0.21.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b45b9a860f7c312412acbcd1c9902864f1cf8f771a389ed4e114600e17d4c237"
+checksum = "0af250de58f4ff4c0daea26f6f9603bba671b3e9856b118f4f559fb4f699ad81"
 dependencies = [
  "omnizip-codecs",
 ]
