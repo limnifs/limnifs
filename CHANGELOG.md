@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
 
 
+## [0.3.34] — 2026-09-04
+
+### Changed
+
+- **Deps: omnizip 0.21.49 → 0.21.55** (six waves) — decoder
+  hardening (bzip2 checked run-length arithmetic, snappy
+  truncated-copy guards), a deflate64 correctness fix
+  (`MAX_DISTANCE` capped to 32,768: the 64K extension is not
+  representable in the distance table, so longer matches silently
+  decoded to the wrong distance), and additive encoder APIs
+  (brotli bit-granular metablock splicing, zstd multi-threaded
+  frames — deterministic by construction, single-frame path
+  byte-identical, matchfinder replay). No caps touched; slab
+  bytes unchanged; all gates green.
+
 ## [0.3.33] — 2026-09-03
 
 ### Changed
