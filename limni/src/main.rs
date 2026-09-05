@@ -215,7 +215,13 @@ enum Command {
         profile: String,
     },
     /// Compute tree operations between a parent and child image.
-    Diff { parent: PathBuf, child: PathBuf },
+    Diff {
+        parent: PathBuf,
+        child: PathBuf,
+        /// Emit machine-readable JSON instead of human text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Print a comprehensive overview of an image: manifest summary,
     /// metadata blob stats, slab stats, and per-class drop counts.
     Inspect {
@@ -423,7 +429,7 @@ fn run() -> Result<(), CliError> {
             profile,
         } => rw_delete(&image, &path, profile),
         Command::Turnover { image, profile } => turnover_cmd(&image, &profile),
-        Command::Diff { parent, child } => diff(&parent, &child),
+        Command::Diff { parent, child, json } => diff(&parent, &child, json),
         Command::Inspect { image, json, dedup } => {
             inspect(&image, json)?;
             if dedup {
@@ -1937,7 +1943,6 @@ fn inspect(image: &Path, json: bool) -> Result<(), CliError> {    let manifest_b
     Ok(())
 }
 
-/// Deduplication statistics derived from the manifest alone.
 ///
 /// Drop sizes are the slice spans referencing them — exact for
 /// images this writer produces (slices span whole drops); the
@@ -2246,7 +2251,7 @@ fn extract_file(
 
 #[allow(clippy::too_many_arguments)]
 /// Compute the delta between two images and print tree operations.
-fn diff(parent: &Path, child: &Path) -> Result<(), CliError> {
+fn diff(parent: &Path, child: &Path, json: bool) -> Result<(), CliError> {
     let artifact = limnifs_write::delta_builder::compute_delta(parent, child).map_err(|e| {
         CliError::FormatFailed {
             path: parent.to_path_buf(),
@@ -2255,17 +2260,50 @@ fn diff(parent: &Path, child: &Path) -> Result<(), CliError> {
             },
         }
     })?;
-    println!("ops: {}", artifact.tree_ops.len());
-    for op in &artifact.tree_ops {
-        let kind = match op.kind {
-            limnifs_core::delta_linkage::TreeOpKind::Add => "A",
-            limnifs_core::delta_linkage::TreeOpKind::Remove => "R",
-            limnifs_core::delta_linkage::TreeOpKind::Replace => "M",
+    let counts = |k: limnifs_core::delta_linkage::TreeOpKind| {
+        artifact
+            .tree_ops
+            .iter()
+            .filter(|o| o.kind == k)
+            .map(|o| o.path.clone())
+            .collect::<Vec<_>>()
+    };
+    let added = counts(limnifs_core::delta_linkage::TreeOpKind::Add);
+    let removed = counts(limnifs_core::delta_linkage::TreeOpKind::Remove);
+    let changed = counts(limnifs_core::delta_linkage::TreeOpKind::Replace);
+    if json {
+        #[derive(serde::Serialize)]
+        struct DiffJson<'a> {
+            added: &'a Vec<String>,
+            removed: &'a Vec<String>,
+            changed: &'a Vec<String>,
+        }
+        let report = DiffJson {
+            added: &added,
+            removed: &removed,
+            changed: &changed,
         };
-        let inode = op
-            .inode_number
-            .map_or_else(|| "-".to_string(), |n| n.to_string());
-        println!("{kind} {} inode={inode}", op.path);
+        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+    } else {
+        println!(
+            "{} vs {}: {} added, {} removed, {} changed",
+            parent.display(),
+            child.display(),
+            added.len(),
+            removed.len(),
+            changed.len()
+        );
+        for op in &artifact.tree_ops {
+            let kind = match op.kind {
+                limnifs_core::delta_linkage::TreeOpKind::Add => "+",
+                limnifs_core::delta_linkage::TreeOpKind::Remove => "-",
+                limnifs_core::delta_linkage::TreeOpKind::Replace => "~",
+            };
+            println!("{kind} {}", op.path);
+        }
+    }
+    if !artifact.tree_ops.is_empty() {
+        std::process::exit(1);
     }
     Ok(())
 }
