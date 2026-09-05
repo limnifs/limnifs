@@ -220,6 +220,12 @@ enum Command {
         /// Emit machine-readable JSON instead of human text.
         #[arg(long)]
         json: bool,
+        /// Deduplication statistics: logical vs unique bytes, drop
+        /// count, inline share — derived from the manifest alone
+        /// (drop sizes are the slice spans, exact for images this
+        /// writer produces: slices span whole drops).
+        #[arg(long)]
+        dedup: bool,
     },
     /// Inspect a slab file: list drop records, codecs, and sizes.
     Slab {
@@ -398,7 +404,13 @@ fn run() -> Result<(), CliError> {
         } => rw_delete(&image, &path, profile),
         Command::Turnover { image, profile } => turnover_cmd(&image, &profile),
         Command::Diff { parent, child } => diff(&parent, &child),
-        Command::Inspect { image, json } => inspect(&image, json),
+        Command::Inspect { image, json, dedup } => {
+            inspect(&image, json)?;
+            if dedup {
+                inspect_dedup(&image, json)?;
+            }
+            Ok(())
+        }
         Command::Slab { slab } => slab_cmd(&slab),
         Command::Gc { image } => gc_cmd(&image),
         Command::History { image } => history_cmd(&image),
@@ -1549,8 +1561,7 @@ fn mount(image: &Path, mountpoint: &Path) -> Result<(), CliError> {
 /// Print a comprehensive overview of an image: manifest header, feature
 /// flags, metadata blob stats, slab stats, and per-class drop counts.
 #[allow(clippy::too_many_lines)]
-fn inspect(image: &Path, json: bool) -> Result<(), CliError> {
-    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+fn inspect(image: &Path, json: bool) -> Result<(), CliError> {    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
         path: image.to_path_buf(),
         source,
     })?;
@@ -1849,6 +1860,112 @@ fn inspect(image: &Path, json: bool) -> Result<(), CliError> {
         if !json {
             println!("  limni version: {VERSION}");
         }
+    }
+    Ok(())
+}
+
+/// Deduplication statistics derived from the manifest alone.
+///
+/// Drop sizes are the slice spans referencing them — exact for
+/// images this writer produces (slices span whole drops); the
+/// shared-inline table is counted once per distinct payload.
+#[derive(serde::Serialize)]
+struct DedupStats {
+    files: usize,
+    logical_bytes: u64,
+    unique_bytes: u64,
+    dedup_ratio: f64,
+    drops: usize,
+    avg_drop_bytes: u64,
+    inline_files: usize,
+    inline_logical_bytes: u64,
+    inline_unique_bytes: u64,
+}
+
+fn dedup_stats(blob: &limnifs_core::MetadataBlob) -> DedupStats {
+    let mut files = 0usize;
+    let mut logical = 0u64;
+    let mut inline_files = 0usize;
+    let mut inline_logical = 0u64;
+    let mut drop_size: std::collections::HashMap<[u8; 32], u64> =
+        std::collections::HashMap::new();
+    let mut inline_seen: std::collections::HashSet<Vec<u8>> =
+        std::collections::HashSet::new();
+    for inode in &blob.inodes {
+        match &inode.content_handle {
+            limnifs_core::ContentHandle::SliceMap(slices) => {
+                files += 1;
+                for s in slices {
+                    logical += s.file_byte_end.saturating_sub(s.file_byte_start);
+                    let len = u64::from(s.drop_byte_len);
+                    drop_size
+                        .entry(*s.drop_id.as_bytes())
+                        .and_modify(|cur| *cur = (*cur).max(len))
+                        .or_insert(len);
+                }
+            }
+            limnifs_core::ContentHandle::InlineData(data) => {
+                files += 1;
+                inline_files += 1;
+                inline_logical += data.len() as u64;
+                inline_seen.insert(data.clone());
+            }
+            _ => {}
+        }
+    }
+    let unique: u64 = drop_size.values().sum();
+    let inline_unique = inline_seen
+        .iter()
+        .map(|d| d.len() as u64)
+        .sum::<u64>();
+    let total_unique = unique + inline_unique;
+    let total_logical = logical + inline_logical;
+    DedupStats {
+        files,
+        logical_bytes: total_logical,
+        unique_bytes: total_unique,
+        dedup_ratio: if total_unique > 0 {
+            total_logical as f64 / total_unique as f64
+        } else {
+            1.0
+        },
+        drops: drop_size.len(),
+        avg_drop_bytes: if drop_size.is_empty() {
+            0
+        } else {
+            unique / drop_size.len() as u64
+        },
+        inline_files,
+        inline_logical_bytes: inline_logical,
+        inline_unique_bytes: inline_unique,
+    }
+}
+
+fn inspect_dedup(image: &Path, json: bool) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, ..) = load_image(&manifest_bytes, image, map_err)?;
+    let stats = dedup_stats(&blob);
+    if json {
+        let body = serde_json::to_string_pretty(&stats).unwrap_or_default();
+        println!("{body}");
+    } else {
+        println!("dedup: {} files", stats.files);
+        println!(
+            "  logical: {} bytes, unique: {} bytes → {:.2}× dedup",
+            stats.logical_bytes, stats.unique_bytes, stats.dedup_ratio
+        );
+        println!(
+            "  drops: {} (avg {} bytes), inline files: {} ({} bytes, {} unique)",
+            stats.drops, stats.avg_drop_bytes, stats.inline_files,
+            stats.inline_logical_bytes, stats.inline_unique_bytes
+        );
     }
     Ok(())
 }
