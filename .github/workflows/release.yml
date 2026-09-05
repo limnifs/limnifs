@@ -205,12 +205,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
+      # Ship the CLI's opt-in capabilities in the project's own
+      # binaries: tar streaming (limn --from-tar / limni tar) and
+      # the sparse-index layer fast path. Library installs stay
+      # sovereign — the features remain opt-in there.
       - name: Build release binary (cross)
         if: ${{ matrix.use_cross }}
-        run: cross build --release --locked --target ${{ matrix.target }} --bin limni
+        run: cross build --release --locked --target ${{ matrix.target }} --bin limni --features tar,sparse-index
       - name: Build release binary
         if: ${{ !matrix.use_cross }}
-        run: cargo build --release --locked --target ${{ matrix.target }} --bin limni
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin limni --features tar,sparse-index
       - name: Package
         shell: bash
         env:
