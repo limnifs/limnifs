@@ -157,6 +157,10 @@ enum Command {
         image: PathBuf,
         /// Slash-separated file path inside the image.
         path: String,
+        /// Base images to resolve layer-referenced drops through,
+        /// innermost first (repeatable).
+        #[arg(long = "base")]
+        bases: Vec<PathBuf>,
         /// Byte offset to start reading from (default: 0).
         #[arg(long)]
         offset: Option<u64>,
@@ -174,6 +178,10 @@ enum Command {
     /// `limni cat` invocations.
     CatMulti {
         image: PathBuf,
+        /// Base images to resolve layer-referenced drops through,
+        /// innermost first (repeatable).
+        #[arg(long = "base")]
+        bases: Vec<PathBuf>,
         /// One or more slash-separated paths inside the image.
         #[arg(num_args = 1.., required = true)]
         paths: Vec<String>,
@@ -204,7 +212,13 @@ enum Command {
     },
     /// Stream an image's contents to stdout as a tar archive
     /// (requires a build with the `tar` feature).
-    Tar { image: PathBuf },
+    Tar {
+        image: PathBuf,
+        /// Base images to resolve layer-referenced drops through,
+        /// innermost first (repeatable).
+        #[arg(long = "base")]
+        bases: Vec<PathBuf>,
+    },
     /// Extract an image's contents to a filesystem directory.
     Extract {
         image: PathBuf,
@@ -438,15 +452,20 @@ fn run() -> Result<(), CliError> {
             output,
             profile,
         } => layer(&base, &source, &output, profile),
-        Command::Tar { image } => tar_stream(&image),
+        Command::Tar { image, bases } => tar_stream(&image, &bases),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat {
             image,
             path,
+            bases,
             offset,
             length,
-        } => cat(&image, &path, offset, length),
-        Command::CatMulti { image, paths } => cat_multi(&image, &paths),
+        } => cat(&image, &path, offset, length, &bases),
+        Command::CatMulti {
+            image,
+            bases,
+            paths,
+        } => cat_multi(&image, &paths, &bases),
         Command::Stat { image, path } => stat(&image, &path),
         Command::Tree { image, path } => tree(&image, &path),
         Command::Extract {
@@ -1202,6 +1221,64 @@ fn limn_dispatch_source(
     }
 }
 
+/// Load one slab-source chain: the image's own slabs (cached,
+/// dictionaries installed) first, then each base image's slabs
+/// (innermost first, dictionaries installed per image). This is the
+/// single seam behind `extract --base`, `cat --base`, `cat-multi
+/// --base`, and `tar --base` — layer-referenced drops resolve
+/// through it. `None` when nothing references slabs.
+fn load_slab_chain(
+    image: &Path,
+    slab_index: &limnifs_core::SlabIndex,
+    dict_section: Option<&limnifs_core::dictionary_section::DictionarySection>,
+    bases: &[PathBuf],
+) -> Result<Option<limnifs_core::slab_source::OwnedSlabChain>, CliError> {
+    let image_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let mut sources: Vec<Box<dyn limnifs_core::slab_source::SlabSource>> = Vec::new();
+    if !slab_index.is_empty() {
+        let mut store = limnifs_core::slab_store::SlabStore::load_mmap(image, slab_index)
+            .map_err(image_err)?;
+        if let Some(d) = dict_section {
+            install_dicts(&mut store, d);
+        }
+        sources.push(Box::new(
+            limnifs_core::slab_cache::CachedSlabStore::with_default_capacity(store),
+        ));
+    }
+    for base in bases {
+        let base_err = |source: CoreError| CliError::FormatFailed {
+            path: base.clone(),
+            source,
+        };
+        let base_bytes = std::fs::read(base).map_err(|source| CliError::ReadFailed {
+            path: base.clone(),
+            source,
+        })?;
+        let mut cursor = ManifestCursor::new(&base_bytes);
+        let _ = parse_manifest_header(&mut cursor).map_err(&base_err)?;
+        let _ = parse_feature_flags_section(&mut cursor).map_err(&base_err)?;
+        let _ = parse_metadata_reference(&mut cursor).map_err(&base_err)?;
+        let base_slab_index = parse_slab_index(&mut cursor).map_err(&base_err)?;
+        let mut store = limnifs_core::slab_store::SlabStore::load_mmap(base, &base_slab_index)
+            .map_err(base_err)?;
+        let _ = limnifs_core::parse_history(&mut cursor);
+        if cursor.remaining_len() > 0 {
+            if let Ok(d) = parse_dictionary_section(&mut cursor) {
+                install_dicts(&mut store, &d);
+            }
+        }
+        sources.push(Box::new(store));
+    }
+    if sources.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(limnifs_core::slab_source::OwnedSlabChain::new(sources)))
+    }
+}
+
 /// Write an artifact's manifest, slabs, and metadata sidecar next to
 /// `output`, mirroring the directory build's on-disk layout.
 fn write_artifact_files(
@@ -1426,7 +1503,7 @@ fn limn_from_tar(
 /// from the inodes, file bytes pulled slice-by-slice from the slabs
 /// (bounded by one chunk of buffering), nothing materialised.
 #[cfg(feature = "tar")]
-fn tar_stream(image: &Path) -> Result<(), CliError> {
+fn tar_stream(image: &Path, bases: &[PathBuf]) -> Result<(), CliError> {
     use std::io::Write;
     let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
         path: image.to_path_buf(),
@@ -1439,16 +1516,7 @@ fn tar_stream(image: &Path) -> Result<(), CliError> {
     let (blob, root_inode_number, slab_index, dict_section) =
         load_image(&manifest_bytes, image, map_err)?;
 
-    let mut store = if slab_index.is_empty() {
-        None
-    } else {
-        let mut s =
-            limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?;
-        if let Some(d) = &dict_section {
-            install_dicts(&mut s, d);
-        }
-        Some(s)
-    };
+    let chain = load_slab_chain(image, &slab_index, dict_section.as_ref(), bases)?;
 
     let stdout = std::io::stdout();
     let lock = stdout.lock();
@@ -1456,7 +1524,9 @@ fn tar_stream(image: &Path) -> Result<(), CliError> {
     {
         let mut sink = TarSink {
             builder: &mut builder,
-            store: store.as_ref(),
+            store: chain
+                .as_ref()
+                .map(|c| c as &dyn limnifs_core::slab_source::SlabSource),
         };
         limnifs_core::live_tree::walk_live_tree(&blob, root_inode_number, &mut sink)
             .map_err(map_err)?;
@@ -1484,7 +1554,7 @@ fn tar_stream(_image: &Path) -> Result<(), CliError> {
 #[cfg(feature = "tar")]
 struct TarSink<'a, W: std::io::Write> {
     builder: &'a mut tar::Builder<W>,
-    store: Option<&'a limnifs_core::slab_store::SlabStore>,
+    store: Option<&'a dyn limnifs_core::slab_source::SlabSource>,
 }
 
 #[cfg(feature = "tar")]
@@ -1594,7 +1664,7 @@ impl<'a, W: std::io::Write> limnifs_core::live_tree::LiveTreeSink for TarSink<'a
 /// range, so peak buffering is one chunk.
 #[cfg(feature = "tar")]
 struct SliceReader<'a, I> {
-    store: Option<&'a limnifs_core::slab_store::SlabStore>,
+    store: Option<&'a dyn limnifs_core::slab_source::SlabSource>,
     slices: I,
     current: std::io::Cursor<Vec<u8>>,
 }
@@ -1884,7 +1954,13 @@ fn turnover_cmd(image: &Path, profile_name: &str) -> Result<(), CliError> {
 /// write the file at `path` to stdout. Inline files are written
 /// directly; drop-backed files are read from the slab file that lives
 /// alongside the manifest (per the writer's `file:` locator).
-fn cat(image: &Path, path: &str, offset: Option<u64>, length: Option<u64>) -> Result<(), CliError> {
+fn cat(
+    image: &Path,
+    path: &str,
+    offset: Option<u64>,
+    length: Option<u64>,
+    bases: &[PathBuf],
+) -> Result<(), CliError> {
     use std::io::Write;
     let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
         path: image.to_path_buf(),
@@ -1916,14 +1992,9 @@ fn cat(image: &Path, path: &str, offset: Option<u64>, length: Option<u64>) -> Re
             file_data.extend_from_slice(data);
         }
         ContentHandle::SliceMap(slices) => {
-            let store = if slab_index.is_empty() {
-                None
-            } else {
-                Some(
-                    limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index)
-                        .map_err(map_err)?,
-                )
-            };
+            let store = load_slab_chain(image, &slab_index, _dict_section.as_ref(), bases)?;
+            let store: Option<&dyn limnifs_core::slab_source::SlabSource> =
+                store.as_ref().map(|c| c as &dyn limnifs_core::slab_source::SlabSource);
             for slice in slices {
                 let plaintext = store
                     .as_ref()
@@ -1987,7 +2058,7 @@ fn cat(image: &Path, path: &str, offset: Option<u64>, length: Option<u64>) -> Re
 /// one `limni cat` process per file, because the per-invocation cost
 /// (manifest read + parse + slab load) is amortized.
 #[allow(clippy::too_many_lines)]
-fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
+fn cat_multi(image: &Path, paths: &[String], bases: &[PathBuf]) -> Result<(), CliError> {
     use std::io::Write;
     let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
         path: image.to_path_buf(),
@@ -2009,22 +2080,13 @@ fn cat_multi(image: &Path, paths: &[String]) -> Result<(), CliError> {
     let inode_index: std::collections::HashMap<u64, &limnifs_core::Inode> =
         blob.inodes.iter().map(|i| (i.number, i)).collect();
 
-    // Wrap in the LRU drop cache (TODO.perf/02): cat-multi across
-    // files sharing drops (dedup trees, container layers) decodes
-    // each drop once instead of per referencing file.
-    let cached_store: Option<limnifs_core::slab_cache::CachedSlabStore> = if slab_index.is_empty() {
-        None
-    } else {
-        let mut s =
-            limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?;
-        if let Some(d) = &_dict_section {
-            install_dicts(&mut s, d);
-        }
-        Some(limnifs_core::slab_cache::CachedSlabStore::with_default_capacity(s))
-    };
-    let slab_store: Option<&dyn limnifs_core::slab_source::SlabSource> = cached_store
+    // One chain for every path: the local slabs behind the LRU
+    // drop cache (TODO.perf/02 — files sharing drops decode each
+    // once), then any --base overlays for layer-referenced drops.
+    let chain = load_slab_chain(image, &slab_index, _dict_section.as_ref(), bases)?;
+    let slab_store: Option<&dyn limnifs_core::slab_source::SlabSource> = chain
         .as_ref()
-        .map(|s| s as &dyn limnifs_core::slab_source::SlabSource);
+        .map(|c| c as &dyn limnifs_core::slab_source::SlabSource);
 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -2702,52 +2764,12 @@ fn extract(
         .map_err(map_err)?;
     drop(blob); // release the metadata borrow before parallel phase
 
-    // Phase 2: load the slab stores (cached) and write files IN
-    // PARALLEL. Layer-referenced drops resolve through the base
-    // chain: local slabs first, then each base's (innermost first).
-    let mut owned_stores: Vec<limnifs_core::slab_store::SlabStore> = Vec::new();
-    let mut cached_stores: Vec<limnifs_core::slab_cache::CachedSlabStore> = Vec::new();
-    if !slab_index.is_empty() {
-        let mut s =
-            limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?;
-        if let Some(d) = &_dict_section {
-            install_dicts(&mut s, d);
-        }
-        cached_stores.push(limnifs_core::slab_cache::CachedSlabStore::with_default_capacity(s));
-    }
-    for base in bases {
-        let base_bytes = std::fs::read(base).map_err(|source| CliError::ReadFailed {
-            path: base.clone(),
-            source,
-        })?;
-        let mut cursor = ManifestCursor::new(&base_bytes);
-        let _ = parse_manifest_header(&mut cursor).map_err(&map_err)?;
-        let _ = parse_feature_flags_section(&mut cursor).map_err(&map_err)?;
-        let _ = parse_metadata_reference(&mut cursor).map_err(&map_err)?;
-        let base_slab_index = parse_slab_index(&mut cursor).map_err(&map_err)?;
-        let mut store = limnifs_core::slab_store::SlabStore::load_mmap(base, &base_slab_index)
-            .map_err(map_err)?;
-        let _ = limnifs_core::parse_history(&mut cursor);
-        if cursor.remaining_len() > 0 {
-            if let Ok(d) = parse_dictionary_section(&mut cursor) {
-                install_dicts(&mut store, &d);
-            }
-        }
-        owned_stores.push(store);
-    }
-    let chain: Vec<&dyn limnifs_core::slab_source::SlabSource> = cached_stores
-        .iter()
-        .map(|s| s as &dyn limnifs_core::slab_source::SlabSource)
-        .chain(
-            owned_stores
-                .iter()
-                .map(|s| s as &dyn limnifs_core::slab_source::SlabSource),
-        )
-        .collect();
-    let has_slabs = !chain.is_empty();
-    let chained = limnifs_core::slab_source::ChainedSlabSource::new(chain);
+    // Phase 2: load the slab store chain (cached local + bases) and
+    // write files IN PARALLEL. Layer-referenced drops resolve
+    // through the chain.
+    let chain = load_slab_chain(image, &slab_index, _dict_section.as_ref(), bases)?;
     let slab_ref: Option<&dyn limnifs_core::slab_source::SlabSource> =
-        if has_slabs { Some(&chained) } else { None };
+        chain.as_ref().map(|c| c as &dyn limnifs_core::slab_source::SlabSource);
 
     let file_count = sink.tasks.len();
     let dir_count = sink.dir_count;
@@ -4087,6 +4109,60 @@ mod tests {
     }
 
     #[test]
+    fn cat_and_extract_resolve_layer_drops_through_base() {
+        // Base: a slab-backed file (above the inline threshold). Layer:
+        // the same file (drops referenced, no slab bytes) + a new one.
+        // cat/extract must resolve the referenced drops through the
+        // base chain (--base), and fail without it.
+        let workdir = std::env::temp_dir().join(format!(
+            "limni-layer-read-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&workdir);
+        std::fs::create_dir_all(&workdir).expect("workdir");
+
+        let shared: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+        let base_dir = workdir.join("base");
+        std::fs::create_dir_all(&base_dir).expect("base dir");
+        std::fs::write(base_dir.join("shared.bin"), &shared).expect("write shared");
+
+        let base_image = workdir.join("base.lim");
+        limn(&base_dir, &base_image).expect("write base image");
+
+        let layer_dir = workdir.join("layer");
+        std::fs::create_dir_all(&layer_dir).expect("layer dir");
+        std::fs::write(layer_dir.join("shared.bin"), &shared).expect("write shared in layer");
+        std::fs::write(layer_dir.join("new.txt"), b"layer-local content").expect("write new");
+
+        let config = limnifs_write::WriteConfig::default_v0_1();
+        let layer_artifact =
+            limnifs_write::write_layer(&base_image, &layer_dir, &config).expect("layer");
+        let layer_image = workdir.join("layer.lim");
+        std::fs::write(&layer_image, &layer_artifact.bytes).expect("write layer manifest");
+        for slab in &layer_artifact.slabs {
+            let name = sidecar_name(&slab.locator).expect("locator");
+            std::fs::write(workdir.join(name), &slab.bytes).expect("write layer slab");
+        }
+
+        // cat writes to stdout; asserting on the Result is enough
+        // here — extract below proves the bytes.
+        cat(&layer_image, "/shared.bin", None, None, &[base_image.clone()])
+            .expect("cat resolves referenced drops through base");
+        cat(&layer_image, "/new.txt", None, None, &[base_image.clone()])
+            .expect("cat resolves local drops");
+        match cat(&layer_image, "/shared.bin", None, None, &[]) {
+            Err(CliError::FormatFailed { .. }) => {}
+            other => panic!("expected FormatFailed without --base, got {other:?}"),
+        }
+
+        let dest = workdir.join("out");
+        extract(&layer_image, &dest, &[base_image.clone()], None).expect("extract through base");
+        let extracted = std::fs::read(dest.join("shared.bin")).expect("extracted shared");
+        assert_eq!(extracted, shared);
+        let _ = std::fs::remove_dir_all(&workdir);
+    }
+
+    #[test]
     fn ls_root_lists_sorted_entries() {
         let source = make_source_tree();
         let image = make_temp_file(&[]);
@@ -4138,7 +4214,7 @@ mod tests {
         // The ls-e2e tree has a.txt with content "aaa". Redirecting
         // stdout from cat() directly is hard inside a unit test; the
         // absence of an Err proves end-to-end success.
-        cat(&image, "/a.txt", None, None).expect("cat inline file succeeds");
+        cat(&image, "/a.txt", None, None, &[]).expect("cat inline file succeeds");
         let _ = std::fs::remove_file(&image);
     }
 
@@ -4149,7 +4225,7 @@ mod tests {
         std::fs::remove_file(&image).ok();
         limn(&source, &image).expect("write image");
         std::fs::remove_dir_all(&source).ok();
-        match cat(&image, "/does-not-exist", None, None) {
+        match cat(&image, "/does-not-exist", None, None, &[]) {
             Err(CliError::FormatFailed { source, .. }) => {
                 assert!(matches!(source, CoreError::Corrupt { .. }));
             }
@@ -4165,7 +4241,7 @@ mod tests {
         std::fs::remove_file(&image).ok();
         limn(&source, &image).expect("write image");
         std::fs::remove_dir_all(&source).ok();
-        match cat(&image, "/sub", None, None) {
+        match cat(&image, "/sub", None, None, &[]) {
             Err(CliError::FormatFailed { source, .. }) => {
                 assert!(matches!(source, CoreError::Corrupt { .. }));
             }
@@ -4183,11 +4259,11 @@ mod tests {
         std::fs::remove_dir_all(&source).ok();
 
         // offset beyond EOF should clamp to empty, not error.
-        cat(&image, "/a.txt", Some(1_000_000), None).expect("offset past EOF clamps");
+        cat(&image, "/a.txt", Some(1_000_000), None, &[]).expect("offset past EOF clamps");
         // length past remaining should clamp to remaining.
-        cat(&image, "/a.txt", Some(0), Some(1_000_000)).expect("length past EOF clamps");
+        cat(&image, "/a.txt", Some(0), Some(1_000_000), &[]).expect("length past EOF clamps");
         // both set should slice the inline bytes without erroring.
-        cat(&image, "/a.txt", Some(1), Some(1)).expect("subrange reads succeed");
+        cat(&image, "/a.txt", Some(1), Some(1), &[]).expect("subrange reads succeed");
         let _ = std::fs::remove_file(&image);
     }
 
@@ -4207,11 +4283,11 @@ mod tests {
             "/b.txt".to_owned(),
             "/sub/c.txt".to_owned(),
         ];
-        cat_multi(&image, &paths).expect("cat-multi succeeds");
+        cat_multi(&image, &paths, &[]).expect("cat-multi succeeds");
 
         // Missing path surfaces as an error.
         let bad_paths = vec!["/does-not-exist".to_owned()];
-        let err = cat_multi(&image, &bad_paths).unwrap_err();
+        let err = cat_multi(&image, &bad_paths, &[]).unwrap_err();
         match err {
             CliError::FormatFailed { source, .. } => {
                 assert!(format!("{source}").contains("not found in tree"));
@@ -4251,7 +4327,7 @@ mod tests {
         ls(&img, "/").expect("ls succeeds");
 
         // Cat a file.
-        cat(&img, "/small.txt", None, None).expect("cat succeeds");
+        cat(&img, "/small.txt", None, None, &[]).expect("cat succeeds");
 
         // Tree.
         tree(&img, "/").expect("tree succeeds");
