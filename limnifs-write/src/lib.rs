@@ -775,12 +775,23 @@ fn write_directory_streaming(
     let (root_inode_number, mut results): (
         u64,
         Vec<(usize, PendingFile, Result<ChunkedFileResult, WriteError>)>,
-    ) = std::thread::scope(|scope| {
+    ) = {
+        // Survey on the calling thread BEFORE the pipeline starts.
+        // The parallel stat pass uses the global rayon pool; running
+        // it inside the producer would race the consumer's
+        // par_bridge for workers — par_bridge's fold_with blocks in
+        // recv() WHILE HOLDING the bridge mutex, so a pool-dependent
+        // producer can starve its own survey (all workers parked on
+        // the mutex) and deadlock. The survey must finish before the
+        // first fold anyway, so hoisting it costs nothing and leaves
+        // the producer thread pool-free.
+        let survey = survey_tree(root)?;
+        std::thread::scope(|scope| {
         let producer = {
             let ctx = &mut *ctx;
             let root = root;
             scope.spawn(move || {
-                let r = ctx.walk(root);
+                let r = ctx.fold_survey(root, &survey, None);
                 // Disconnect the channel so the consumer's iterator
                 // terminates; the sink stays None until the next
                 // streaming write resets it after the scope.
@@ -831,7 +842,8 @@ fn write_directory_streaming(
         // Scope can't `?` across borrows of `results`; return the
         // outcome and propagate outside.
         joined
-    })?;
+        })
+    }?;
     ctx.pending_sink = None;
     ctx.root_inode_number = root_inode_number;
 
@@ -1430,6 +1442,123 @@ struct PendingFile {
     file_len: u64,
 }
 
+/// Stat snapshot captured during the parallel survey phase of the
+/// walk. Encapsulates everything the sequential fold needs from the
+/// filesystem — the fold performs no stat syscalls of its own.
+#[derive(Clone, Copy, Default)]
+struct SurveyMeta {
+    is_dir: bool,
+    is_file: bool,
+    is_symlink: bool,
+    #[cfg(unix)]
+    is_fifo: bool,
+    #[cfg(unix)]
+    is_socket: bool,
+    #[cfg(unix)]
+    is_block_device: bool,
+    #[cfg(unix)]
+    is_char_device: bool,
+    len: u64,
+    mtime_ns: u64,
+}
+
+/// One surveyed tree node. Children are name-sorted so the
+/// sequential fold reproduces the classic DFS order exactly.
+struct SurveyNode {
+    meta: SurveyMeta,
+    children: Vec<(String, SurveyNode)>,
+    /// `Some(target)` when this node is a symlink (read during the
+    /// survey; non-UTF-8 targets are surfaced as survey errors,
+    /// matching the walk's previous error).
+    symlink_target: Option<String>,
+}
+
+impl SurveyNode {
+    fn meta(&self) -> SurveyMeta {
+        self.meta
+    }
+}
+
+fn survey_meta_of(meta: &std::fs::Metadata) -> SurveyMeta {
+    #[cfg(unix)]
+    use std::os::unix::fs::FileTypeExt as _;
+    let ft = meta.file_type();
+    let mtime_ns = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0u128, |d| d.as_nanos());
+    SurveyMeta {
+        is_dir: ft.is_dir(),
+        is_file: ft.is_file(),
+        is_symlink: ft.is_symlink(),
+        #[cfg(unix)]
+        is_fifo: ft.is_fifo(),
+        #[cfg(unix)]
+        is_socket: ft.is_socket(),
+        #[cfg(unix)]
+        is_block_device: ft.is_block_device(),
+        #[cfg(unix)]
+        is_char_device: ft.is_char_device(),
+        len: meta.len(),
+        mtime_ns: mtime_ns.try_into().unwrap_or(0),
+    }
+}
+
+fn survey_node(path: &Path) -> Result<SurveyNode, WriteError> {
+    use rayon::prelude::*;
+    let meta = std::fs::symlink_metadata(path)?;
+    let sm = survey_meta_of(&meta);
+    if sm.is_symlink {
+        let target = std::fs::read_link(path)?;
+        let target = target
+            .to_str()
+            .ok_or_else(|| WriteError::UnsupportedFileType {
+                path: path.to_path_buf(),
+                kind: format!(
+                    "symlink with non-UTF-8 target ({})",
+                    target.display()
+                ),
+            })?
+            .to_owned();
+        return Ok(SurveyNode {
+            meta: sm,
+            children: Vec::new(),
+            symlink_target: Some(target),
+        });
+    }
+    if !sm.is_dir {
+        return Ok(SurveyNode {
+            meta: sm,
+            children: Vec::new(),
+            symlink_target: None,
+        });
+    }
+    let mut named: Vec<(String, PathBuf)> = std::fs::read_dir(path)?
+        .filter_map(|entry| {
+            entry
+                .ok()
+                .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+        })
+        .collect();
+    named.sort_by(|a, b| a.0.cmp(&b.0));
+    named.par_iter().map(|(name, child)| {
+        survey_node(child).map(|node| (name.clone(), node))
+    }).collect::<Result<Vec<_>, WriteError>>().map(|children| SurveyNode {
+        meta: sm,
+        children,
+        symlink_target: None,
+    })
+}
+
+/// Parallel tree survey: stats every node under `root` across
+/// rayon workers. The returned structure fully determines the
+/// fold's output — the fold itself never touches the filesystem
+/// except to read file payloads.
+fn survey_tree(root: &Path) -> Result<SurveyNode, WriteError> {
+    survey_node(root)
+}
+
 struct PendingInode {
     number: u64,
     mode: u32,
@@ -1678,52 +1807,72 @@ impl WriteContext {
     }
 
     fn walk(&mut self, path: &Path) -> Result<u64, WriteError> {
-        let meta = std::fs::symlink_metadata(path)?;
-        let file_type = meta.file_type();
-        let mtime_ns = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map_or(0u128, |d| d.as_nanos());
-        let mtime_ns: u64 = mtime_ns.try_into().unwrap_or(0);
+        // Two-phase walk. Phase A (survey, parallel): stat the tree
+        // with rayon — for trees with 100K+ entries the sequential
+        // stat storm was the create tail. Phase B (fold,
+        // sequential, zero syscalls): replicate the exact DFS of
+        // the previous single-threaded walk so inode numbering,
+        // dir-node ordering, and error order are byte-identical
+        // (pinned by the pack-twice determinism test).
+        let survey = survey_tree(path)?;
+        self.fold_survey(path, &survey, None)
+    }
 
-        if file_type.is_dir() {
+    /// Sequential fold over a [`SurveyNode`] — the only place that
+    /// allocates inodes and emits pending files. Mirrors the
+    /// pre-survey walk branch-for-branch.
+    fn fold_survey(
+        &mut self,
+        path: &Path,
+        node: &SurveyNode,
+        symlink_target: Option<&str>,
+    ) -> Result<u64, WriteError> {
+        let meta = node.meta();
+        if let Some(target) = symlink_target {
+            let inode_number = self.alloc_inode();
+            self.inodes.push(PendingInode {
+                number: inode_number,
+                mode: limnifs_core::inode::S_IFLNK | 0o777,
+                mtime_ns: meta.mtime_ns,
+                content: PendingContent::Symlink(target.to_owned()),
+            });
+            return Ok(inode_number);
+        }
+        if meta.is_dir {
             self.dir_count += 1;
             let inode_number = self.alloc_inode();
             let mut entries: Vec<(String, u64, u8)> = Vec::new();
 
-            for entry in std::fs::read_dir(path)? {
-                let entry = entry?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let child_path = entry.path();
-                let child_inode = self.walk(&child_path)?;
-                // entry.file_type() does NOT follow symlinks (the old
-                // entry.metadata() did, misreporting links to dirs).
-                let ft = entry.file_type()?;
-                let entry_type = if ft.is_symlink() {
+            for (name, child) in &node.children {
+                let child_path = path.join(name);
+                let child_inode =
+                    self.fold_survey(&child_path, child, child.symlink_target.as_deref())?;
+                let entry_type = if child.meta().is_symlink {
                     0x03
-                } else if ft.is_dir() {
+                } else if child.meta().is_dir {
                     0x02
                 } else {
                     0x01
                 };
-                entries.push((name, child_inode, entry_type));
+                entries.push((name.clone(), child_inode, entry_type));
             }
 
+            // Survey children are already name-sorted; the sort is
+            // retained so the invariant is local to this fold.
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             let dir_node = encode_dir_node(&entries);
             self.dir_nodes.push(dir_node);
             self.inodes.push(PendingInode {
                 number: inode_number,
                 mode: 0o040_755,
-                mtime_ns,
+                mtime_ns: meta.mtime_ns,
                 content: PendingContent::Directory(entries),
             });
             Ok(inode_number)
-        } else if file_type.is_file() {
+        } else if meta.is_file {
             self.file_count += 1;
             let inode_number = self.alloc_inode();
-            let file_len = meta.len();
+            let file_len = meta.len;
             crate::progress::emit_file(path, file_len);
 
             if file_len <= u64::try_from(self.inline_threshold).unwrap_or(u64::MAX) {
@@ -1731,7 +1880,7 @@ impl WriteContext {
                 self.inodes.push(PendingInode {
                     number: inode_number,
                     mode: 0o100_644,
-                    mtime_ns,
+                    mtime_ns: meta.mtime_ns,
                     content: PendingContent::Inline(data),
                 });
             } else {
@@ -1739,7 +1888,7 @@ impl WriteContext {
                 let pf = PendingFile {
                     inode_number,
                     path: path.to_path_buf(),
-                    mtime_ns,
+                    mtime_ns: meta.mtime_ns,
                     file_len,
                 };
                 if let Some(sink) = &self.pending_sink {
@@ -1756,41 +1905,17 @@ impl WriteContext {
                 }
             }
             Ok(inode_number)
-        } else if file_type.is_symlink() {
-            // Issue #190: symlinks are a first-class format citizen
-            // (the reader has ContentHandle::Symlink and extract
-            // recreates links); the writer just never emitted them.
-            // The target is stored verbatim — relative or absolute,
-            // in-tree or out-of-tree, dangling or not. Note
-            // `symlink_metadata` above gives us the LINK's own
-            // metadata, so a dangling link still walks cleanly.
-            let inode_number = self.alloc_inode();
-            let target = std::fs::read_link(path)?;
-            let target = target
-                .to_str()
-                .ok_or_else(|| WriteError::UnsupportedFileType {
-                    path: path.to_path_buf(),
-                    kind: format!("symlink with non-UTF-8 target ({})", target.display()),
-                })?
-                .to_owned();
-            self.inodes.push(PendingInode {
-                number: inode_number,
-                mode: limnifs_core::inode::S_IFLNK | 0o777,
-                mtime_ns,
-                content: PendingContent::Symlink(target),
-            });
-            Ok(inode_number)
         } else {
             #[cfg(unix)]
             let kind = {
                 use std::os::unix::fs::FileTypeExt;
-                if file_type.is_fifo() {
+                if meta.is_fifo {
                     "fifo".to_owned()
-                } else if file_type.is_socket() {
+                } else if meta.is_socket {
                     "socket".to_owned()
-                } else if file_type.is_block_device() {
+                } else if meta.is_block_device {
                     "block device".to_owned()
-                } else if file_type.is_char_device() {
+                } else if meta.is_char_device {
                     "character device".to_owned()
                 } else {
                     "unknown".to_owned()
