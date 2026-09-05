@@ -37,6 +37,14 @@ pub trait LiveTreeSink {
     /// children). The root directory is included.
     fn on_directory(&mut self, abs_path: &Path) -> Result<(), CoreError>;
 
+    /// Same event as [`on_directory`], carrying the inode so sinks
+    /// that need mode/mtime fidelity (e.g. archive writers) can read
+    /// it. Sinks that don't care keep the default delegation.
+    fn on_directory_inode(&mut self, abs_path: &Path, inode: &Inode) -> Result<(), CoreError> {
+        let _ = inode;
+        self.on_directory(abs_path)
+    }
+
     /// A regular-file inode (inline or slice-backed). The sink
     /// decides whether to extract now or defer.
     fn on_regular_file(&mut self, abs_path: &Path, inode: &Inode) -> Result<(), CoreError>;
@@ -89,7 +97,7 @@ fn walk_dir(
         return Ok(());
     }
     visited.push(dir_inode.number);
-    sink.on_directory(dir_path)?;
+    sink.on_directory_inode(dir_path, dir_inode)?;
 
     let node = blob
         .dir_node_by_hash(&hash)
