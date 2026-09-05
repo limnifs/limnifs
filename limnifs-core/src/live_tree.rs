@@ -52,6 +52,19 @@ pub trait LiveTreeSink {
     /// A symbolic link.
     fn on_symlink(&mut self, abs_path: &Path, target: &str) -> Result<(), CoreError>;
 
+    /// Same event as [`on_symlink`], carrying the inode so sinks
+    /// that need mode/mtime fidelity (e.g. archive writers) can
+    /// read it. Sinks that don't care keep the default delegation.
+    fn on_symlink_inode(
+        &mut self,
+        abs_path: &Path,
+        inode: &Inode,
+        target: &str,
+    ) -> Result<(), CoreError> {
+        let _ = inode;
+        self.on_symlink(abs_path, target)
+    }
+
     /// Any other inode type (block/char device, FIFO, socket).
     /// Default impl is a no-op so sinks that don't care can ignore.
     fn on_other(&mut self, _abs_path: &Path, _inode: &Inode) -> Result<(), CoreError> {
@@ -126,7 +139,7 @@ fn walk_dir(
                 sink.on_regular_file(&child_path, child)?;
             }
             ContentHandle::Symlink(target) => {
-                sink.on_symlink(&child_path, target)?;
+                sink.on_symlink_inode(&child_path, child, target)?;
             }
             _ => {
                 sink.on_other(&child_path, child)?;
