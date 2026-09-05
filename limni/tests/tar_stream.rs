@@ -17,6 +17,13 @@ use limnifs_write::WriteConfig;
 /// The CLI's `limn --from-tar` loop, lifted verbatim enough to be
 /// the contract under test.
 fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
+    // The CLI mmaps the archive; the test reads it into memory —
+    // both hand the writer entry ranges over a byte buffer.
+    let mut tar_bytes_owned = Vec::new();
+    tar_bytes
+        .read_to_end(&mut tar_bytes_owned)
+        .expect("read tar");
+    let tar_bytes = tar_bytes_owned.as_slice();
     let mut archive = tar::Archive::new(tar_bytes);
     let config = WriteConfig::default_v0_1();
     let mut writer = StreamWriter::new(&config).expect("default config");
@@ -39,7 +46,23 @@ fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
                     .expect("symlink");
             }
             tar::EntryType::Regular => {
-                writer.add_file(&name, mtime_ns, &mut entry).expect("file");
+                // Mirror the CLI: random-access entries stage for the
+                // parallel flush; entries whose size is overridden by
+                // a PAX extension fall back to the streaming read.
+                let raw_size = entry.header().size().unwrap_or(u64::MAX);
+                let declared = entry.size();
+                if raw_size == declared {
+                    let start = usize::try_from(entry.raw_file_position()).expect("offset");
+                    let end = start + usize::try_from(declared).expect("size");
+                    let data = tar_bytes.get(start..end).expect("entry range");
+                    writer
+                        .stage_file(&name, mtime_ns, data)
+                        .expect("staged file");
+                } else {
+                    writer
+                        .add_file(&name, mtime_ns, &mut entry)
+                        .expect("streamed file");
+                }
             }
             other => panic!("unsupported entry type {other:?}"),
         }
