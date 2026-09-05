@@ -44,7 +44,7 @@ use std::sync::Arc;
 use crossbeam_channel::{bounded, TryRecvError};
 use rayon::prelude::*;
 
-use crate::chunker::FastCDC;
+use crate::chunker::Chunker;
 use crate::classifier;
 use crate::config::WriteConfig;
 use crate::file_categorizer;
@@ -134,7 +134,7 @@ pub fn write_directory_with_pipeline(
                 }
             };
             let pf = &pending[i];
-            let chunker: &FastCDC = &chunker;
+            let chunker: &dyn Chunker = &chunker;
             process_file_inline(
                 pf,
                 &data,
@@ -167,7 +167,7 @@ pub fn write_directory_with_pipeline(
 fn process_file_inline(
     pf: &PendingFile,
     data: &[u8],
-    chunker: &FastCDC,
+    chunker: &dyn Chunker,
     classifier: classifier::Classifier,
     text_codec: u8,
     binary_codec: u8,
