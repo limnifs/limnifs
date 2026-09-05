@@ -33,6 +33,7 @@ pub mod progress;
 pub mod rw;
 #[cfg(feature = "sparse-index")]
 pub mod sparse_index;
+pub mod stream;
 pub mod turnover;
 
 pub use config::{
@@ -238,9 +239,11 @@ pub fn write_directory(root: &Path) -> Result<WriteArtifact, WriteError> {
 /// packing. The reader is consumed via [`Chunker::chunk_reader`] which
 /// bounds internal buffering at `max_chunk_size + 64 KiB`.
 ///
-/// The resulting image has a single root file with the given `name`
-/// (path-relative; safe to use `/` for subdirectories — they're
-/// materialised in the metadata tree).
+/// The resulting image has a root directory holding the named
+/// stream at `name` (path-relative; safe to use `/` for
+/// subdirectories — they're materialised in the metadata tree).
+/// Multi-entry streams should use [`stream::StreamWriter`]
+/// directly.
 ///
 /// # Errors
 ///
@@ -251,97 +254,9 @@ pub fn write_stream<R: std::io::Read>(
     mut reader: R,
     config: &WriteConfig,
 ) -> Result<WriteArtifact, WriteError> {
-    let mut ctx = WriteContext::new();
-    ctx.chunker = chunker_from_config(config)?;
-    ctx.categorizers_disabled = config.categorizers.is_empty();
-    ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
-    ctx.auto_turnover = config.turnover_threshold > 0;
-    ctx.collect_dict_samples = config.dictionaries.enabled;
-
-    // Synthesise a single PendingFile that points to nothing on disk;
-    // we'll bypass process_file's `std::fs::read` and feed the
-    // pre-chunked bytes directly.
-    let drop_id_root = [0u8; 32]; // placeholder; replaced below
-    let pending = PendingFile {
-        path: std::path::PathBuf::from(name),
-        inode_number: 1,
-        file_len: 0, // patched below once we know the total
-        mtime_ns: 0,
-    };
-    ctx.pending_files.push(pending);
-    ctx.root_inode_number = 1;
-
-    // Chunk the stream directly via FastCDC's chunk_reader.
-    let chunker = ctx.chunker.clone();
-    let chunks = chunker.chunk_reader(&mut reader)?;
-
-    // Total size = sum of chunk lengths.
-    let total_len: u64 = chunks.iter().map(|c| c.len() as u64).sum();
-
-    // Hash + compress each chunk. We treat each chunk as a unique drop
-    // (the stream is single-pass; cross-call dedup is left to the
-    // caller). Use the configured tournament spec.
-    let text_codec = config.text_codec_id().unwrap_or(0x04);
-    let binary_codec = config.binary_codec_id().unwrap_or(0x01);
-    let tunables = config.to_core_tunables();
-    let classifier = ctx.classifier;
-    let registry = config
-        .codec_registry()
-        .map_err(|e| WriteError::Io(std::io::Error::other(format!("codec registry: {e}"))))?;
-    let tournament_codec_ids: Vec<u8> = config
-        .tournament
-        .codecs
-        .iter()
-        .filter_map(|n| registry.lookup_by_name(n))
-        .collect();
-    let tournament = TournamentSpec {
-        codec_ids: tournament_codec_ids,
-        min_size: config.tournament.min_size_threshold as usize,
-        skip_for_binary: config.tournament.skip_for_binary,
-        short_circuit_permille: config.tournament.short_circuit_threshold,
-    };
-
-    let mut drops: Vec<RawDrop> = Vec::with_capacity(chunks.len());
-    let mut slices: Vec<PendingSlice> = Vec::with_capacity(chunks.len());
-    let mut offset: u64 = 0;
-    for chunk in &chunks {
-        let drop_id = hash_section(chunk);
-        slices.push(PendingSlice {
-            drop_id,
-            file_byte_start: offset,
-            file_byte_end: offset + chunk.len() as u64,
-        });
-        offset += chunk.len() as u64;
-        let class = classifier.classify(chunk);
-        let (codec_id, compressed) = compress_chunk_with_tournament(
-            chunk,
-            class,
-            text_codec,
-            binary_codec,
-            &tunables,
-            &tournament,
-        );
-        drops.push((drop_id, chunk.clone(), compressed, codec_id, 0));
-    }
-    let _ = drop_id_root;
-
-    // Wire into WriteContext as a single-file result + inode.
-    let result = ChunkedFileResult { drops, slices };
-    let pf = ctx.pending_files[0].clone();
-    ctx.merge_chunked_file(&pf, result);
-    // Patch the file_len now that we know it.
-    ctx.pending_files[0].file_len = total_len;
-    // The inode was already pushed by merge_chunked_file with the old
-    // (zero) file_len; correct it.
-    if let Some(inode) = ctx.inodes.last_mut() {
-        if let PendingContent::DropBacked { file_len, .. } = &mut inode.content {
-            *file_len = total_len;
-        }
-    }
-
-    ctx.train_and_apply_dictionary(&config.dictionaries);
-    let artifact = ctx.assemble();
-    Ok(artifact)
+    let mut writer = crate::stream::StreamWriter::new(config)?;
+    writer.add_file(name, 0, &mut reader)?;
+    writer.finish()
 }
 
 /// Pack a directory tree as a **layer** on top of a base image.
@@ -787,61 +702,61 @@ fn write_directory_streaming(
         // the producer thread pool-free.
         let survey = survey_tree(root)?;
         std::thread::scope(|scope| {
-        let producer = {
-            let ctx = &mut *ctx;
-            let root = root;
-            scope.spawn(move || {
-                let r = ctx.fold_survey(root, &survey, None);
-                // Disconnect the channel so the consumer's iterator
-                // terminates; the sink stays None until the next
-                // streaming write resets it after the scope.
-                ctx.pending_sink = None;
-                r
-            })
-        };
-        // par_bridge does not preserve order; carry the arrival index
-        // and re-sequence before merging.
-        let results = rx
-            .into_iter()
-            .enumerate()
-            .par_bridge()
-            .map(|(i, pf)| {
-                let r = process_file(
-                    &pf,
-                    &chunker,
-                    classifier,
-                    text_codec,
-                    binary_codec,
-                    &tunables,
-                    use_categorizers,
-                    skip_chunking,
-                    &tournament_spec,
-                    base_drop_index.as_deref(),
-                    inline_threshold,
-                    max_drop_size,
-                    seekable_drops,
-                    config.categorizers.as_slice(),
-                    &|name| {
-                        config
-                            .codec_registry()
-                            .ok()
-                            .and_then(|r| r.lookup_by_name(name))
-                    },
-                );
-                (i, pf, r)
-            })
-            .collect();
-        let joined = producer
-            .join()
-            .unwrap_or_else(|_| {
-                Err(WriteError::Io(std::io::Error::other(
-                    "walk thread panicked",
-                )))
-            })
-            .map(|n| (n, results));
-        // Scope can't `?` across borrows of `results`; return the
-        // outcome and propagate outside.
-        joined
+            let producer = {
+                let ctx = &mut *ctx;
+                let root = root;
+                scope.spawn(move || {
+                    let r = ctx.fold_survey(root, &survey, None);
+                    // Disconnect the channel so the consumer's iterator
+                    // terminates; the sink stays None until the next
+                    // streaming write resets it after the scope.
+                    ctx.pending_sink = None;
+                    r
+                })
+            };
+            // par_bridge does not preserve order; carry the arrival index
+            // and re-sequence before merging.
+            let results = rx
+                .into_iter()
+                .enumerate()
+                .par_bridge()
+                .map(|(i, pf)| {
+                    let r = process_file(
+                        &pf,
+                        &chunker,
+                        classifier,
+                        text_codec,
+                        binary_codec,
+                        &tunables,
+                        use_categorizers,
+                        skip_chunking,
+                        &tournament_spec,
+                        base_drop_index.as_deref(),
+                        inline_threshold,
+                        max_drop_size,
+                        seekable_drops,
+                        config.categorizers.as_slice(),
+                        &|name| {
+                            config
+                                .codec_registry()
+                                .ok()
+                                .and_then(|r| r.lookup_by_name(name))
+                        },
+                    );
+                    (i, pf, r)
+                })
+                .collect();
+            let joined = producer
+                .join()
+                .unwrap_or_else(|_| {
+                    Err(WriteError::Io(std::io::Error::other(
+                        "walk thread panicked",
+                    )))
+                })
+                .map(|n| (n, results));
+            // Scope can't `?` across borrows of `results`; return the
+            // outcome and propagate outside.
+            joined
         })
     }?;
     ctx.pending_sink = None;
@@ -1515,10 +1430,7 @@ fn survey_node(path: &Path) -> Result<SurveyNode, WriteError> {
             .to_str()
             .ok_or_else(|| WriteError::UnsupportedFileType {
                 path: path.to_path_buf(),
-                kind: format!(
-                    "symlink with non-UTF-8 target ({})",
-                    target.display()
-                ),
+                kind: format!("symlink with non-UTF-8 target ({})", target.display()),
             })?
             .to_owned();
         return Ok(SurveyNode {
@@ -1542,13 +1454,15 @@ fn survey_node(path: &Path) -> Result<SurveyNode, WriteError> {
         })
         .collect();
     named.sort_by(|a, b| a.0.cmp(&b.0));
-    named.par_iter().map(|(name, child)| {
-        survey_node(child).map(|node| (name.clone(), node))
-    }).collect::<Result<Vec<_>, WriteError>>().map(|children| SurveyNode {
-        meta: sm,
-        children,
-        symlink_target: None,
-    })
+    named
+        .par_iter()
+        .map(|(name, child)| survey_node(child).map(|node| (name.clone(), node)))
+        .collect::<Result<Vec<_>, WriteError>>()
+        .map(|children| SurveyNode {
+            meta: sm,
+            children,
+            symlink_target: None,
+        })
 }
 
 /// Parallel tree survey: stats every node under `root` across

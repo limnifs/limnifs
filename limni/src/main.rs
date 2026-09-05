@@ -102,10 +102,15 @@ enum Command {
     /// below the inline threshold (4 KiB) are stored inline; larger
     /// files are rejected.
     Limn {
-        /// Source directory to package.
-        source: PathBuf,
-        /// Output `.lim` file path.
-        output: PathBuf,
+        /// Positionals: `<SOURCE> <OUTPUT>` for a directory build,
+        /// or just `<OUTPUT>` when `--from-tar <TAR>` supplies the
+        /// content.
+        paths: Vec<PathBuf>,
+        /// Build from a tar archive instead of a directory: entries
+        /// are streamed into the writer (nothing is materialised on
+        /// disk). Requires a build with the `tar` feature.
+        #[arg(long, value_name = "TAR")]
+        from_tar: Option<PathBuf>,
         /// Compression profile to use. Built-in: max-ratio, max-speed,
         /// balanced, competitive, max-read, max-write, max-write-rw,
         /// max-read-rw, balanced-rw. Default: balanced.
@@ -181,6 +186,9 @@ enum Command {
         #[arg(default_value = "/")]
         path: String,
     },
+    /// Stream an image's contents to stdout as a tar archive
+    /// (requires a build with the `tar` feature).
+    Tar { image: PathBuf },
     /// Extract an image's contents to a filesystem directory.
     Extract {
         image: PathBuf,
@@ -372,8 +380,8 @@ fn run() -> Result<(), CliError> {
             Ok(())
         }
         Command::Limn {
-            source,
-            output,
+            paths,
+            from_tar,
             profile,
             verbose,
             text_codec,
@@ -382,13 +390,13 @@ fn run() -> Result<(), CliError> {
         } => {
             let reported = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             if verbose {
-                limnifs_write::progress::set_sink(std::sync::Arc::new(
-                    RateLimitedReporter::new(reported.clone()),
-                ));
+                limnifs_write::progress::set_sink(std::sync::Arc::new(RateLimitedReporter::new(
+                    reported.clone(),
+                )));
             }
-            let result = limn_with_profile(
-                &source,
-                &output,
+            let result = limn_dispatch_source(
+                paths,
+                from_tar.as_deref(),
                 profile,
                 text_codec,
                 chunk_size,
@@ -402,6 +410,7 @@ fn run() -> Result<(), CliError> {
             }
             result
         }
+        Command::Tar { image } => tar_stream(&image),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat {
             image,
@@ -429,7 +438,11 @@ fn run() -> Result<(), CliError> {
             profile,
         } => rw_delete(&image, &path, profile),
         Command::Turnover { image, profile } => turnover_cmd(&image, &profile),
-        Command::Diff { parent, child, json } => diff(&parent, &child, json),
+        Command::Diff {
+            parent,
+            child,
+            json,
+        } => diff(&parent, &child, json),
         Command::Inspect { image, json, dedup } => {
             inspect(&image, json)?;
             if dedup {
@@ -480,6 +493,11 @@ fn run_with_exit_code() -> ExitCode {
             eprintln!("limni: signature check failed: {reason}");
             ExitCode::FAILURE
         }
+        Err(CliError::Unsupported { reason }) => {
+            eprintln!("limni: {reason}");
+            ExitCode::FAILURE
+        }
+        Err(CliError::SilentExit(code)) => ExitCode::from(code),
     }
 }
 
@@ -504,6 +522,13 @@ enum CliError {
     SignatureFailed {
         reason: String,
     },
+    Unsupported {
+        reason: String,
+    },
+    /// The command finished its output and wants this exit code
+    /// without an error line (diff semantics, like `git diff
+    /// --exit-code`).
+    SilentExit(u8),
 }
 
 /// Parsed manifest sections plus the computed `ManifestRoot`.
@@ -1091,6 +1116,69 @@ fn limn_with_profile(
     let artifact = limnifs_write::write_directory_with_config(source, &config)
         .map_err(|source| CliError::WriteFailed { source })?;
 
+    write_artifact_files(&artifact, output)?;
+
+    println!(
+        "{output}: wrote {len} bytes, {manifest_root}",
+        output = output.display(),
+        len = artifact.bytes.len(),
+        manifest_root = artifact.merkle_root,
+    );
+    println!(
+        "  inodes: {}  files: {}  dirs: {}  drops: {}  slabs: {}",
+        artifact.inode_count,
+        artifact.file_count,
+        artifact.dir_count,
+        artifact.drop_count,
+        artifact.slabs.len(),
+    );
+    if let Some(key) = sign_key {
+        sign_image(output, key)?;
+    }
+    Ok(())
+}
+
+/// Route a `limn` build to a directory source or a tar source.
+/// Exactly one positional plus `--from-tar`, or two positionals.
+#[allow(clippy::too_many_arguments)]
+fn limn_dispatch_source(
+    paths: Vec<PathBuf>,
+    tar: Option<&Path>,
+    profile: Option<String>,
+    text_codec: Option<String>,
+    chunk_size: Option<u32>,
+    sign_key: Option<&Path>,
+) -> Result<(), CliError> {
+    let usage = "usage: limni limn <SOURCE> <OUTPUT> | limni limn --from-tar <TAR> <OUTPUT>";
+    match paths.as_slice() {
+        [source, output] => {
+            if tar.is_some() {
+                return Err(CliError::Unsupported {
+                    reason: "cannot combine --from-tar with a source directory".to_owned(),
+                });
+            }
+            limn_with_profile(source, output, profile, text_codec, chunk_size, sign_key)
+        }
+        [output] => {
+            let Some(tar_path) = tar else {
+                return Err(CliError::Unsupported {
+                    reason: usage.to_owned(),
+                });
+            };
+            limn_from_tar(tar_path, output, profile, text_codec, chunk_size, sign_key)
+        }
+        _ => Err(CliError::Unsupported {
+            reason: usage.to_owned(),
+        }),
+    }
+}
+
+/// Write an artifact's manifest, slabs, and metadata sidecar next to
+/// `output`, mirroring the directory build's on-disk layout.
+fn write_artifact_files(
+    artifact: &limnifs_write::WriteArtifact,
+    output: &Path,
+) -> Result<(), CliError> {
     std::fs::write(output, &artifact.bytes).map_err(|source| CliError::ReadFailed {
         path: output.to_path_buf(),
         source,
@@ -1121,7 +1209,98 @@ fn limn_with_profile(
             source,
         })?;
     }
+    Ok(())
+}
 
+#[cfg(feature = "tar")]
+fn limn_from_tar(
+    tar_path: &Path,
+    output: &Path,
+    profile: Option<String>,
+    text_codec: Option<String>,
+    chunk_size: Option<u32>,
+    sign_key: Option<&Path>,
+) -> Result<(), CliError> {
+    let mut config = match &profile {
+        Some(name) => limnifs_write::WriteConfig::from_profile(name).unwrap_or_else(|| {
+            eprintln!("warning: unknown profile '{name}', using balanced");
+            limnifs_write::profile::balanced()
+        }),
+        None => limnifs_write::WriteConfig::default_v0_1(),
+    };
+    if let Some(codec) = &text_codec {
+        config = config.with_text_codec(codec);
+    }
+    if let Some(size) = chunk_size {
+        config = config.with_chunk_size(size);
+    }
+
+    let file = std::fs::File::open(tar_path).map_err(|source| CliError::ReadFailed {
+        path: tar_path.to_path_buf(),
+        source,
+    })?;
+    let mut archive = tar::Archive::new(std::io::BufReader::new(file));
+    let mut writer = limnifs_write::stream::StreamWriter::new(&config)
+        .map_err(|source| CliError::WriteFailed { source })?;
+
+    for entry in archive.entries().map_err(|source| CliError::ReadFailed {
+        path: tar_path.to_path_buf(),
+        source,
+    })? {
+        let mut entry = entry.map_err(|source| CliError::ReadFailed {
+            path: tar_path.to_path_buf(),
+            source,
+        })?;
+        let mtime_ns = entry
+            .header()
+            .mtime()
+            .unwrap_or(0)
+            .saturating_mul(1_000_000_000);
+        let path = entry
+            .path()
+            .map_err(|source| CliError::ReadFailed {
+                path: tar_path.to_path_buf(),
+                source,
+            })?
+            .to_path_buf();
+        let name = path
+            .to_str()
+            .ok_or_else(|| CliError::Unsupported {
+                reason: format!("tar entry path {path:?} is not valid UTF-8"),
+            })?
+            .trim_end_matches('/')
+            .to_owned();
+        let add = match entry.header().entry_type() {
+            tar::EntryType::Directory => writer.add_dir(&name, mtime_ns),
+            tar::EntryType::Symlink => {
+                let target = entry.link_name().map_err(|source| CliError::ReadFailed {
+                    path: tar_path.to_path_buf(),
+                    source,
+                })?;
+                let Some(target) = target else {
+                    return Err(CliError::Unsupported {
+                        reason: format!("tar symlink {name:?} has no link target"),
+                    });
+                };
+                let target = target.to_string_lossy().into_owned();
+                writer.add_symlink(&name, &target, mtime_ns)
+            }
+            tar::EntryType::Regular => writer.add_file(&name, mtime_ns, &mut entry),
+            other => {
+                return Err(CliError::Unsupported {
+                    reason: format!(
+                        "tar entry {name:?} has unsupported type {other:?} (hardlinks are not supported yet)"
+                    ),
+                });
+            }
+        };
+        add.map_err(|source| CliError::WriteFailed { source })?;
+    }
+
+    let artifact = writer
+        .finish()
+        .map_err(|source| CliError::WriteFailed { source })?;
+    write_artifact_files(&artifact, output)?;
     println!(
         "{output}: wrote {len} bytes, {manifest_root}",
         output = output.display(),
@@ -1140,6 +1319,244 @@ fn limn_with_profile(
         sign_image(output, key)?;
     }
     Ok(())
+}
+
+#[cfg(not(feature = "tar"))]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+fn limn_from_tar(
+    tar_path: &Path,
+    _output: &Path,
+    _profile: Option<String>,
+    _text_codec: Option<String>,
+    _chunk_size: Option<u32>,
+    _sign_key: Option<&Path>,
+) -> Result<(), CliError> {
+    Err(CliError::Unsupported {
+        reason: format!(
+            "--from-tar requires a build with the `tar` feature: {}",
+            "cargo build --features tar"
+        ),
+    })
+    .map_err(|e| {
+        let _ = tar_path;
+        e
+    })
+}
+
+/// Stream an image's contents to stdout as a tar archive: metadata
+/// from the inodes, file bytes pulled slice-by-slice from the slabs
+/// (bounded by one chunk of buffering), nothing materialised.
+#[cfg(feature = "tar")]
+fn tar_stream(image: &Path) -> Result<(), CliError> {
+    use std::io::Write;
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+        path: image.to_path_buf(),
+        source,
+    })?;
+    let map_err = |source: CoreError| CliError::FormatFailed {
+        path: image.to_path_buf(),
+        source,
+    };
+    let (blob, root_inode_number, slab_index, dict_section) =
+        load_image(&manifest_bytes, image, map_err)?;
+
+    let mut store = if slab_index.is_empty() {
+        None
+    } else {
+        let mut s =
+            limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?;
+        if let Some(d) = &dict_section {
+            install_dicts(&mut s, d);
+        }
+        Some(s)
+    };
+
+    let stdout = std::io::stdout();
+    let lock = stdout.lock();
+    let mut builder = tar::Builder::new(lock);
+    {
+        let mut sink = TarSink {
+            builder: &mut builder,
+            store: store.as_ref(),
+        };
+        limnifs_core::live_tree::walk_live_tree(&blob, root_inode_number, &mut sink)
+            .map_err(map_err)?;
+    }
+    let tar_err = |source: std::io::Error| CliError::WriteFailed {
+        source: limnifs_write::WriteError::Io(source),
+    };
+    let mut lock = builder
+        .into_inner()
+        .map_err(|e| tar_err(std::io::Error::other(format!("tar finish: {e}"))))?;
+    lock.flush().map_err(tar_err)?;
+    Ok(())
+}
+
+#[cfg(not(feature = "tar"))]
+fn tar_stream(_image: &Path) -> Result<(), CliError> {
+    Err(CliError::Unsupported {
+        reason: "the tar command requires a build with the `tar` feature".to_owned(),
+    })
+}
+
+/// [`limnifs_core::live_tree::LiveTreeSink`] that writes tar entries
+/// with the inode's mode/ownership/mtime and streams file content
+/// lazily from the slab store.
+#[cfg(feature = "tar")]
+struct TarSink<'a, W: std::io::Write> {
+    builder: &'a mut tar::Builder<W>,
+    store: Option<&'a limnifs_core::slab_store::SlabStore>,
+}
+
+#[cfg(feature = "tar")]
+impl<'a, W: std::io::Write> limnifs_core::live_tree::LiveTreeSink for TarSink<'a, W> {
+    fn on_directory_inode(
+        &mut self,
+        abs_path: &Path,
+        inode: &limnifs_core::Inode,
+    ) -> Result<(), CoreError> {
+        if abs_path.as_os_str().is_empty() {
+            return Ok(()); // the archive root is implicit
+        }
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_mode(inode.mode & 0o7777);
+        header.set_mtime(inode.mtime_ns / 1_000_000_000);
+        header.set_uid(u64::from(inode.uid));
+        header.set_gid(u64::from(inode.gid));
+        header.set_cksum();
+        let mut dir = abs_path.to_path_buf().into_os_string();
+        dir.push("/");
+        self.builder
+            .append_data(&mut header, dir, std::io::empty())
+            .map_err(io_err)?;
+        Ok(())
+    }
+
+    fn on_directory(&mut self, _abs_path: &Path) -> Result<(), CoreError> {
+        Ok(()) // overridden by on_directory_inode
+    }
+
+    fn on_regular_file(
+        &mut self,
+        abs_path: &Path,
+        inode: &limnifs_core::Inode,
+    ) -> Result<(), CoreError> {
+        use limnifs_core::inode::ContentHandle;
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(inode.mode & 0o7777);
+        header.set_mtime(inode.mtime_ns / 1_000_000_000);
+        header.set_uid(u64::from(inode.uid));
+        header.set_gid(u64::from(inode.gid));
+        header.set_cksum();
+        match &inode.content_handle {
+            ContentHandle::InlineData(data) => {
+                header.set_size(data.len() as u64);
+                header.set_cksum();
+                self.builder
+                    .append_data(&mut header, abs_path, data.as_slice())
+                    .map_err(io_err)?;
+            }
+            ContentHandle::SliceMap(slices) => {
+                let size = slices
+                    .last()
+                    .map_or(0, |s| s.file_byte_end)
+                    .saturating_sub(slices.first().map_or(0, |s| s.file_byte_start));
+                header.set_size(size);
+                header.set_cksum();
+                let mut reader = SliceReader {
+                    store: self.store,
+                    slices: slices.iter(),
+                    current: std::io::Cursor::new(Vec::new()),
+                };
+                self.builder
+                    .append_data(&mut header, abs_path, &mut reader)
+                    .map_err(io_err)?;
+            }
+            _ => return Ok(()), // other content handles are not file bytes
+        }
+        Ok(())
+    }
+
+    fn on_symlink(&mut self, abs_path: &Path, target: &str) -> Result<(), CoreError> {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_cksum();
+        header
+            .set_link_name(target)
+            .map_err(|source| CoreError::Corrupt {
+                reason: format!("tar link name {target:?}: {source}"),
+            })?;
+        self.builder
+            .append_data(&mut header, abs_path, std::io::empty())
+            .map_err(io_err)?;
+        Ok(())
+    }
+}
+
+/// Lazy reader over a file's slice map: pulls one drop's plaintext
+/// at a time from the slab store and windows it to the slice's byte
+/// range, so peak buffering is one chunk.
+#[cfg(feature = "tar")]
+struct SliceReader<'a, I> {
+    store: Option<&'a limnifs_core::slab_store::SlabStore>,
+    slices: I,
+    current: std::io::Cursor<Vec<u8>>,
+}
+
+#[cfg(feature = "tar")]
+impl<'a, I> std::io::Read for SliceReader<'a, I>
+where
+    I: Iterator<Item = &'a limnifs_core::inode::SliceRef>,
+{
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let pos = self.current.position() as usize;
+            let len = self.current.get_ref().len();
+            if pos < len {
+                let remaining = &self.current.get_ref()[pos..];
+                let n = remaining.len().min(buf.len());
+                buf[..n].copy_from_slice(&remaining[..n]);
+                self.current.set_position((pos + n) as u64);
+                return Ok(n);
+            }
+            let Some(slice) = self.slices.next() else {
+                return Ok(0);
+            };
+            let plaintext = self
+                .store
+                .and_then(|s| s.plaintext_for(slice.drop_id.as_bytes()))
+                .ok_or_else(|| {
+                    std::io::Error::other(format!(
+                        "slab: drop id {} not found",
+                        slice
+                            .drop_id
+                            .as_bytes()
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>()
+                    ))
+                })?
+                .map_err(|source| std::io::Error::other(format!("slab read: {source}")))?;
+            let start = slice.drop_byte_start as usize;
+            let end = start + (slice.drop_byte_len as usize);
+            let window = plaintext.get(start..end).ok_or_else(|| {
+                std::io::Error::other("slab: slice window exceeds drop plaintext")
+            })?;
+            self.current = std::io::Cursor::new(window.to_vec());
+        }
+    }
+}
+
+#[cfg(feature = "tar")]
+fn io_err(source: std::io::Error) -> CoreError {
+    CoreError::Corrupt {
+        reason: format!("tar write: {source}"),
+    }
 }
 /// the entries of the directory at `path` (slash-separated, relative
 /// to the image's root; `/` lists the root).
@@ -1640,7 +2057,8 @@ fn mount(image: &Path, mountpoint: &Path) -> Result<(), CliError> {
 /// Print a comprehensive overview of an image: manifest header, feature
 /// flags, metadata blob stats, slab stats, and per-class drop counts.
 #[allow(clippy::too_many_lines)]
-fn inspect(image: &Path, json: bool) -> Result<(), CliError> {    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
+fn inspect(image: &Path, json: bool) -> Result<(), CliError> {
+    let manifest_bytes = std::fs::read(image).map_err(|source| CliError::ReadFailed {
         path: image.to_path_buf(),
         source,
     })?;
@@ -1965,10 +2383,8 @@ fn dedup_stats(blob: &limnifs_core::MetadataBlob) -> DedupStats {
     let mut logical = 0u64;
     let mut inline_files = 0usize;
     let mut inline_logical = 0u64;
-    let mut drop_size: std::collections::HashMap<[u8; 32], u64> =
-        std::collections::HashMap::new();
-    let mut inline_seen: std::collections::HashSet<Vec<u8>> =
-        std::collections::HashSet::new();
+    let mut drop_size: std::collections::HashMap<[u8; 32], u64> = std::collections::HashMap::new();
+    let mut inline_seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
     for inode in &blob.inodes {
         match &inode.content_handle {
             limnifs_core::ContentHandle::SliceMap(slices) => {
@@ -1992,10 +2408,7 @@ fn dedup_stats(blob: &limnifs_core::MetadataBlob) -> DedupStats {
         }
     }
     let unique: u64 = drop_size.values().sum();
-    let inline_unique = inline_seen
-        .iter()
-        .map(|d| d.len() as u64)
-        .sum::<u64>();
+    let inline_unique = inline_seen.iter().map(|d| d.len() as u64).sum::<u64>();
     let total_unique = unique + inline_unique;
     let total_logical = logical + inline_logical;
     DedupStats {
@@ -2041,8 +2454,11 @@ fn inspect_dedup(image: &Path, json: bool) -> Result<(), CliError> {
         );
         println!(
             "  drops: {} (avg {} bytes), inline files: {} ({} bytes, {} unique)",
-            stats.drops, stats.avg_drop_bytes, stats.inline_files,
-            stats.inline_logical_bytes, stats.inline_unique_bytes
+            stats.drops,
+            stats.avg_drop_bytes,
+            stats.inline_files,
+            stats.inline_logical_bytes,
+            stats.inline_unique_bytes
         );
     }
     Ok(())
@@ -2283,7 +2699,10 @@ fn diff(parent: &Path, child: &Path, json: bool) -> Result<(), CliError> {
             removed: &removed,
             changed: &changed,
         };
-        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
     } else {
         println!(
             "{} vs {}: {} added, {} removed, {} changed",
@@ -2303,7 +2722,7 @@ fn diff(parent: &Path, child: &Path, json: bool) -> Result<(), CliError> {
         }
     }
     if !artifact.tree_ops.is_empty() {
-        std::process::exit(1);
+        return Err(CliError::SilentExit(1));
     }
     Ok(())
 }
@@ -3742,8 +4161,11 @@ mod tests {
         std::fs::write(modified.join("new.txt"), b"newly added").expect("add new");
         limn(&modified, &img2).expect("limn modified");
 
-        // Diff should show one Add op.
-        diff(&img, &img2).expect("diff succeeds");
+        // Diff should show one Add op and exit 1 without erroring.
+        assert!(matches!(
+            diff(&img, &img2, false),
+            Err(CliError::SilentExit(1))
+        ));
 
         // Compact.
         compact(
