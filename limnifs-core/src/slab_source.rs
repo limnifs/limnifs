@@ -69,6 +69,35 @@ impl MmapSlabSource {
     }
 }
 
+/// A [`SlabSource`] that consults a chain of stores in order —
+/// the layer's local slabs first, then each base. This is the read
+/// side of `write_layer`: drops the layer only references resolve
+/// from the base images' slabs.
+pub struct ChainedSlabSource<'a> {
+    chain: Vec<&'a dyn SlabSource>,
+}
+
+impl<'a> ChainedSlabSource<'a> {
+    /// Build from local-first stores. An empty chain answers `None`
+    /// for everything.
+    #[must_use]
+    pub fn new(chain: Vec<&'a dyn SlabSource>) -> Self {
+        Self { chain }
+    }
+}
+
+impl SlabSource for ChainedSlabSource<'_> {
+    fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>> {
+        self.chain.iter().find_map(|s| s.plaintext_for(drop_id))
+    }
+    fn slab_count(&self) -> usize {
+        self.chain.iter().map(|s| s.slab_count()).sum()
+    }
+    fn drop_count(&self) -> usize {
+        self.chain.iter().map(|s| s.drop_count()).sum()
+    }
+}
+
 impl SlabSource for MmapSlabSource {
     fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>> {
         self.inner.plaintext_for(drop_id)
