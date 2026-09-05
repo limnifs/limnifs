@@ -46,11 +46,32 @@ fn level_for_quality(quality: u8) -> omnizip_zstd::ZstdLevel {
 /// ZSTD codec. Encode at `Default` (L6); decode at any level.
 pub struct ZstdCodec;
 
+/// Whole-file drops at or above this size compress across threads
+/// (omnizip `compress_mt`): job boundaries are a pure function of
+/// input length and level — output is byte-identical for any thread
+/// count — and each job is an independent frame, so the standard
+/// decoder handles the concatenation. The chunk path never sees
+/// inputs this large (chunks are bounded by `max_chunk_size`), so
+/// this only fires for whole-file drops and seekable containers.
+const MT_WHOLE_FILE_THRESHOLD: usize = 4 * 1024 * 1024;
+
 fn compress_verified(
     plaintext: &[u8],
     level: omnizip_zstd::ZstdLevel,
 ) -> Result<Vec<u8>, CoreError> {
-    omnizip_zstd::compress(plaintext, level).map_err(|e| CoreError::Corrupt {
+    let out = if plaintext.len() >= MT_WHOLE_FILE_THRESHOLD {
+        // Floor at 2: omnizip maps threads == 1 to the SINGLE-frame
+        // path, whose bytes differ from any multi-thread split.
+        // Every threads >= 2 value produces identical output (job
+        // boundaries depend only on input length), so the floor
+        // keeps output machine-independent even on one core.
+        let threads = std::thread::available_parallelism()
+            .map_or(2, |n| std::cmp::max(2, n.get()));
+        omnizip_zstd::compress_mt(plaintext, level, threads)
+    } else {
+        omnizip_zstd::compress(plaintext, level)
+    };
+    out.map_err(|e| CoreError::Corrupt {
         reason: format!("zstd compress (level {level}) failed: {e}"),
     })
 }
@@ -249,5 +270,35 @@ mod tests {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod mt_tests {
+    use super::*;
+
+    /// Whole-file MT frames round-trip through the standard decoder
+    /// (multi-frame concatenation), and the output is deterministic
+    /// across thread counts (upstream contract, re-verified here).
+    #[test]
+    fn multi_thread_frames_round_trip_and_are_thread_deterministic() {
+        let mut payload = Vec::with_capacity(9 * 1024 * 1024);
+        let mut state = 0x5EED_F00Du64;
+        while payload.len() < 9 * 1024 * 1024 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            payload.extend_from_slice(&state.to_le_bytes());
+            payload.extend_from_slice(b"mt-frame filler line\n");
+        }
+        let a = compress_verified(&payload, omnizip_zstd::ZstdLevel::Fastest)
+            .expect("mt compress a");
+        let b = omnizip_zstd::compress_mt(&payload, omnizip_zstd::ZstdLevel::Fastest, 2)
+            .expect("two threads");
+        let c = omnizip_zstd::compress_mt(&payload, omnizip_zstd::ZstdLevel::Fastest, 8)
+            .expect("eight threads");
+        assert_eq!(a, b, "registry path matches explicit 2 threads");
+        assert_eq!(b, c, "output must not depend on thread count (>= 2)");
+        let back = omnizip_zstd::decompress(&a, payload.len() as u32).expect("decode mt");
+        assert_eq!(back, payload, "mt frames round-trip");
     }
 }
