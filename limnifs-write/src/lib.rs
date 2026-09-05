@@ -43,7 +43,7 @@ pub use config::{
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::chunker::FastCDC;
+use crate::chunker::{Chunker, ParallelFastCDC};
 use limnifs_core::codec::CODEC_REFERENCED;
 use limnifs_core::slab_store::SlabStore;
 use limnifs_core::{
@@ -235,7 +235,7 @@ pub fn write_directory(root: &Path) -> Result<WriteArtifact, WriteError> {
 ///
 /// For callers that pipe data from a network socket, pipe, or generator
 /// and don't want to materialise the full content on disk before
-/// packing. The reader is consumed via [`FastCDC::chunk_reader`] which
+/// packing. The reader is consumed via [`Chunker::chunk_reader`] which
 /// bounds internal buffering at `max_chunk_size + 64 KiB`.
 ///
 /// The resulting image has a single root file with the given `name`
@@ -248,7 +248,7 @@ pub fn write_directory(root: &Path) -> Result<WriteArtifact, WriteError> {
 /// error.
 pub fn write_stream<R: std::io::Read>(
     name: &str,
-    reader: R,
+    mut reader: R,
     config: &WriteConfig,
 ) -> Result<WriteArtifact, WriteError> {
     let mut ctx = WriteContext::new();
@@ -273,7 +273,7 @@ pub fn write_stream<R: std::io::Read>(
 
     // Chunk the stream directly via FastCDC's chunk_reader.
     let chunker = ctx.chunker.clone();
-    let chunks = chunker.chunk_reader(reader)?;
+    let chunks = chunker.chunk_reader(&mut reader)?;
 
     // Total size = sum of chunk lengths.
     let total_len: u64 = chunks.iter().map(|c| c.len() as u64).sum();
@@ -916,8 +916,8 @@ struct TournamentSpec {
 /// `default_v0_1` match the previous effective values, so default
 /// images are byte-identical; only configs that set `[chunking]`
 /// change output (which is the point of setting it).
-fn chunker_from_config(config: &WriteConfig) -> Result<FastCDC, WriteError> {
-    FastCDC::new(
+fn chunker_from_config(config: &WriteConfig) -> Result<ParallelFastCDC, WriteError> {
+    ParallelFastCDC::new(
         config.chunking.min_chunk_size as usize,
         config.chunking.avg_chunk_size as usize,
         config.chunking.max_chunk_size as usize,
@@ -1147,7 +1147,7 @@ fn compress_chunk_one(
 /// falls through to `FastCDC` + per-chunk classify.
 fn process_file(
     pf: &PendingFile,
-    chunker: &FastCDC,
+    chunker: &dyn Chunker,
     classifier: classifier::Classifier,
     text_codec: u8,
     binary_codec: u8,
@@ -1593,7 +1593,7 @@ struct WriteContext {
     file_count: usize,
     dir_count: usize,
     root_inode_number: u64,
-    chunker: FastCDC,
+    chunker: ParallelFastCDC,
     classifier: classifier::Classifier,
     shared_inline_map: HashMap<[u8; 32], usize>,
     shared_inline_table: Vec<Vec<u8>>,
@@ -1674,7 +1674,7 @@ impl WriteContext {
             file_count: 0,
             dir_count: 0,
             root_inode_number: 0,
-            chunker: FastCDC::default(),
+            chunker: ParallelFastCDC::default(),
             classifier: classifier::Classifier,
             shared_inline_map: HashMap::new(),
             shared_inline_table: Vec::new(),

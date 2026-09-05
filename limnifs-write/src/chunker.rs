@@ -29,6 +29,10 @@
 //! the same chunk boundaries — independent of platform, build, or
 //! RNG quality. This is required for content-addressed dedup.
 
+mod parallel;
+
+pub use parallel::ParallelFastCDC;
+
 use std::io::Read;
 
 /// Default minimum chunk size (64 KiB).
@@ -59,10 +63,14 @@ pub trait Chunker: Send + Sync {
     /// each chunk as an owned `Vec<u8>`. Constant memory bounded by
     /// the chunker's max chunk size plus one read buffer.
     ///
+    /// Takes `&mut dyn Read` (not a generic `R`) so the trait stays
+    /// dyn-compatible — the pipeline dispatches chunkers as
+    /// `&dyn Chunker`.
+    ///
     /// # Errors
     ///
     /// Returns the underlying `std::io::Error` if `reader` fails.
-    fn chunk_reader<R: Read>(&self, reader: R) -> std::io::Result<Vec<Vec<u8>>>;
+    fn chunk_reader(&self, reader: &mut dyn Read) -> std::io::Result<Vec<Vec<u8>>>;
 
     /// Target average chunk size.
     fn avg_chunk_size(&self) -> usize;
@@ -324,7 +332,7 @@ impl Chunker for FastCDC {
         FastCDC::chunk_slice(self, data)
     }
 
-    fn chunk_reader<R: Read>(&self, reader: R) -> std::io::Result<Vec<Vec<u8>>> {
+    fn chunk_reader(&self, reader: &mut dyn Read) -> std::io::Result<Vec<Vec<u8>>> {
         FastCDC::chunk_reader(self, reader)
     }
 
@@ -484,9 +492,8 @@ mod tests {
             .into_iter()
             .map(Vec::from)
             .collect();
-        let reader_chunks = chunker
-            .chunk_reader(Cursor::new(&data))
-            .expect("read succeeds");
+        let mut cursor = Cursor::new(&data);
+        let reader_chunks = chunker.chunk_reader(&mut cursor).expect("read succeeds");
         assert_eq!(slice_chunks, reader_chunks);
     }
 
@@ -564,9 +571,8 @@ mod tests {
         let chunks = chunker.chunk_slice(&data);
         assert!(chunks.is_empty());
 
-        let reader_chunks = chunker
-            .chunk_reader(Cursor::new(&data))
-            .expect("read succeeds");
+        let mut cursor = Cursor::new(&data);
+        let reader_chunks = chunker.chunk_reader(&mut cursor).expect("read succeeds");
         assert!(reader_chunks.is_empty());
     }
 }
