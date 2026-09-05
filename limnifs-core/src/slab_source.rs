@@ -86,6 +86,42 @@ impl<'a> ChainedSlabSource<'a> {
     }
 }
 
+/// The owning form of [`ChainedSlabChain`]-style resolution: stores
+/// loaded on demand (image slabs first, then each base image's,
+/// innermost first), boxed into one chain. CLI commands and other
+/// callers that build their store set at runtime use this; callers
+/// holding stores on the stack use [`ChainedSlabSource`].
+pub struct OwnedSlabChain {
+    sources: Vec<Box<dyn SlabSource>>,
+}
+
+impl OwnedSlabChain {
+    /// Build from local-first stores. An empty chain answers `None`
+    /// for everything.
+    #[must_use]
+    pub fn new(sources: Vec<Box<dyn SlabSource>>) -> Self {
+        Self { sources }
+    }
+
+    /// True when no stores were supplied.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+}
+
+impl SlabSource for OwnedSlabChain {
+    fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>> {
+        self.sources.iter().find_map(|s| s.plaintext_for(drop_id))
+    }
+    fn slab_count(&self) -> usize {
+        self.sources.iter().map(|s| s.slab_count()).sum()
+    }
+    fn drop_count(&self) -> usize {
+        self.sources.iter().map(|s| s.drop_count()).sum()
+    }
+}
+
 impl SlabSource for ChainedSlabSource<'_> {
     fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>> {
         self.chain.iter().find_map(|s| s.plaintext_for(drop_id))
