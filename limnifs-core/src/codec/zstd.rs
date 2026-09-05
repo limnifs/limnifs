@@ -65,8 +65,7 @@ fn compress_verified(
         // Every threads >= 2 value produces identical output (job
         // boundaries depend only on input length), so the floor
         // keeps output machine-independent even on one core.
-        let threads = std::thread::available_parallelism()
-            .map_or(2, |n| std::cmp::max(2, n.get()));
+        let threads = std::thread::available_parallelism().map_or(2, |n| std::cmp::max(2, n.get()));
         omnizip_zstd::compress_mt(plaintext, level, threads)
     } else {
         omnizip_zstd::compress(plaintext, level)
@@ -290,8 +289,8 @@ mod mt_tests {
             payload.extend_from_slice(&state.to_le_bytes());
             payload.extend_from_slice(b"mt-frame filler line\n");
         }
-        let a = compress_verified(&payload, omnizip_zstd::ZstdLevel::Fastest)
-            .expect("mt compress a");
+        let a =
+            compress_verified(&payload, omnizip_zstd::ZstdLevel::Fastest).expect("mt compress a");
         let b = omnizip_zstd::compress_mt(&payload, omnizip_zstd::ZstdLevel::Fastest, 2)
             .expect("two threads");
         let c = omnizip_zstd::compress_mt(&payload, omnizip_zstd::ZstdLevel::Fastest, 8)

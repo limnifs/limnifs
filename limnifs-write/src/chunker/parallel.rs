@@ -142,11 +142,7 @@ impl ParallelFastCDC {
     /// Mirrors `FastCDC::find_boundary` state-for-state: min-size
     /// skip (which also skips hashing), mask split at avg, forced
     /// boundary at max, short tail.
-    fn replay_boundaries(
-        &self,
-        data: &[u8],
-        candidates: &[(usize, u64)],
-    ) -> Vec<(usize, usize)> {
+    fn replay_boundaries(&self, data: &[u8], candidates: &[(usize, u64)]) -> Vec<(usize, usize)> {
         let (min_size, avg_size, max_size, mask1, mask2) = (
             self.scalar.min_size,
             self.scalar.avg_size,
@@ -291,10 +287,7 @@ mod tests {
     /// Small sizes with a tiny threshold exercise both phases
     /// densely; equality with the scalar roll is the whole contract.
     fn subject(threshold: usize) -> ParallelFastCDC {
-        ParallelFastCDC::with_scalar(
-            FastCDC::new(64, 256, 1024).expect("valid sizes"),
-            threshold,
-        )
+        ParallelFastCDC::with_scalar(FastCDC::new(64, 256, 1024).expect("valid sizes"), threshold)
     }
 
     #[test]
@@ -337,10 +330,8 @@ mod tests {
         // min_size < 64: chunk folds start closer together, so the
         // prefix-dependent region dominates more chunks — the
         // micro-scan must still reproduce every boundary.
-        let chunker = ParallelFastCDC::with_scalar(
-            FastCDC::new(8, 64, 256).expect("valid sizes"),
-            1,
-        );
+        let chunker =
+            ParallelFastCDC::with_scalar(FastCDC::new(8, 64, 256).expect("valid sizes"), 1);
         let data = pseudo_random_bytes(21, 128 * 1024);
         for lanes in [2usize, 5, 9] {
             assert_eq!(
