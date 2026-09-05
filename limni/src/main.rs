@@ -1542,7 +1542,7 @@ fn tar_stream(image: &Path, bases: &[PathBuf]) -> Result<(), CliError> {
 }
 
 #[cfg(not(feature = "tar"))]
-fn tar_stream(_image: &Path) -> Result<(), CliError> {
+fn tar_stream(_image: &Path, _bases: &[PathBuf]) -> Result<(), CliError> {
     Err(CliError::Unsupported {
         reason: "the tar command requires a build with the `tar` feature".to_owned(),
     })
@@ -3187,38 +3187,59 @@ fn check_cmd(image: &Path) -> Result<(), CliError> {
 
     // Iterate every slab in the store, hashing every drop record's
     // plaintext against its declared DropId.
-    for ordinal in 0..slab_store.slab_count() {
-        let Some(slab_bytes) = slab_store.slab(ordinal) else {
-            continue;
-        };
-        let view = match limnifs_core::parse_slab(slab_bytes) {
-            Ok(v) => v,
-            Err(e) => {
-                println!("  FAIL: slab {ordinal} — {e}");
-                failed += 1;
-                continue;
-            }
-        };
-        for record in view.drop_records() {
-            checked += 1;
-            match view.plaintext_for(record.drop_id.as_bytes()) {
-                Some(Ok(plaintext)) => {
-                    let computed = hash_section(&plaintext);
-                    if computed == *record.drop_id.as_bytes() {
-                        passed += 1;
-                    } else {
-                        failed += 1;
-                        println!("  FAIL: drop {} — BLAKE3 mismatch", record.drop_id);
+    // Slabs are independent: verify them across rayon workers and
+    // fold the per-slab verdicts serially, in ordinal order — the
+    // printed output is byte-identical to the sequential walk. This
+    // is the same decompress+BLAKE3 shape the write path already
+    // parallelizes; deep checks on large images were one-core.
+    use rayon::prelude::*;
+    let verdicts: Vec<(usize, usize, usize, Vec<String>)> = (0..slab_store.slab_count())
+        .into_par_iter()
+        .map(|ordinal| {
+            let Some(slab_bytes) = slab_store.slab(ordinal) else {
+                return (0, 0, 0, Vec::new());
+            };
+            let view = match limnifs_core::parse_slab(slab_bytes) {
+                Ok(v) => v,
+                Err(e) => {
+                    return (0, 0, 1, vec![format!("  FAIL: slab {ordinal} — {e}")]);
+                }
+            };
+            let mut slab_checked = 0usize;
+            let mut slab_passed = 0usize;
+            let mut slab_failed = 0usize;
+            let mut failures = Vec::new();
+            for record in view.drop_records() {
+                slab_checked += 1;
+                match view.plaintext_for(record.drop_id.as_bytes()) {
+                    Some(Ok(plaintext)) => {
+                        let computed = hash_section(&plaintext);
+                        if computed == *record.drop_id.as_bytes() {
+                            slab_passed += 1;
+                        } else {
+                            slab_failed += 1;
+                            failures
+                                .push(format!("  FAIL: drop {} — BLAKE3 mismatch", record.drop_id));
+                        }
+                    }
+                    Some(Err(e)) => {
+                        slab_failed += 1;
+                        failures.push(format!("  FAIL: drop {} — {e}", record.drop_id));
+                    }
+                    None => {
+                        // Drop not referenced by the manifest; skip silently.
                     }
                 }
-                Some(Err(e)) => {
-                    failed += 1;
-                    println!("  FAIL: drop {} — {e}", record.drop_id);
-                }
-                None => {
-                    // Drop not referenced by the manifest; skip silently.
-                }
             }
+            (slab_checked, slab_passed, slab_failed, failures)
+        })
+        .collect();
+    for (slab_checked, slab_passed, slab_failed, failures) in verdicts {
+        checked += slab_checked;
+        passed += slab_passed;
+        failed += slab_failed;
+        for line in failures {
+            println!("{line}");
         }
     }
 
