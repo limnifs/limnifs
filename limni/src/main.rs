@@ -1559,11 +1559,23 @@ impl<'a, W: std::io::Write> limnifs_core::live_tree::LiveTreeSink for TarSink<'a
         Ok(())
     }
 
-    fn on_symlink(&mut self, abs_path: &Path, target: &str) -> Result<(), CoreError> {
+    fn on_symlink(&mut self, _abs_path: &Path, _target: &str) -> Result<(), CoreError> {
+        Ok(()) // overridden by on_symlink_inode
+    }
+
+    fn on_symlink_inode(
+        &mut self,
+        abs_path: &Path,
+        inode: &limnifs_core::Inode,
+        target: &str,
+    ) -> Result<(), CoreError> {
         let mut header = tar::Header::new_gnu();
         header.set_entry_type(tar::EntryType::Symlink);
         header.set_size(0);
-        header.set_mode(0o777);
+        header.set_mode(inode.mode & 0o7777);
+        header.set_mtime(inode.mtime_ns / 1_000_000_000);
+        header.set_uid(u64::from(inode.uid));
+        header.set_gid(u64::from(inode.gid));
         header.set_cksum();
         header
             .set_link_name(target)
