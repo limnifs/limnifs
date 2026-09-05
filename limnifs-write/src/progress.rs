@@ -27,8 +27,7 @@ where
     }
 }
 
-static SINK: std::sync::RwLock<Option<Arc<dyn ProgressSink>>> =
-    std::sync::RwLock::new(None);
+static SINK: std::sync::RwLock<Option<Arc<dyn ProgressSink>>> = std::sync::RwLock::new(None);
 
 /// Install the process-wide sink (replaces any previous one).
 pub fn set_sink(sink: Arc<dyn ProgressSink>) {
@@ -44,10 +43,7 @@ pub fn clear_sink() {
 pub fn emit_file(path: &Path, bytes: u64) {
     // Clone the Arc out of the lock so sink code never runs under
     // it (an emitting sink must not deadlock a concurrent set_sink).
-    let sink = SINK
-        .read()
-        .expect("progress sink lock poisoned")
-        .clone();
+    let sink = SINK.read().expect("progress sink lock poisoned").clone();
     if let Some(sink) = sink {
         sink.on_file(path, bytes);
     }
