@@ -29,6 +29,7 @@ pub mod dictionary;
 pub mod file_categorizer;
 use file_categorizer::FileCategorizer;
 pub mod flatten;
+pub mod progress;
 pub mod rw;
 #[cfg(feature = "sparse-index")]
 pub mod sparse_index;
@@ -1723,6 +1724,7 @@ impl WriteContext {
             self.file_count += 1;
             let inode_number = self.alloc_inode();
             let file_len = meta.len();
+            crate::progress::emit_file(path, file_len);
 
             if file_len <= u64::try_from(self.inline_threshold).unwrap_or(u64::MAX) {
                 let data = std::fs::read(path)?;

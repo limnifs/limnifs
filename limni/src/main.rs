@@ -111,6 +111,10 @@ enum Command {
         /// max-read-rw, balanced-rw. Default: balanced.
         #[arg(long)]
         profile: Option<String>,
+        /// Progress reporting during the pack: files/s and MB/s to
+        /// stderr, rate-limited to ~4 Hz.
+        #[arg(long)]
+        verbose: bool,
         /// Override text codec (e.g. "brotli", "zstd", "lz4").
         #[arg(long)]
         text_codec: Option<String>,
@@ -365,17 +369,33 @@ fn run() -> Result<(), CliError> {
             source,
             output,
             profile,
+            verbose,
             text_codec,
             chunk_size,
             sign_key,
-        } => limn_with_profile(
-            &source,
-            &output,
-            profile,
-            text_codec,
-            chunk_size,
-            sign_key.as_deref(),
-        ),
+        } => {
+            let reported = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            if verbose {
+                limnifs_write::progress::set_sink(std::sync::Arc::new(
+                    RateLimitedReporter::new(reported.clone()),
+                ));
+            }
+            let result = limn_with_profile(
+                &source,
+                &output,
+                profile,
+                text_codec,
+                chunk_size,
+                sign_key.as_deref(),
+            );
+            if verbose {
+                limnifs_write::progress::clear_sink();
+                if reported.load(std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!();
+                }
+            }
+            result
+        }
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat {
             image,
@@ -658,6 +678,59 @@ fn sidecar_name<'a>(uri: &'a str) -> Result<&'a str, CliError> {
         path: PathBuf::from(uri),
         source,
     })
+}
+
+/// stderr progress reporter: files/s + MB/s, rate-limited so a
+/// million-file tree doesn't print a million lines. `printed` is
+/// shared with the installer so it can close the line afterwards.
+struct RateLimitedReporter {
+    state: std::sync::Mutex<ReporterState>,
+    printed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl RateLimitedReporter {
+    fn new(printed: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self {
+            state: std::sync::Mutex::new(ReporterState::default()),
+            printed,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ReporterState {
+    files: u64,
+    bytes: u64,
+    started: Option<std::time::Instant>,
+    last_print: Option<std::time::Instant>,
+}
+
+impl limnifs_write::progress::ProgressSink for RateLimitedReporter {
+    fn on_file(&self, _path: &Path, bytes: u64) {
+        const MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+        let mut st = self.state.lock().expect("reporter lock poisoned");
+        st.files += 1;
+        st.bytes += bytes;
+        let now = std::time::Instant::now();
+        let started = *st.started.get_or_insert(now);
+        let should_print = match st.last_print {
+            None => st.files >= 64, // brief silence for small packs
+            Some(last) => now.duration_since(last) >= MIN_INTERVAL,
+        };
+        if !should_print {
+            return;
+        }
+        st.last_print = Some(now);
+        self.printed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let elapsed = now.duration_since(started).as_secs_f64().max(f64::EPSILON);
+        eprint!(
+            "\r  packed {} files ({:.0} files/s, {:.0} MB/s)...",
+            st.files,
+            st.files as f64 / elapsed,
+            st.bytes as f64 / (1024.0 * 1024.0) / elapsed
+        );
+    }
 }
 
 /// Deep content verification. Two checks over and above the
