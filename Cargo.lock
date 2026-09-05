@@ -547,6 +547,7 @@ dependencies = [
  "getrandom 0.2.17",
  "limnifs-core",
  "limnifs-write",
+ "memmap2",
  "rayon",
  "serde",
  "serde_json",

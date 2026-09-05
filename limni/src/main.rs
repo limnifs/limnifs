@@ -1239,8 +1239,8 @@ fn load_slab_chain(
     };
     let mut sources: Vec<Box<dyn limnifs_core::slab_source::SlabSource>> = Vec::new();
     if !slab_index.is_empty() {
-        let mut store = limnifs_core::slab_store::SlabStore::load_mmap(image, slab_index)
-            .map_err(image_err)?;
+        let mut store =
+            limnifs_core::slab_store::SlabStore::load_mmap(image, slab_index).map_err(image_err)?;
         if let Some(d) = dict_section {
             install_dicts(&mut store, d);
         }
@@ -1275,7 +1275,9 @@ fn load_slab_chain(
     if sources.is_empty() {
         Ok(None)
     } else {
-        Ok(Some(limnifs_core::slab_source::OwnedSlabChain::new(sources)))
+        Ok(Some(limnifs_core::slab_source::OwnedSlabChain::new(
+            sources,
+        )))
     }
 }
 
@@ -1391,11 +1393,25 @@ fn limn_from_tar(
         config = config.with_chunk_size(size);
     }
 
+    // mmap the archive once: every regular entry's data is a slice
+    // (raw_file_position + size), so entries stage for the parallel
+    // flush in StreamWriter::finish — the whole tree packs across
+    // cores instead of one entry at a time.
     let file = std::fs::File::open(tar_path).map_err(|source| CliError::ReadFailed {
         path: tar_path.to_path_buf(),
         source,
     })?;
-    let mut archive = tar::Archive::new(std::io::BufReader::new(file));
+    // SAFETY: the archive is a caller-owned read-only file opened
+    // above and not truncated concurrently in-process; the SIGBUS
+    // hazard of racing an external truncator is the same class
+    // limnifs-core accepts for its slab mmaps.
+    #[allow(unsafe_code)]
+    let archive_bytes =
+        unsafe { memmap2::Mmap::map(&file) }.map_err(|source| CliError::ReadFailed {
+            path: tar_path.to_path_buf(),
+            source,
+        })?;
+    let mut archive = tar::Archive::new(&archive_bytes[..]);
     let mut writer = limnifs_write::stream::StreamWriter::new(&config)
         .map_err(|source| CliError::WriteFailed { source })?;
 
@@ -1403,7 +1419,7 @@ fn limn_from_tar(
         path: tar_path.to_path_buf(),
         source,
     })? {
-        let mut entry = entry.map_err(|source| CliError::ReadFailed {
+        let entry = entry.map_err(|source| CliError::ReadFailed {
             path: tar_path.to_path_buf(),
             source,
         })?;
@@ -1441,7 +1457,30 @@ fn limn_from_tar(
                 let target = target.to_string_lossy().into_owned();
                 writer.add_symlink(&name, &target, mtime_ns)
             }
-            tar::EntryType::Regular => writer.add_file(&name, mtime_ns, &mut entry),
+            tar::EntryType::Regular => {
+                // The raw slice is the entry's data only when no PAX
+                // extension overrides the size (GNU/pax sparse files
+                // store data differently); in that case fall back to
+                // the streaming read for correctness.
+                let raw_size = entry.header().size().unwrap_or(u64::MAX);
+                let declared = entry.size();
+                if raw_size == declared {
+                    let start = usize::try_from(entry.raw_file_position()).map_err(|_| {
+                        CliError::Unsupported {
+                            reason: format!("tar entry {name:?} offset overflows usize"),
+                        }
+                    })?;
+                    let end = start.checked_add(usize::try_from(declared).unwrap_or(usize::MAX));
+                    let data = archive_bytes
+                        .get(start..end.unwrap_or(archive_bytes.len()))
+                        .ok_or_else(|| CliError::Unsupported {
+                            reason: format!("tar entry {name:?} data range outside archive"),
+                        })?;
+                    writer.stage_file(&name, mtime_ns, data)
+                } else {
+                    writer.add_file(&name, mtime_ns, &mut { entry })
+                }
+            }
             other => {
                 return Err(CliError::Unsupported {
                     reason: format!(
@@ -1993,8 +2032,9 @@ fn cat(
         }
         ContentHandle::SliceMap(slices) => {
             let store = load_slab_chain(image, &slab_index, _dict_section.as_ref(), bases)?;
-            let store: Option<&dyn limnifs_core::slab_source::SlabSource> =
-                store.as_ref().map(|c| c as &dyn limnifs_core::slab_source::SlabSource);
+            let store: Option<&dyn limnifs_core::slab_source::SlabSource> = store
+                .as_ref()
+                .map(|c| c as &dyn limnifs_core::slab_source::SlabSource);
             for slice in slices {
                 let plaintext = store
                     .as_ref()
@@ -2768,8 +2808,9 @@ fn extract(
     // write files IN PARALLEL. Layer-referenced drops resolve
     // through the chain.
     let chain = load_slab_chain(image, &slab_index, _dict_section.as_ref(), bases)?;
-    let slab_ref: Option<&dyn limnifs_core::slab_source::SlabSource> =
-        chain.as_ref().map(|c| c as &dyn limnifs_core::slab_source::SlabSource);
+    let slab_ref: Option<&dyn limnifs_core::slab_source::SlabSource> = chain
+        .as_ref()
+        .map(|c| c as &dyn limnifs_core::slab_source::SlabSource);
 
     let file_count = sink.tasks.len();
     let dir_count = sink.dir_count;
@@ -4135,10 +4176,7 @@ mod tests {
         // the same file (drops referenced, no slab bytes) + a new one.
         // cat/extract must resolve the referenced drops through the
         // base chain (--base), and fail without it.
-        let workdir = std::env::temp_dir().join(format!(
-            "limni-layer-read-{}",
-            std::process::id()
-        ));
+        let workdir = std::env::temp_dir().join(format!("limni-layer-read-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&workdir);
         std::fs::create_dir_all(&workdir).expect("workdir");
 
@@ -4167,8 +4205,14 @@ mod tests {
 
         // cat writes to stdout; asserting on the Result is enough
         // here — extract below proves the bytes.
-        cat(&layer_image, "/shared.bin", None, None, &[base_image.clone()])
-            .expect("cat resolves referenced drops through base");
+        cat(
+            &layer_image,
+            "/shared.bin",
+            None,
+            None,
+            &[base_image.clone()],
+        )
+        .expect("cat resolves referenced drops through base");
         cat(&layer_image, "/new.txt", None, None, &[base_image.clone()])
             .expect("cat resolves local drops");
         match cat(&layer_image, "/shared.bin", None, None, &[]) {

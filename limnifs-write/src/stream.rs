@@ -118,6 +118,21 @@ pub struct StreamWriter<'a> {
     codecs: StreamCodecs,
     inline_threshold: u64,
     tree: StreamDir,
+    /// Random-access entries awaiting the parallel flush at
+    /// `finish` (see [`stage_file`]). Flushed in stage order, after
+    /// every immediate `add_*` call.
+    ///
+    /// [`stage_file`]: Self::stage_file
+    staged: Vec<StagedEntry<'a>>,
+}
+
+/// One deferred stream entry: the tree slot and inode exist; only
+/// the chunk/hash/compress work is pending.
+struct StagedEntry<'a> {
+    name: String,
+    mtime_ns: u64,
+    inode_number: u64,
+    data: &'a [u8],
 }
 
 impl<'a> StreamWriter<'a> {
@@ -145,6 +160,7 @@ impl<'a> StreamWriter<'a> {
             ctx,
             config,
             tree: StreamDir::default(),
+            staged: Vec::new(),
         })
     }
 
@@ -234,6 +250,45 @@ impl<'a> StreamWriter<'a> {
         Ok(())
     }
 
+    /// Stage a random-access entry for parallel packing: like
+    /// [`add_file`], but the data is an in-memory slice (e.g. an
+    /// mmap'd archive entry) whose byte range is already known, so
+    /// chunk/hash/compress work is deferred to [`finish`], which
+    /// fans the staged set across rayon workers and merges the
+    /// results serially in stage order. Same entries, same order →
+    /// byte-identical image to the serial `add_file` path.
+    ///
+    /// The borrow of `data` must outlive the writer.
+    ///
+    /// # Errors
+    ///
+    /// [`WriteError::Io`] if the name is invalid or conflicts with
+    /// an existing entry.
+    pub fn stage_file(
+        &mut self,
+        name: &str,
+        mtime_ns: u64,
+        data: &'a [u8],
+    ) -> Result<(), WriteError> {
+        let (parent, leaf) = descend(&mut self.tree, name)?;
+        if parent.children.contains_key(leaf) {
+            return Err(name_conflict(name));
+        }
+        let inode_number = self.ctx.alloc_inode();
+        self.ctx.file_count += 1;
+        crate::progress::emit_file(std::path::Path::new(name), data.len() as u64);
+        parent
+            .children
+            .insert(leaf.to_owned(), StreamNode::File { inode_number });
+        self.staged.push(StagedEntry {
+            name: name.to_owned(),
+            mtime_ns,
+            inode_number,
+            data,
+        });
+        Ok(())
+    }
+
     /// Add (or declare) a directory at `name` with the given mtime.
     /// Implicit parents created by nested entries keep mtime 0;
     /// calling this on an existing implicit directory stamps it.
@@ -302,11 +357,86 @@ impl<'a> StreamWriter<'a> {
     ///
     /// [`WriteError::Io`] on any writer-pipeline error.
     pub fn finish(mut self) -> Result<WriteArtifact, WriteError> {
+        self.flush_staged()?;
         let tree = std::mem::take(&mut self.tree);
         self.ctx.root_inode_number = self.materialize_dir(tree);
         self.ctx
             .train_and_apply_dictionary(&self.config.dictionaries);
         Ok(self.ctx.assemble())
+    }
+
+    /// Chunk/hash/compress every staged entry across rayon workers,
+    /// then merge serially in stage order. The parallel map is
+    /// order-preserving and the merge replays the exact same
+    /// per-entry steps as [`add_file`], so output is identical to
+    /// the serial path. Large entries additionally hit the
+    /// boundary-identical parallel FastCDC inside their slice —
+    /// nested rayon, the same work-stealing shape the write
+    /// pipeline already uses.
+    fn flush_staged(&mut self) -> Result<(), WriteError> {
+        if self.staged.is_empty() {
+            return Ok(());
+        }
+        let staged = std::mem::take(&mut self.staged);
+        let codecs = &self.codecs;
+        use rayon::prelude::*;
+        let results: Vec<crate::ChunkedFileResult> = staged
+            .par_iter()
+            .map(|entry| {
+                let chunks: Vec<&[u8]> = codecs.chunker.chunk_slice(entry.data);
+                let mut drops = Vec::with_capacity(chunks.len());
+                let mut slices = Vec::with_capacity(chunks.len());
+                let mut offset: u64 = 0;
+                for chunk in &chunks {
+                    let drop_id = crate::hash_section(chunk);
+                    slices.push(crate::PendingSlice {
+                        drop_id,
+                        file_byte_start: offset,
+                        file_byte_end: offset + chunk.len() as u64,
+                    });
+                    offset += chunk.len() as u64;
+                    let class = codecs.classifier.classify(chunk);
+                    let (codec_id, compressed) = crate::compress_chunk_with_tournament(
+                        chunk,
+                        class,
+                        codecs.text_codec,
+                        codecs.binary_codec,
+                        &codecs.tunables,
+                        &codecs.tournament,
+                    );
+                    drops.push((drop_id, (*chunk).to_vec(), compressed, codec_id, 0));
+                }
+                crate::ChunkedFileResult { drops, slices }
+            })
+            .collect();
+        for (entry, result) in staged.iter().zip(results) {
+            // Unlike the streaming path, the length is known upfront,
+            // so no post-merge inode patching is needed.
+            let total_len = entry.data.len() as u64;
+            let pf = PendingFile {
+                path: std::path::PathBuf::from(&entry.name),
+                inode_number: entry.inode_number,
+                file_len: total_len,
+                mtime_ns: entry.mtime_ns,
+            };
+            self.ctx.pending_files.push(pf.clone());
+            if total_len <= self.inline_threshold {
+                // Below the inline threshold chunk_slice yields the
+                // whole entry as one chunk, so this equals the
+                // serial path's chunk concatenation.
+                let mut data = Vec::with_capacity(entry.data.len());
+                data.extend_from_slice(entry.data);
+                self.ctx.inodes.push(PendingInode {
+                    number: entry.inode_number,
+                    mode: 0o100_644,
+                    mtime_ns: entry.mtime_ns,
+                    content: PendingContent::Inline(data),
+                });
+            } else {
+                self.ctx.merge_chunked_file(&pf, result);
+            }
+        }
+        Ok(())
     }
 
     /// Allocate this directory's inode, then recurse into children
@@ -452,6 +582,47 @@ mod tests {
         assert_eq!(artifact.file_count, 2);
         assert_eq!(artifact.dir_count, 3); // root + docs + data (implicit)
         assert_eq!(artifact.slabs.len(), 1);
+    }
+
+    #[test]
+    fn staged_path_is_byte_identical_to_serial() {
+        let big_a = pseudo_random_bytes(31, 600 * 1024);
+        let big_b = pseudo_random_bytes(32, 900 * 1024);
+        let staged = {
+            let mut w = writer();
+            w.add_dir("docs", 7_000_000_000_000).expect("dir");
+            w.add_file("tiny.txt", 1, &mut b"small inline entry\n".as_slice())
+                .expect("immediate file");
+            w.stage_file("docs/a.bin", 2, &big_a).expect("staged a");
+            w.stage_file("docs/b.bin", 3, &big_b).expect("staged b");
+            w.stage_file("docs/tiny2.txt", 4, b"also inline\n")
+                .expect("staged tiny");
+            w.finish().expect("finish staged").bytes
+        };
+        let serial = {
+            let mut w = writer();
+            w.add_dir("docs", 7_000_000_000_000).expect("dir");
+            w.add_file("tiny.txt", 1, &mut b"small inline entry\n".as_slice())
+                .expect("immediate file");
+            w.add_file("docs/a.bin", 2, &mut big_a.as_slice())
+                .expect("serial a");
+            w.add_file("docs/b.bin", 3, &mut big_b.as_slice())
+                .expect("serial b");
+            w.add_file("docs/tiny2.txt", 4, &mut b"also inline\n".as_slice())
+                .expect("serial tiny");
+            w.finish().expect("finish serial").bytes
+        };
+        assert_eq!(staged, serial, "staged flush must equal the serial path");
+    }
+
+    #[test]
+    fn staged_detects_conflicts_and_bad_names() {
+        let mut w = writer();
+        w.stage_file("a.txt", 0, b"x").expect("stage");
+        assert!(w.stage_file("a.txt", 0, b"y").is_err());
+        assert!(w.stage_file("", 0, b"y").is_err());
+        assert!(w.stage_file("/abs", 0, b"y").is_err());
+        assert!(w.stage_file("a.txt/child", 0, b"y").is_err());
     }
 
     #[test]
