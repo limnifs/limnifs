@@ -46,6 +46,7 @@ use std::path::{Path, PathBuf};
 
 use crate::chunker::{Chunker, ParallelFastCDC};
 use limnifs_core::codec::CODEC_REFERENCED;
+use limnifs_core::dictionary_section::parse_dictionary_section;
 use limnifs_core::slab_store::SlabStore;
 use limnifs_core::{
     compute_merkle_root, hash_empty_section, hash_section, parse_manifest_header, parse_slab_index,
@@ -322,6 +323,13 @@ pub fn write_layer(
 
     let mut ctx = WriteContext::new();
     ctx.chunker = chunker_from_config(config)?;
+    // Adopt the base's trained dictionaries for this layer (the
+    // dictionary pass still gates on whether re-emitting them pays).
+    ctx.base_dictionaries = if config.dictionaries.enabled {
+        load_base_dictionary_section(base_image)?.map(crate::dictionary::adopt_from_section)
+    } else {
+        None
+    };
     ctx.categorizers_disabled = config.categorizers.is_empty();
     ctx.rw_mode = matches!(config.mode, crate::config::ImageMode::ReadWrite(_));
     ctx.auto_turnover = config.turnover_threshold > 0;
@@ -446,6 +454,27 @@ pub fn emit_sparse_sidecar(artifact: &WriteArtifact, image_path: &Path) -> Resul
     writer.insert_all(&all);
     let sidecar = image_path.with_extension("lim.sparse");
     writer.write_to_file(&sidecar).map_err(WriteError::Io)
+}
+
+/// Load the base image's `dictionary_section`, if any. A layer can
+/// adopt these dictionaries instead of retraining from its own
+/// samples (tebako-style layered builds re-derive nearly the same
+/// dictionary). Walks the manifest in spec order with best-effort
+/// parses, mirroring the reader.
+fn load_base_dictionary_section(
+    base_image: &Path,
+) -> Result<Option<limnifs_core::dictionary_section::DictionarySection>, WriteError> {
+    let manifest_bytes = std::fs::read(base_image)?;
+    let mut cursor = ManifestCursor::new(&manifest_bytes);
+    let _ = parse_manifest_header(&mut cursor).map_err(io_core)?;
+    let _ = limnifs_core::parse_feature_flags_section(&mut cursor);
+    let _ = limnifs_core::parse_metadata_reference(&mut cursor);
+    let _ = parse_slab_index(&mut cursor);
+    let _ = limnifs_core::parse_history(&mut cursor);
+    if cursor.remaining_len() == 0 {
+        return Ok(None);
+    }
+    Ok(parse_dictionary_section(&mut cursor).ok())
 }
 
 fn load_base_drop_index(
@@ -1511,6 +1540,12 @@ struct WriteContext {
     classifier: classifier::Classifier,
     shared_inline_map: HashMap<[u8; 32], usize>,
     shared_inline_table: Vec<Vec<u8>>,
+    /// Dictionaries adopted from the base image during a layer
+    /// write. When present (and dictionaries are enabled), they
+    /// displace training: the layer compresses with dictionaries
+    /// the base already paid for and re-emits the section, so the
+    /// layer image stays self-describing.
+    base_dictionaries: Option<Vec<crate::dictionary::TrainedDictionary>>,
     /// Profile name for ProfileDescriptor emission (None = omit section).
     profile_name: Option<String>,
     /// Metadata blob codec (defaults to Brotli; can be overridden via
@@ -1592,6 +1627,7 @@ impl WriteContext {
             classifier: classifier::Classifier,
             shared_inline_map: HashMap::new(),
             shared_inline_table: Vec::new(),
+            base_dictionaries: None,
             profile_name: None,
             metadata_codec: limnifs_core::codec::CODEC_BROTLI,
             categorizers_disabled: false,
@@ -1859,15 +1895,29 @@ impl WriteContext {
     /// Clears the retained plaintext on every drop to free memory
     /// before slab assembly.
     fn train_and_apply_dictionary(&mut self, dictionaries: &crate::config::DictionaryConfig) {
-        let cleanup = |ctx: &mut Self| {
-            for d in &mut ctx.drops {
-                d.plaintext = None;
-            }
-            ctx.dict_samples_by_class.clear();
-        };
-
         if !dictionaries.enabled {
-            cleanup(self);
+            Self::release_dictionary_samples(self);
+            return;
+        }
+
+        // Layers adopt the base's dictionaries instead of training:
+        // the swap gate below still decides whether re-emitting
+        // them pays for itself in THIS image.
+        if let Some(adopted) = self.base_dictionaries.take() {
+            for dict in adopted {
+                match dict.id {
+                    0 => {
+                        self.trained_dicts_by_class
+                            .insert(crate::classifier::Class::Text, dict);
+                    }
+                    1 => {
+                        self.trained_dicts_by_class
+                            .insert(crate::classifier::Class::Binary, dict);
+                    }
+                    _ => {}
+                }
+            }
+            self.apply_trained_dictionaries();
             return;
         }
 
@@ -1912,6 +1962,25 @@ impl WriteContext {
                     .insert(crate::classifier::Class::Binary, dict);
             }
         }
+
+        self.apply_trained_dictionaries();
+    }
+
+    /// Re-compress ZSTD drops against `trained_dicts_by_class` and
+    /// keep the dictionaries only when they pay for themselves (the
+    /// section's own bytes must be exceeded by per-drop savings).
+    /// Shared by the train path and the layer adopt path so both
+    /// face the identical gate and cleanup.
+    fn apply_trained_dictionaries(&mut self) {
+        // Allocate dict ids: 0 = text (Text/Code/Sparse), 1 = binary.
+        // Compressed/Media/Incompressible don't accumulate samples
+        // (their drops aren't ZSTD) so neither path trains for them.
+        let text_classes = [
+            crate::classifier::Class::Text,
+            crate::classifier::Class::Code,
+            crate::classifier::Class::Sparse,
+        ];
+        let binary_classes = [crate::classifier::Class::Binary];
 
         // Re-compress each ZSTD drop with the dict for its class,
         // collecting candidates. The swap decision is taken serially
@@ -1986,7 +2055,16 @@ impl WriteContext {
             self.trained_dicts_by_class.clear();
         }
 
-        cleanup(self);
+        Self::release_dictionary_samples(self);
+    }
+
+    /// Drop the plaintext retained for the dictionary pass; the
+    /// sample sets are write-time state only.
+    fn release_dictionary_samples(ctx: &mut Self) {
+        for d in &mut ctx.drops {
+            d.plaintext = None;
+        }
+        ctx.dict_samples_by_class.clear();
     }
 
     /// Env-gated phase timer for assemble profiling (TODO.perf/16).

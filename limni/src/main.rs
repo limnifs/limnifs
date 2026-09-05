@@ -186,6 +186,22 @@ enum Command {
         #[arg(default_value = "/")]
         path: String,
     },
+    /// Build a layer image on top of a base: chunks already in the
+    /// base are referenced (no slab bytes re-emitted), new chunks
+    /// land in the layer's own slabs, and the base's trained
+    /// dictionaries are reused instead of retrained.
+    Layer {
+        /// Base `.lim` image (its slab sidecars must sit next to it).
+        base: PathBuf,
+        /// Directory tree with the new/changed content.
+        source: PathBuf,
+        /// Output layer `.lim` path.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Compression profile to use. Default: balanced.
+        #[arg(long)]
+        profile: Option<String>,
+    },
     /// Stream an image's contents to stdout as a tar archive
     /// (requires a build with the `tar` feature).
     Tar { image: PathBuf },
@@ -193,6 +209,12 @@ enum Command {
     Extract {
         image: PathBuf,
         dest: PathBuf,
+        /// Base images to resolve layer-referenced drops through,
+        /// innermost first (repeatable). Layers produced by
+        /// `limni layer` store only new content locally; the rest
+        /// resolves from these bases' slab sidecars.
+        #[arg(long = "base")]
+        bases: Vec<PathBuf>,
         /// Ed25519 public key (SPKI PEM). When given, the image's
         /// `.limsig` sidecar is verified against this key before
         /// extraction starts; a missing or invalid signature aborts.
@@ -410,6 +432,12 @@ fn run() -> Result<(), CliError> {
             }
             result
         }
+        Command::Layer {
+            base,
+            source,
+            output,
+            profile,
+        } => layer(&base, &source, &output, profile),
         Command::Tar { image } => tar_stream(&image),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat {
@@ -424,8 +452,9 @@ fn run() -> Result<(), CliError> {
         Command::Extract {
             image,
             dest,
+            bases,
             verify_key,
-        } => extract(&image, &dest, verify_key.as_deref()),
+        } => extract(&image, &dest, &bases, verify_key.as_deref()),
         Command::Add {
             image,
             dest,
@@ -1212,6 +1241,56 @@ fn write_artifact_files(
     Ok(())
 }
 
+/// Build a layer over a base image (TODO.features/06).
+fn layer(
+    base: &Path,
+    source: &Path,
+    output: &Path,
+    profile: Option<String>,
+) -> Result<(), CliError> {
+    let config = match &profile {
+        Some(name) => limnifs_write::WriteConfig::from_profile(name).unwrap_or_else(|| {
+            eprintln!("warning: unknown profile '{name}', using balanced");
+            limnifs_write::profile::balanced()
+        }),
+        None => limnifs_write::WriteConfig::default_v0_1(),
+    };
+    if let Some(ref p) = profile {
+        eprintln!("profile: {p}");
+    }
+    eprintln!(
+        "  text={}, binary={}, quality={}",
+        config.defaults.text_codec,
+        config.defaults.binary_codec,
+        config.codec_tunables.brotli.quality
+    );
+
+    let artifact = limnifs_write::write_layer(base, source, &config)
+        .map_err(|source| CliError::WriteFailed { source })?;
+    write_artifact_files(&artifact, output)?;
+    // The Bloom sidecar lets the NEXT layer skip opening this
+    // image's slabs for membership checks (sparse-index feature).
+    #[cfg(feature = "sparse-index")]
+    limnifs_write::emit_sparse_sidecar(&artifact, output)
+        .map_err(|source| CliError::WriteFailed { source })?;
+    println!(
+        "{output}: wrote {len} bytes, {manifest_root} (layer over {base})",
+        output = output.display(),
+        len = artifact.bytes.len(),
+        manifest_root = artifact.merkle_root,
+        base = base.display(),
+    );
+    println!(
+        "  inodes: {}  files: {}  dirs: {}  drops: {}  slabs: {}",
+        artifact.inode_count,
+        artifact.file_count,
+        artifact.dir_count,
+        artifact.drop_count,
+        artifact.slabs.len(),
+    );
+    Ok(())
+}
+
 #[cfg(feature = "tar")]
 fn limn_from_tar(
     tar_path: &Path,
@@ -1629,7 +1708,7 @@ fn rw_add(
     let staging = std::env::temp_dir().join(format!("limnifs-rw-add-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     if image.exists() {
-        extract(image, &staging, None)?;
+        extract(image, &staging, &[], None)?;
     } else {
         std::fs::create_dir_all(&staging).map_err(|e| CliError::ReadFailed {
             path: staging.clone(),
@@ -1687,7 +1766,7 @@ fn rw_delete(image: &Path, path: &str, profile: Option<String>) -> Result<(), Cl
     };
     let staging = std::env::temp_dir().join(format!("limnifs-rw-del-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
-    extract(image, &staging, None)?;
+    extract(image, &staging, &[], None)?;
     let target = staging.join(path);
     std::fs::remove_file(&target).map_err(|e| CliError::ReadFailed {
         path: target.clone(),
@@ -1727,7 +1806,7 @@ fn turnover_cmd(image: &Path, profile_name: &str) -> Result<(), CliError> {
 
     let staging = std::env::temp_dir().join(format!("limnifs-turnover-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
-    extract(image, &staging, None)?;
+    extract(image, &staging, &[], None)?;
 
     let config = limnifs_write::WriteConfig::from_profile(profile_name).unwrap_or_else(|| {
         eprintln!("warning: unknown profile '{profile_name}', using max-ratio");
@@ -2576,7 +2655,12 @@ fn print_tree(
 }
 
 /// Extract an image to a filesystem directory.
-fn extract(image: &Path, dest: &Path, verify_key: Option<&Path>) -> Result<(), CliError> {
+fn extract(
+    image: &Path,
+    dest: &Path,
+    bases: &[PathBuf],
+    verify_key: Option<&Path>,
+) -> Result<(), CliError> {
     use rayon::prelude::*;
     if let Some(key) = verify_key {
         check_signature(image, key)?;
@@ -2606,20 +2690,52 @@ fn extract(image: &Path, dest: &Path, verify_key: Option<&Path>) -> Result<(), C
         .map_err(map_err)?;
     drop(blob); // release the metadata borrow before parallel phase
 
-    // Phase 2: load the slab store (cached) and write files IN PARALLEL.
-    let cached_store: Option<limnifs_core::slab_cache::CachedSlabStore> = if slab_index.is_empty() {
-        None
-    } else {
+    // Phase 2: load the slab stores (cached) and write files IN
+    // PARALLEL. Layer-referenced drops resolve through the base
+    // chain: local slabs first, then each base's (innermost first).
+    let mut owned_stores: Vec<limnifs_core::slab_store::SlabStore> = Vec::new();
+    let mut cached_stores: Vec<limnifs_core::slab_cache::CachedSlabStore> = Vec::new();
+    if !slab_index.is_empty() {
         let mut s =
             limnifs_core::slab_store::SlabStore::load_mmap(image, &slab_index).map_err(map_err)?;
         if let Some(d) = &_dict_section {
             install_dicts(&mut s, d);
         }
-        Some(limnifs_core::slab_cache::CachedSlabStore::with_default_capacity(s))
-    };
-    let slab_ref: Option<&dyn limnifs_core::slab_source::SlabSource> = cached_store
-        .as_ref()
-        .map(|s| s as &dyn limnifs_core::slab_source::SlabSource);
+        cached_stores.push(limnifs_core::slab_cache::CachedSlabStore::with_default_capacity(s));
+    }
+    for base in bases {
+        let base_bytes = std::fs::read(base).map_err(|source| CliError::ReadFailed {
+            path: base.clone(),
+            source,
+        })?;
+        let mut cursor = ManifestCursor::new(&base_bytes);
+        let _ = parse_manifest_header(&mut cursor).map_err(&map_err)?;
+        let _ = parse_feature_flags_section(&mut cursor).map_err(&map_err)?;
+        let _ = parse_metadata_reference(&mut cursor).map_err(&map_err)?;
+        let base_slab_index = parse_slab_index(&mut cursor).map_err(&map_err)?;
+        let mut store = limnifs_core::slab_store::SlabStore::load_mmap(base, &base_slab_index)
+            .map_err(map_err)?;
+        let _ = limnifs_core::parse_history(&mut cursor);
+        if cursor.remaining_len() > 0 {
+            if let Ok(d) = parse_dictionary_section(&mut cursor) {
+                install_dicts(&mut store, &d);
+            }
+        }
+        owned_stores.push(store);
+    }
+    let chain: Vec<&dyn limnifs_core::slab_source::SlabSource> = cached_stores
+        .iter()
+        .map(|s| s as &dyn limnifs_core::slab_source::SlabSource)
+        .chain(
+            owned_stores
+                .iter()
+                .map(|s| s as &dyn limnifs_core::slab_source::SlabSource),
+        )
+        .collect();
+    let has_slabs = !chain.is_empty();
+    let chained = limnifs_core::slab_source::ChainedSlabSource::new(chain);
+    let slab_ref: Option<&dyn limnifs_core::slab_source::SlabSource> =
+        if has_slabs { Some(&chained) } else { None };
 
     let file_count = sink.tasks.len();
     let dir_count = sink.dir_count;
@@ -2956,7 +3072,7 @@ fn compact(source: &Path, output: &Path) -> Result<(), CliError> {
             .map_or(0u128, |d| d.as_nanos()),
     ));
 
-    extract(source, &temp_dir, None)?;
+    extract(source, &temp_dir, &[], None)?;
 
     let artifact = limnifs_write::write_directory(&temp_dir)
         .map_err(|e| CliError::WriteFailed { source: e })?;
@@ -3141,7 +3257,7 @@ fn benchmark() -> Result<(), CliError> {
 
     // Extract benchmark.
     let t2 = Instant::now();
-    extract(&img, &dest, None).expect("extract");
+    extract(&img, &dest, &[], None).expect("extract");
     let extract_ms = t2.elapsed().as_millis();
 
     let write_throughput = if write_ms > 0 {
@@ -4132,7 +4248,7 @@ mod tests {
         stat(&img, "/small.txt").expect("stat succeeds");
 
         // Extract and verify round-trip.
-        extract(&img, &dest, None).expect("extract succeeds");
+        extract(&img, &dest, &[], None).expect("extract succeeds");
         let orig = std::fs::read(src.join("small.txt")).expect("read orig");
         let extracted = std::fs::read(dest.join("small.txt")).expect("read extracted");
         assert_eq!(orig, extracted, "small.txt round-trip mismatch");

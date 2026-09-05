@@ -86,6 +86,26 @@ impl TrainedDictionary {
     }
 }
 
+/// Adopt the ZSTD dictionaries carried in a base image's
+/// `dictionary_section` for reuse by a layer write. Non-ZSTD
+/// entries and unknown class ids are skipped (forward
+/// compatibility: ids 0 = text, 1 = binary today).
+#[must_use]
+pub fn adopt_from_section(
+    section: limnifs_core::dictionary_section::DictionarySection,
+) -> Vec<TrainedDictionary> {
+    section
+        .dicts
+        .into_iter()
+        .filter(|d| d.codec_id == limnifs_core::codec::CODEC_ZSTD && matches!(d.class_id, 0 | 1))
+        .map(|d| TrainedDictionary {
+            id: d.class_id,
+            codec: d.codec_id,
+            content: d.data,
+        })
+        .collect()
+}
+
 /// Train a ZSTD dictionary from `samples` using the default
 /// FrequencyTrainer. Returns `None` if `samples` is empty, target
 /// size is 0, or the trainer produces an empty dictionary (not
@@ -230,5 +250,43 @@ mod tests {
     fn allocate_ids_rejects_more_than_254_classes() {
         let names: Vec<&str> = (0..255).map(|_| "x").collect();
         assert!(allocate_ids(&names).is_err());
+    }
+    #[test]
+    fn adopt_from_section_maps_ids_and_filters_codecs() {
+        let section = limnifs_core::dictionary_section::DictionarySection {
+            version: limnifs_core::dictionary_section::DICTIONARY_SECTION_VERSION,
+            dicts: vec![
+                limnifs_core::dictionary_section::Dictionary {
+                    codec_id: limnifs_core::codec::CODEC_ZSTD,
+                    class_id: 0,
+                    data: b"text-dict".to_vec(),
+                },
+                limnifs_core::dictionary_section::Dictionary {
+                    codec_id: limnifs_core::codec::CODEC_ZSTD,
+                    class_id: 1,
+                    data: b"binary-dict".to_vec(),
+                },
+                limnifs_core::dictionary_section::Dictionary {
+                    codec_id: limnifs_core::codec::CODEC_LZ4,
+                    class_id: 0,
+                    data: b"wrong-codec".to_vec(),
+                },
+                limnifs_core::dictionary_section::Dictionary {
+                    codec_id: limnifs_core::codec::CODEC_ZSTD,
+                    class_id: 7,
+                    data: b"unknown-class".to_vec(),
+                },
+            ],
+        };
+        let adopted = adopt_from_section(section);
+        assert_eq!(
+            adopted.len(),
+            2,
+            "non-zstd and unknown-class entries dropped"
+        );
+        assert_eq!(adopted[0].id, 0);
+        assert_eq!(adopted[0].content, b"text-dict");
+        assert_eq!(adopted[1].id, 1);
+        assert_eq!(adopted[1].content, b"binary-dict");
     }
 }
