@@ -127,8 +127,13 @@ is documented in [docs/configuration.md](docs/configuration.md).
 | (default) | BLAKE3, LZ4, ZSTD, Brotli, DEFLATE, Snappy, Ed25519 | yes |
 | `http` | HTTP/S3/IPFS locators | network required |
 | `fuse` | FUSE mount | system FUSE required |
+| `tar` | `limn --from-tar` / `limni tar` streaming (CLI) | yes |
+| `sparse-index` | layer-build Bloom fast path (CLI accelerator) | yes |
 | `key-wrap` | HPKE X25519 key wrap | yes |
 | `signing` | Ed25519 manifest signing | yes |
+
+Official release binaries are built with `tar` and `sparse-index`
+enabled; the default `cargo build` stays minimal.
 
 ## Installation
 
