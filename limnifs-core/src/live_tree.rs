@@ -348,6 +348,10 @@ impl LiveTreeSink for DropIdCollectorSink {
 pub struct ParallelExtractSink<'a> {
     root: &'a Path,
     pub tasks: Vec<(PathBuf, Inode)>,
+    /// Directories in creation order with their inode identity
+    /// (mode, mtime_ns). Extract applies these AFTER file writes so
+    /// a read-only directory cannot block its own children.
+    pub dirs: Vec<(PathBuf, u32, u64)>,
     pub dir_count: usize,
 }
 
@@ -359,6 +363,7 @@ impl<'a> ParallelExtractSink<'a> {
         Self {
             root,
             tasks: Vec::new(),
+            dirs: Vec::new(),
             dir_count: 0,
         }
     }
@@ -373,6 +378,17 @@ impl<'a> LiveTreeSink for ParallelExtractSink<'a> {
         };
         std::fs::create_dir_all(&path).map_err(io_to_core)?;
         self.dir_count += 1;
+        Ok(())
+    }
+
+    fn on_directory_inode(&mut self, abs_path: &Path, inode: &Inode) -> Result<(), CoreError> {
+        self.on_directory(abs_path)?;
+        let path = if abs_path.as_os_str().is_empty() {
+            self.root.to_path_buf()
+        } else {
+            self.root.join(abs_path)
+        };
+        self.dirs.push((path, inode.mode, inode.mtime_ns));
         Ok(())
     }
 

@@ -30,6 +30,7 @@ fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
     for entry in archive.entries().expect("entries") {
         let mut entry = entry.expect("entry");
         let mtime_ns = entry.header().mtime().unwrap_or(0) * 1_000_000_000;
+        let mode = entry.header().mode().unwrap_or(0o644) & 0o7777;
         let name = entry
             .path()
             .expect("path")
@@ -38,11 +39,11 @@ fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
             .trim_end_matches('/')
             .to_owned();
         match entry.header().entry_type() {
-            tar::EntryType::Directory => writer.add_dir(&name, mtime_ns).expect("dir"),
+            tar::EntryType::Directory => writer.add_dir(&name, mtime_ns, mode).expect("dir"),
             tar::EntryType::Symlink => {
                 let target = entry.link_name().expect("link").expect("target");
                 writer
-                    .add_symlink(&name, &target.to_string_lossy(), mtime_ns)
+                    .add_symlink(&name, &target.to_string_lossy(), mtime_ns, mode)
                     .expect("symlink");
             }
             tar::EntryType::Regular => {
@@ -56,11 +57,11 @@ fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
                     let end = start + usize::try_from(declared).expect("size");
                     let data = tar_bytes.get(start..end).expect("entry range");
                     writer
-                        .stage_file(&name, mtime_ns, data)
+                        .stage_file(&name, mtime_ns, mode, data)
                         .expect("staged file");
                 } else {
                     writer
-                        .add_file(&name, mtime_ns, &mut entry)
+                        .add_file(&name, mtime_ns, mode, &mut entry)
                         .expect("streamed file");
                 }
             }

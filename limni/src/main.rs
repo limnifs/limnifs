@@ -1428,6 +1428,13 @@ fn limn_from_tar(
             .mtime()
             .unwrap_or(0)
             .saturating_mul(1_000_000_000);
+        let mode = entry
+            .header()
+            .mode()
+            .unwrap_or(match entry.header().entry_type() {
+                tar::EntryType::Directory => 0o755,
+                _ => 0o644,
+            }) as u32;
         let path = entry
             .path()
             .map_err(|source| CliError::ReadFailed {
@@ -1443,7 +1450,7 @@ fn limn_from_tar(
             .trim_end_matches('/')
             .to_owned();
         let add = match entry.header().entry_type() {
-            tar::EntryType::Directory => writer.add_dir(&name, mtime_ns),
+            tar::EntryType::Directory => writer.add_dir(&name, mtime_ns, mode & 0o7777),
             tar::EntryType::Symlink => {
                 let target = entry.link_name().map_err(|source| CliError::ReadFailed {
                     path: tar_path.to_path_buf(),
@@ -1455,7 +1462,7 @@ fn limn_from_tar(
                     });
                 };
                 let target = target.to_string_lossy().into_owned();
-                writer.add_symlink(&name, &target, mtime_ns)
+                writer.add_symlink(&name, &target, mtime_ns, mode & 0o7777)
             }
             tar::EntryType::Regular => {
                 // The raw slice is the entry's data only when no PAX
@@ -1476,9 +1483,9 @@ fn limn_from_tar(
                         .ok_or_else(|| CliError::Unsupported {
                             reason: format!("tar entry {name:?} data range outside archive"),
                         })?;
-                    writer.stage_file(&name, mtime_ns, data)
+                    writer.stage_file(&name, mtime_ns, mode & 0o7777, data)
                 } else {
-                    writer.add_file(&name, mtime_ns, &mut { entry })
+                    writer.add_file(&name, mtime_ns, mode & 0o7777, &mut { entry })
                 }
             }
             other => {
@@ -2823,6 +2830,12 @@ fn extract(
         return Err(err);
     }
 
+    // Directory identity last: a directory stamped read-only before
+    // its files are written would block its own children.
+    for (path, mode, mtime_ns) in &sink.dirs {
+        apply_unix_identity(path, *mode, *mtime_ns);
+    }
+
     println!(
         "{}: extracted {file_count} files, {dir_count} directories",
         dest.display()
@@ -2852,9 +2865,42 @@ fn extract_file(
             path: path.to_path_buf(),
             source,
         })?;
+        apply_unix_identity(path, inode.mode, inode.mtime_ns);
     }
     Ok(())
 }
+
+/// Stamp a written path with the inode's permission bits and mtime
+/// (unix). Failure to apply is non-fatal — extraction fidelity is
+/// best-effort, matching tar's default posture; ownership stays
+/// untouched (needs privileges).
+#[cfg(unix)]
+fn apply_unix_identity(path: &Path, mode: u32, mtime_ns: u64) {
+    use std::os::unix::fs::PermissionsExt as _;
+    // Stamp the mtime while the path still carries the writer's
+    // default permissions; a read-open fallback covers directories
+    // (which cannot be opened for writing).
+    let secs = mtime_ns / 1_000_000_000;
+    let nanos = u32::try_from(mtime_ns % 1_000_000_000).unwrap_or(0);
+    if let Some(t) =
+        std::time::SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::new(secs, nanos))
+    {
+        let times = std::fs::FileTimes::new().set_modified(t);
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .open(path)
+            .or_else(|_| std::fs::File::open(path));
+        if let Ok(file) = file {
+            let _ = file.set_times(times);
+        }
+    }
+    // Permission bits last: they may make the path read-only.
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777));
+}
+
+#[cfg(not(unix))]
+fn apply_unix_identity(_path: &Path, _mode: u32, _mtime_ns: u64) {}
 
 #[allow(clippy::too_many_arguments)]
 /// Compute the delta between two images and print tree operations.
@@ -4168,6 +4214,70 @@ mod tests {
         std::fs::write(dir.join("b.txt"), b"bbb").expect("write b.txt");
         std::fs::write(dir.join("sub").join("c.txt"), b"ccc").expect("write c.txt");
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_restores_modes_and_mtimes() {
+        use std::os::unix::fs::MetadataExt as _;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let workdir =
+            std::env::temp_dir().join(format!("limni-extract-fidelity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
+        std::fs::create_dir_all(&workdir).expect("workdir");
+
+        let src = workdir.join("src");
+        std::fs::create_dir_all(&src).expect("src");
+        std::fs::write(src.join("run.sh"), b"#!/bin/sh\necho ok\n").expect("write");
+        std::fs::set_permissions(src.join("run.sh"), std::fs::Permissions::from_mode(0o750))
+            .expect("chmod");
+        // Push it above the inline threshold so it takes the slab
+        // path; modes must survive either way.
+        std::fs::write(src.join("big.bin"), vec![0x42u8; 300_000]).expect("write");
+        std::fs::set_permissions(src.join("big.bin"), std::fs::Permissions::from_mode(0o640))
+            .expect("chmod");
+        // Distinct mtime (2 days past epoch + odd nanos).
+        let stamp =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::new(200_000, 123_456_789);
+        let file = std::fs::File::options()
+            .write(true)
+            .open(src.join("big.bin"))
+            .expect("open for times");
+        file.set_times(std::fs::FileTimes::new().set_modified(stamp))
+            .expect("stamp mtime");
+        drop(file);
+
+        let image = workdir.join("img.lim");
+        limn(&src, &image).expect("pack");
+
+        let dest = workdir.join("out");
+        extract(&image, &dest, &[], None).expect("extract");
+
+        let run = std::fs::metadata(dest.join("run.sh")).expect("run.sh");
+        assert_eq!(
+            run.permissions().mode() & 0o7777,
+            0o750,
+            "exec bits restored"
+        );
+        let big = std::fs::metadata(dest.join("big.bin")).expect("big.bin");
+        assert_eq!(
+            big.permissions().mode() & 0o7777,
+            0o640,
+            "slab-file mode restored"
+        );
+        let got = big
+            .modified()
+            .expect("mtime")
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("post-epoch");
+        assert_eq!(
+            got.as_nanos(),
+            200_000_123_456_789,
+            "mtime restored exactly"
+        );
+
+        let _ = std::fs::remove_dir_all(&workdir);
     }
 
     #[test]

@@ -77,10 +77,23 @@ impl StreamCodecs {
 /// A directory level under construction: children in name order,
 /// plus the mtime carried by an explicit `add_dir` (implicit
 /// directories created by a nested file path keep mtime 0).
-#[derive(Default)]
 struct StreamDir {
     mtime_ns: u64,
+    /// Permission bits for the emitted directory inode. The default
+    /// (root and implicit parents) mirrors the directory writer's
+    /// historical 0755 — a zero here would lock extracted trees.
+    perms: u32,
     children: BTreeMap<String, StreamNode>,
+}
+
+impl Default for StreamDir {
+    fn default() -> Self {
+        Self {
+            mtime_ns: 0,
+            perms: 0o755,
+            children: BTreeMap::new(),
+        }
+    }
 }
 
 enum StreamNode {
@@ -131,6 +144,7 @@ pub struct StreamWriter<'a> {
 struct StagedEntry<'a> {
     name: String,
     mtime_ns: u64,
+    perms: u32,
     inode_number: u64,
     data: &'a [u8],
 }
@@ -176,6 +190,7 @@ impl<'a> StreamWriter<'a> {
         &mut self,
         name: &str,
         mtime_ns: u64,
+        perms: u32,
         reader: &mut dyn Read,
     ) -> Result<(), WriteError> {
         let (parent, leaf) = descend(&mut self.tree, name)?;
@@ -188,6 +203,9 @@ impl<'a> StreamWriter<'a> {
             inode_number,
             file_len: 0,
             mtime_ns,
+            mode: limnifs_core::inode::S_IFREG | (perms & 0o7777),
+            uid: 0,
+            gid: 0,
         };
         self.ctx.pending_files.push(pf.clone());
 
@@ -202,7 +220,9 @@ impl<'a> StreamWriter<'a> {
             }
             self.ctx.inodes.push(PendingInode {
                 number: inode_number,
-                mode: 0o100_644,
+                mode: limnifs_core::inode::S_IFREG | (perms & 0o7777),
+                uid: 0,
+                gid: 0,
                 mtime_ns,
                 content: PendingContent::Inline(data),
             });
@@ -268,6 +288,7 @@ impl<'a> StreamWriter<'a> {
         &mut self,
         name: &str,
         mtime_ns: u64,
+        perms: u32,
         data: &'a [u8],
     ) -> Result<(), WriteError> {
         let (parent, leaf) = descend(&mut self.tree, name)?;
@@ -283,6 +304,7 @@ impl<'a> StreamWriter<'a> {
         self.staged.push(StagedEntry {
             name: name.to_owned(),
             mtime_ns,
+            perms,
             inode_number,
             data,
         });
@@ -297,7 +319,7 @@ impl<'a> StreamWriter<'a> {
     ///
     /// [`WriteError::Io`] if the name is invalid or conflicts with
     /// a non-directory entry.
-    pub fn add_dir(&mut self, name: &str, mtime_ns: u64) -> Result<(), WriteError> {
+    pub fn add_dir(&mut self, name: &str, mtime_ns: u64, perms: u32) -> Result<(), WriteError> {
         if name == "/" {
             return Ok(()); // the root is materialised at finish
         }
@@ -308,6 +330,7 @@ impl<'a> StreamWriter<'a> {
                     leaf.to_owned(),
                     StreamNode::Dir(StreamDir {
                         mtime_ns,
+                        perms,
                         children: BTreeMap::new(),
                     }),
                 );
@@ -333,6 +356,7 @@ impl<'a> StreamWriter<'a> {
         name: &str,
         target: &str,
         mtime_ns: u64,
+        perms: u32,
     ) -> Result<(), WriteError> {
         let (parent, leaf) = descend(&mut self.tree, name)?;
         if parent.children.contains_key(leaf) {
@@ -341,7 +365,9 @@ impl<'a> StreamWriter<'a> {
         let inode_number = self.ctx.alloc_inode();
         self.ctx.inodes.push(PendingInode {
             number: inode_number,
-            mode: limnifs_core::inode::S_IFLNK | 0o777,
+            mode: limnifs_core::inode::S_IFLNK | (perms & 0o7777),
+            uid: 0,
+            gid: 0,
             mtime_ns,
             content: PendingContent::Symlink(target.to_owned()),
         });
@@ -418,6 +444,9 @@ impl<'a> StreamWriter<'a> {
                 inode_number: entry.inode_number,
                 file_len: total_len,
                 mtime_ns: entry.mtime_ns,
+                mode: limnifs_core::inode::S_IFREG | (entry.perms & 0o7777),
+                uid: 0,
+                gid: 0,
             };
             self.ctx.pending_files.push(pf.clone());
             if total_len <= self.inline_threshold {
@@ -428,7 +457,9 @@ impl<'a> StreamWriter<'a> {
                 data.extend_from_slice(entry.data);
                 self.ctx.inodes.push(PendingInode {
                     number: entry.inode_number,
-                    mode: 0o100_644,
+                    mode: limnifs_core::inode::S_IFREG | (entry.perms & 0o7777),
+                    uid: 0,
+                    gid: 0,
                     mtime_ns: entry.mtime_ns,
                     content: PendingContent::Inline(data),
                 });
@@ -459,7 +490,9 @@ impl<'a> StreamWriter<'a> {
         self.ctx.dir_nodes.push(encode_dir_node(&entries));
         self.ctx.inodes.push(PendingInode {
             number: inode_number,
-            mode: 0o040_755,
+            mode: limnifs_core::inode::S_IFDIR | (dir.perms & 0o7777),
+            uid: 0,
+            gid: 0,
             mtime_ns: dir.mtime_ns,
             content: PendingContent::Directory(entries),
         });
@@ -535,17 +568,18 @@ mod tests {
     }
 
     fn add_all(w: &mut StreamWriter<'_>) {
-        w.add_dir("docs", 7_000_000_000_000).expect("dir");
+        w.add_dir("docs", 7_000_000_000_000, 0o755).expect("dir");
         w.add_file(
             "docs/readme.txt",
             1_000_000_000,
+            0o644,
             &mut b"hello stream writer\n".as_slice(),
         )
         .expect("file 1");
         let big = pseudo_random_bytes(9, 600 * 1024);
-        w.add_file("data/big.bin", 2_000_000_000, &mut big.as_slice())
+        w.add_file("data/big.bin", 2_000_000_000, 0o755, &mut big.as_slice())
             .expect("file 2");
-        w.add_symlink("latest", "docs/readme.txt", 3_000_000_000)
+        w.add_symlink("latest", "docs/readme.txt", 3_000_000_000, 0o777)
             .expect("symlink");
     }
 
@@ -590,25 +624,37 @@ mod tests {
         let big_b = pseudo_random_bytes(32, 900 * 1024);
         let staged = {
             let mut w = writer();
-            w.add_dir("docs", 7_000_000_000_000).expect("dir");
-            w.add_file("tiny.txt", 1, &mut b"small inline entry\n".as_slice())
-                .expect("immediate file");
-            w.stage_file("docs/a.bin", 2, &big_a).expect("staged a");
-            w.stage_file("docs/b.bin", 3, &big_b).expect("staged b");
-            w.stage_file("docs/tiny2.txt", 4, b"also inline\n")
+            w.add_dir("docs", 7_000_000_000_000, 0o755).expect("dir");
+            w.add_file(
+                "tiny.txt",
+                1,
+                0o644,
+                &mut b"small inline entry\n".as_slice(),
+            )
+            .expect("immediate file");
+            w.stage_file("docs/a.bin", 2, 0o644, &big_a)
+                .expect("staged a");
+            w.stage_file("docs/b.bin", 3, 0o755, &big_b)
+                .expect("staged b");
+            w.stage_file("docs/tiny2.txt", 4, 0o600, b"also inline\n")
                 .expect("staged tiny");
             w.finish().expect("finish staged").bytes
         };
         let serial = {
             let mut w = writer();
-            w.add_dir("docs", 7_000_000_000_000).expect("dir");
-            w.add_file("tiny.txt", 1, &mut b"small inline entry\n".as_slice())
-                .expect("immediate file");
-            w.add_file("docs/a.bin", 2, &mut big_a.as_slice())
+            w.add_dir("docs", 7_000_000_000_000, 0o755).expect("dir");
+            w.add_file(
+                "tiny.txt",
+                1,
+                0o644,
+                &mut b"small inline entry\n".as_slice(),
+            )
+            .expect("immediate file");
+            w.add_file("docs/a.bin", 2, 0o644, &mut big_a.as_slice())
                 .expect("serial a");
-            w.add_file("docs/b.bin", 3, &mut big_b.as_slice())
+            w.add_file("docs/b.bin", 3, 0o755, &mut big_b.as_slice())
                 .expect("serial b");
-            w.add_file("docs/tiny2.txt", 4, &mut b"also inline\n".as_slice())
+            w.add_file("docs/tiny2.txt", 4, 0o600, &mut b"also inline\n".as_slice())
                 .expect("serial tiny");
             w.finish().expect("finish serial").bytes
         };
@@ -618,25 +664,27 @@ mod tests {
     #[test]
     fn staged_detects_conflicts_and_bad_names() {
         let mut w = writer();
-        w.stage_file("a.txt", 0, b"x").expect("stage");
-        assert!(w.stage_file("a.txt", 0, b"y").is_err());
-        assert!(w.stage_file("", 0, b"y").is_err());
-        assert!(w.stage_file("/abs", 0, b"y").is_err());
-        assert!(w.stage_file("a.txt/child", 0, b"y").is_err());
+        w.stage_file("a.txt", 0, 0o644, b"x").expect("stage");
+        assert!(w.stage_file("a.txt", 0, 0o644, b"y").is_err());
+        assert!(w.stage_file("", 0, 0o644, b"y").is_err());
+        assert!(w.stage_file("/abs", 0, 0o644, b"y").is_err());
+        assert!(w.stage_file("a.txt/child", 0, 0o644, b"y").is_err());
     }
 
     #[test]
     fn rejects_bad_and_conflicting_names() {
         let mut w = writer();
-        assert!(w.add_file("", 0, &mut [].as_slice()).is_err());
-        assert!(w.add_file("/abs", 0, &mut [].as_slice()).is_err());
-        assert!(w.add_file("a/../b", 0, &mut [].as_slice()).is_err());
-        assert!(w.add_file("ok.txt", 0, &mut [].as_slice()).is_ok());
+        assert!(w.add_file("", 0, 0o644, &mut [].as_slice()).is_err());
+        assert!(w.add_file("/abs", 0, 0o644, &mut [].as_slice()).is_err());
+        assert!(w.add_file("a/../b", 0, 0o644, &mut [].as_slice()).is_err());
+        assert!(w.add_file("ok.txt", 0, 0o644, &mut [].as_slice()).is_ok());
         // Same leaf again, even with identical type: conflict.
-        assert!(w.add_file("ok.txt", 0, &mut [].as_slice()).is_err());
+        assert!(w.add_file("ok.txt", 0, 0o644, &mut [].as_slice()).is_err());
         // File where a directory must pass through.
-        assert!(w.add_file("ok.txt/child", 0, &mut [].as_slice()).is_err());
+        assert!(w
+            .add_file("ok.txt/child", 0, 0o644, &mut [].as_slice())
+            .is_err());
         // Symlink over a file.
-        assert!(w.add_symlink("ok.txt", "x", 0).is_err());
+        assert!(w.add_symlink("ok.txt", "x", 0, 0o777).is_err());
     }
 }
