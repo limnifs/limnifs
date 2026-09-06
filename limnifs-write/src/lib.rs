@@ -548,6 +548,18 @@ fn compute_merkle_root_from_sections(manifest: &[u8]) -> ManifestRoot {
     compute_merkle_root(&hashes)
 }
 
+/// Survey-form xattrs -> wire form. Namespace 0 (user-visible).
+#[cfg(feature = "xattr")]
+fn to_core_xattrs(raw: &[(String, Vec<u8>)]) -> Vec<limnifs_core::inode::XAttr> {
+    raw.iter()
+        .map(|(key, value)| limnifs_core::inode::XAttr {
+            namespace: 0,
+            key: key.clone(),
+            value: value.clone(),
+        })
+        .collect()
+}
+
 fn io_core(e: limnifs_core::CoreError) -> WriteError {
     WriteError::Io(std::io::Error::other(format!("base image load: {e}")))
 }
@@ -1392,7 +1404,7 @@ struct PendingFile {
 /// Stat snapshot captured during the parallel survey phase of the
 /// walk. Encapsulates everything the sequential fold needs from the
 /// filesystem — the fold performs no stat syscalls of its own.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct SurveyMeta {
     is_dir: bool,
     is_file: bool,
@@ -1420,6 +1432,10 @@ struct SurveyMeta {
     dev: u64,
     #[cfg(unix)]
     ino: u64,
+    /// Extended attributes (feature `xattr`, unix only), name-sorted
+    /// and capped; volatile platform namespaces filtered.
+    #[cfg(feature = "xattr")]
+    xattrs: Vec<(String, Vec<u8>)>,
 }
 
 impl SurveyMeta {
@@ -1462,8 +1478,8 @@ struct SurveyNode {
 }
 
 impl SurveyNode {
-    fn meta(&self) -> SurveyMeta {
-        self.meta
+    fn meta(&self) -> &SurveyMeta {
+        &self.meta
     }
 }
 
@@ -1515,13 +1531,62 @@ fn survey_meta_of(meta: &std::fs::Metadata) -> SurveyMeta {
             use std::os::unix::fs::MetadataExt as _;
             meta.ino()
         },
+        #[cfg(feature = "xattr")]
+        xattrs: Vec::new(),
     }
+}
+
+/// Best-effort xattr capture (feature `xattr`, unix): name-sorted,
+/// capped per inode, with volatile platform namespaces filtered so
+/// images stay deterministic and free of OS churn.
+#[cfg(all(unix, feature = "xattr"))]
+fn collect_xattrs(path: &Path) -> Vec<(String, Vec<u8>)> {
+    const VOLATILE: &[&str] = &[
+        "com.apple.provenance",
+        "com.apple.quarantine",
+        "com.apple.lastuseddate",
+        "com.apple.macl",
+        "com.apple.filesec",
+    ];
+    const TOTAL_CAP: usize = 64 * 1024;
+    let Ok(names) = xattr::list(path) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = names
+        .filter_map(|n| n.into_string().ok())
+        .filter(|n| {
+            !n.starts_with("system.")
+                && !n.starts_with("security.")
+                && !n.starts_with("trusted.")
+                && !VOLATILE.contains(&n.as_str())
+        })
+        .collect();
+    names.sort();
+    let mut out = Vec::new();
+    let mut total = 0usize;
+    for name in names {
+        let Ok(Some(value)) = xattr::get(path, &name) else {
+            continue;
+        };
+        total += name.len() + value.len();
+        if total > TOTAL_CAP {
+            break;
+        }
+        out.push((name, value));
+    }
+    out
 }
 
 fn survey_node(path: &Path) -> Result<SurveyNode, WriteError> {
     use rayon::prelude::*;
     let meta = std::fs::symlink_metadata(path)?;
-    let sm = survey_meta_of(&meta);
+    let mut sm = survey_meta_of(&meta);
+    #[cfg(all(unix, feature = "xattr"))]
+    {
+        if !sm.is_symlink {
+            sm.xattrs = collect_xattrs(path);
+        }
+    }
     if sm.is_symlink {
         let target = std::fs::read_link(path)?;
         let target = target
@@ -1577,6 +1642,7 @@ struct PendingInode {
     uid: u32,
     gid: u32,
     mtime_ns: u64,
+    xattrs: Vec<limnifs_core::inode::XAttr>,
     content: PendingContent,
 }
 
@@ -1606,6 +1672,11 @@ struct WriteContext {
     /// real nlink from here — the single source of truth shared by
     /// the walk, stream, and staged paths.
     nlink_counts: std::collections::HashMap<u64, u32>,
+    /// inode number -> xattrs captured by the walk. The encoder
+    /// prefers this over `PendingInode.xattrs` (the struct field is
+    /// the direct/stream path's truth) — same map-wins shape as
+    /// `nlink_counts`.
+    inode_xattrs: std::collections::HashMap<u64, Vec<limnifs_core::inode::XAttr>>,
     inodes: Vec<PendingInode>,
     dir_nodes: Vec<DirNode>,
     drops: Vec<PendingDrop>,
@@ -1695,6 +1766,7 @@ impl WriteContext {
             next_inode: 1,
             hardlink_targets: std::collections::HashMap::new(),
             nlink_counts: std::collections::HashMap::new(),
+            inode_xattrs: std::collections::HashMap::new(),
             inodes: Vec::new(),
             dir_nodes: Vec::new(),
             drops: Vec::new(),
@@ -1800,6 +1872,7 @@ impl WriteContext {
             uid: pf.uid,
             gid: pf.gid,
             mtime_ns: pf.mtime_ns,
+            xattrs: Vec::new(),
             content: PendingContent::DropBacked {
                 file_len: pf.file_len,
                 slices: result.slices,
@@ -1869,6 +1942,7 @@ impl WriteContext {
                 uid,
                 gid,
                 mtime_ns: meta.mtime_ns,
+                xattrs: Vec::new(),
                 content: PendingContent::Symlink(target.to_owned()),
             });
             return Ok(inode_number);
@@ -1897,6 +1971,11 @@ impl WriteContext {
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             let dir_node = encode_dir_node(&entries);
             self.dir_nodes.push(dir_node);
+            #[cfg(feature = "xattr")]
+            if !meta.xattrs.is_empty() {
+                self.inode_xattrs
+                    .insert(inode_number, to_core_xattrs(&meta.xattrs));
+            }
             let (mode, uid, gid) = meta.identity();
             self.inodes.push(PendingInode {
                 number: inode_number,
@@ -1904,6 +1983,7 @@ impl WriteContext {
                 uid,
                 gid,
                 mtime_ns: meta.mtime_ns,
+                xattrs: Vec::new(),
                 content: PendingContent::Directory(entries),
             });
             Ok(inode_number)
@@ -1928,6 +2008,11 @@ impl WriteContext {
 
             if file_len <= u64::try_from(self.inline_threshold).unwrap_or(u64::MAX) {
                 let data = std::fs::read(path)?;
+                #[cfg(feature = "xattr")]
+                if !meta.xattrs.is_empty() {
+                    self.inode_xattrs
+                        .insert(inode_number, to_core_xattrs(&meta.xattrs));
+                }
                 let (mode, uid, gid) = meta.identity();
                 self.inodes.push(PendingInode {
                     number: inode_number,
@@ -1935,10 +2020,16 @@ impl WriteContext {
                     uid,
                     gid,
                     mtime_ns: meta.mtime_ns,
+                    xattrs: Vec::new(),
                     content: PendingContent::Inline(data),
                 });
             } else {
                 // Defer to parallel processing — collect the file info.
+                #[cfg(feature = "xattr")]
+                if !meta.xattrs.is_empty() {
+                    self.inode_xattrs
+                        .insert(inode_number, to_core_xattrs(&meta.xattrs));
+                }
                 let (mode, uid, gid) = meta.identity();
                 let pf = PendingFile {
                     inode_number,
@@ -2462,22 +2553,48 @@ impl WriteContext {
         out.extend_from_slice(&inode.mtime_ns.to_le_bytes());
         let nlink = self.nlink_counts.get(&inode.number).copied().unwrap_or(1);
         out.extend_from_slice(&nlink.to_le_bytes());
+        let xattrs: &[limnifs_core::inode::XAttr] = self
+            .inode_xattrs
+            .get(&inode.number)
+            .map_or(inode.xattrs.as_slice(), std::convert::AsRef::as_ref);
+        // The xattr block sits between the flags byte and the
+        // content handle (parse order: flags -> atime? -> xattrs ->
+        // content); each arm's flag byte goes through this helper.
+        let mut flags_and_xattrs = move |out: &mut Vec<u8>, base: u8| {
+            if xattrs.is_empty() {
+                out.push(base);
+                return;
+            }
+            out.push(base | limnifs_core::inode::INODE_FLAG_HAS_XATTRS);
+            let count = u32::try_from(xattrs.len()).expect("xattr count fits u32");
+            out.extend_from_slice(&count.to_le_bytes());
+            for x in xattrs {
+                out.push(x.namespace);
+                let key = x.key.as_bytes();
+                let key_len = u32::try_from(key.len()).expect("xattr key fits u32");
+                out.extend_from_slice(&key_len.to_le_bytes());
+                out.extend_from_slice(key);
+                let value_len = u32::try_from(x.value.len()).expect("xattr value fits u32");
+                out.extend_from_slice(&value_len.to_le_bytes());
+                out.extend_from_slice(&x.value);
+            }
+        };
         match &inode.content {
             PendingContent::Inline(data) => {
                 let h = hash_section(data);
                 if let Some(&idx) = self.shared_inline_map.get(&h) {
                     // Deduplicated: emit shared-inline flag + index.
-                    out.push(INODE_FLAG_INLINE_DATA | INODE_FLAG_SHARED_INLINE);
+                    flags_and_xattrs(out, INODE_FLAG_INLINE_DATA | INODE_FLAG_SHARED_INLINE);
                     out.extend_from_slice(&(idx as u32).to_le_bytes());
                 } else {
-                    out.push(INODE_FLAG_INLINE_DATA);
+                    flags_and_xattrs(out, INODE_FLAG_INLINE_DATA);
                     let len = u32::try_from(data.len()).expect("data fits u32");
                     out.extend_from_slice(&len.to_le_bytes());
                     out.extend_from_slice(data);
                 }
             }
             PendingContent::DropBacked { file_len, slices } => {
-                out.push(0x00);
+                flags_and_xattrs(out, 0x00);
                 let slice_count = u32::try_from(slices.len()).expect("slice count fits u32");
                 out.extend_from_slice(&slice_count.to_le_bytes());
                 for slice in slices {
@@ -2499,14 +2616,14 @@ impl WriteContext {
                 // The reader dispatches on the inode's S_IFMT bits and
                 // reads target_len + target directly (flags unused
                 // for non-regular inodes).
-                out.push(0x00);
+                flags_and_xattrs(out, 0x00);
                 let t = target.as_bytes();
                 let len = u32::try_from(t.len()).expect("target fits u32");
                 out.extend_from_slice(&len.to_le_bytes());
                 out.extend_from_slice(t);
             }
             PendingContent::Directory(entries) => {
-                out.push(0x00);
+                flags_and_xattrs(out, 0x00);
                 let node = self
                     .dir_nodes
                     .iter()

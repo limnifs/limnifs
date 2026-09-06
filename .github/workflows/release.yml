@@ -211,10 +211,10 @@ jobs:
       # sovereign — the features remain opt-in there.
       - name: Build release binary (cross)
         if: ${{ matrix.use_cross }}
-        run: cross build --release --locked --target ${{ matrix.target }} --bin limni --features tar,sparse-index
+        run: cross build --release --locked --target ${{ matrix.target }} --bin limni --features tar,sparse-index,xattr
       - name: Build release binary
         if: ${{ !matrix.use_cross }}
-        run: cargo build --release --locked --target ${{ matrix.target }} --bin limni --features tar,sparse-index
+        run: cargo build --release --locked --target ${{ matrix.target }} --bin limni --features tar,sparse-index,xattr
       - name: Package
         shell: bash
         env:

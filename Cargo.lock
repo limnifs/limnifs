@@ -552,6 +552,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tar",
+ "xattr",
 ]
 
 [[package]]
@@ -639,6 +640,7 @@ dependencies = [
  "serde",
  "thiserror",
  "toml",
+ "xattr",
 ]
 
 [[package]]
@@ -1425,6 +1427,16 @@ checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
 dependencies = [
  "curve25519-dalek",
  "rand_core",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]

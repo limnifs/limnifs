@@ -345,13 +345,22 @@ impl LiveTreeSink for DropIdCollectorSink {
 /// 1. `walk_live_tree` + `ParallelExtractSink` (this struct) —
 ///    sequential, creates dirs, collects file tasks.
 /// 2. rayon across `self.tasks` — parallel file writes.
+/// Directory identity captured during the walk for the post-file
+/// application pass (mode, mtime, xattrs).
+pub struct DirIdentity {
+    pub path: PathBuf,
+    pub mode: u32,
+    pub mtime_ns: u64,
+    pub xattrs: Vec<crate::inode::XAttr>,
+}
+
 pub struct ParallelExtractSink<'a> {
     root: &'a Path,
     pub tasks: Vec<(PathBuf, Inode)>,
-    /// Directories in creation order with their inode identity
-    /// (mode, mtime_ns). Extract applies these AFTER file writes so
-    /// a read-only directory cannot block its own children.
-    pub dirs: Vec<(PathBuf, u32, u64)>,
+    /// Directories in creation order with their inode identity.
+    /// Extract applies these AFTER file writes so a read-only
+    /// directory cannot block its own children.
+    pub dirs: Vec<DirIdentity>,
     /// Hardlinks: (new_path, first_path) pairs for inodes already
     /// written under an earlier name. Created serially after the
     /// parallel file phase (the target must exist).
@@ -396,7 +405,12 @@ impl<'a> LiveTreeSink for ParallelExtractSink<'a> {
         } else {
             self.root.join(abs_path)
         };
-        self.dirs.push((path, inode.mode, inode.mtime_ns));
+        self.dirs.push(DirIdentity {
+            path,
+            mode: inode.mode,
+            mtime_ns: inode.mtime_ns,
+            xattrs: inode.xattrs.clone(),
+        });
         Ok(())
     }
 

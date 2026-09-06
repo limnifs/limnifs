@@ -2897,9 +2897,11 @@ fn extract(
     }
 
     // Directory identity last: a directory stamped read-only before
-    // its files are written would block its own children.
-    for (path, mode, mtime_ns) in &sink.dirs {
-        apply_unix_identity(path, *mode, *mtime_ns);
+    // its files are written would block its own children. Xattrs
+    // before the permission bits for the same reason.
+    for dir in &sink.dirs {
+        apply_xattrs(&dir.path, &dir.xattrs);
+        apply_unix_identity(&dir.path, dir.mode, dir.mtime_ns);
     }
 
     println!(
@@ -2931,6 +2933,7 @@ fn extract_file(
             path: path.to_path_buf(),
             source,
         })?;
+        apply_xattrs(path, &inode.xattrs);
         apply_unix_identity(path, inode.mode, inode.mtime_ns);
     }
     Ok(())
@@ -2967,6 +2970,19 @@ fn apply_unix_identity(path: &Path, mode: u32, mtime_ns: u64) {
 
 #[cfg(not(unix))]
 fn apply_unix_identity(_path: &Path, _mode: u32, _mtime_ns: u64) {}
+
+/// Reapply extended attributes best-effort (feature `xattr`).
+/// Unsettable attributes (privileges, platform restrictions) are
+/// skipped silently — extraction fidelity is best-effort by design.
+#[cfg(all(unix, feature = "xattr"))]
+fn apply_xattrs(path: &Path, xattrs: &[limnifs_core::inode::XAttr]) {
+    for x in xattrs {
+        let _ = xattr::set(path, &x.key, &x.value);
+    }
+}
+
+#[cfg(not(all(unix, feature = "xattr")))]
+fn apply_xattrs(_path: &Path, _xattrs: &[limnifs_core::inode::XAttr]) {}
 
 #[allow(clippy::too_many_arguments)]
 /// Compute the delta between two images and print tree operations.
@@ -4280,6 +4296,32 @@ mod tests {
         std::fs::write(dir.join("b.txt"), b"bbb").expect("write b.txt");
         std::fs::write(dir.join("sub").join("c.txt"), b"ccc").expect("write c.txt");
         dir
+    }
+
+    #[cfg(all(unix, feature = "xattr"))]
+    #[test]
+    fn extract_restores_xattrs() {
+        let workdir =
+            std::env::temp_dir().join(format!("limni-extract-xattrs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
+        std::fs::create_dir_all(&workdir).expect("workdir");
+
+        let src = workdir.join("src");
+        std::fs::create_dir_all(&src).expect("src");
+        std::fs::write(src.join("tagged.txt"), b"xattr carrier").expect("write");
+        xattr::set(src.join("tagged.txt"), "user.limni.test", b"restored").expect("set xattr");
+
+        let image = workdir.join("img.lim");
+        limn(&src, &image).expect("pack");
+
+        let dest = workdir.join("out");
+        extract(&image, &dest, &[], None).expect("extract");
+        let back = xattr::get(dest.join("tagged.txt"), "user.limni.test")
+            .expect("get xattr")
+            .expect("xattr present after extract");
+        assert_eq!(back, b"restored");
+
+        let _ = std::fs::remove_dir_all(&workdir);
     }
 
     #[cfg(unix)]
