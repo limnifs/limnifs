@@ -256,7 +256,7 @@ pub fn write_stream<R: std::io::Read>(
     config: &WriteConfig,
 ) -> Result<WriteArtifact, WriteError> {
     let mut writer = crate::stream::StreamWriter::new(config)?;
-    writer.add_file(name, 0, &mut reader)?;
+    writer.add_file(name, 0, 0o644, &mut reader)?;
     writer.finish()
 }
 
@@ -1384,6 +1384,9 @@ struct PendingFile {
     path: PathBuf,
     mtime_ns: u64,
     file_len: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
 }
 
 /// Stat snapshot captured during the parallel survey phase of the
@@ -1404,6 +1407,40 @@ struct SurveyMeta {
     is_char_device: bool,
     len: u64,
     mtime_ns: u64,
+    #[cfg(unix)]
+    mode: u32,
+    #[cfg(unix)]
+    uid: u32,
+    #[cfg(unix)]
+    gid: u32,
+}
+
+impl SurveyMeta {
+    /// (mode, uid, gid) for inode emission. Real st_mode and
+    /// ownership on unix; the historical fixed defaults elsewhere,
+    /// so non-unix images are byte-identical to before.
+    fn identity(&self) -> (u32, u32, u32) {
+        #[cfg(unix)]
+        {
+            (self.mode, self.uid, self.gid)
+        }
+        #[cfg(not(unix))]
+        {
+            let ty = if self.is_dir {
+                limnifs_core::inode::S_IFDIR
+            } else if self.is_symlink {
+                limnifs_core::inode::S_IFLNK
+            } else {
+                limnifs_core::inode::S_IFREG
+            };
+            let perms = if self.is_dir || self.is_symlink {
+                0o755
+            } else {
+                0o644
+            };
+            (ty | perms, 0, 0)
+        }
+    }
 }
 
 /// One surveyed tree node. Children are name-sorted so the
@@ -1446,6 +1483,21 @@ fn survey_meta_of(meta: &std::fs::Metadata) -> SurveyMeta {
         is_char_device: ft.is_char_device(),
         len: meta.len(),
         mtime_ns: mtime_ns.try_into().unwrap_or(0),
+        #[cfg(unix)]
+        mode: {
+            use std::os::unix::fs::MetadataExt as _;
+            meta.mode()
+        },
+        #[cfg(unix)]
+        uid: {
+            use std::os::unix::fs::MetadataExt as _;
+            meta.uid()
+        },
+        #[cfg(unix)]
+        gid: {
+            use std::os::unix::fs::MetadataExt as _;
+            meta.gid()
+        },
     }
 }
 
@@ -1505,6 +1557,8 @@ fn survey_tree(root: &Path) -> Result<SurveyNode, WriteError> {
 struct PendingInode {
     number: u64,
     mode: u32,
+    uid: u32,
+    gid: u32,
     mtime_ns: u64,
     content: PendingContent,
 }
@@ -1716,7 +1770,9 @@ impl WriteContext {
         }
         self.inodes.push(PendingInode {
             number: pf.inode_number,
-            mode: 0o100_644,
+            mode: pf.mode,
+            uid: pf.uid,
+            gid: pf.gid,
             mtime_ns: pf.mtime_ns,
             content: PendingContent::DropBacked {
                 file_len: pf.file_len,
@@ -1780,9 +1836,12 @@ impl WriteContext {
         let meta = node.meta();
         if let Some(target) = symlink_target {
             let inode_number = self.alloc_inode();
+            let (mode, uid, gid) = meta.identity();
             self.inodes.push(PendingInode {
                 number: inode_number,
-                mode: limnifs_core::inode::S_IFLNK | 0o777,
+                mode,
+                uid,
+                gid,
                 mtime_ns: meta.mtime_ns,
                 content: PendingContent::Symlink(target.to_owned()),
             });
@@ -1812,9 +1871,12 @@ impl WriteContext {
             entries.sort_by(|a, b| a.0.cmp(&b.0));
             let dir_node = encode_dir_node(&entries);
             self.dir_nodes.push(dir_node);
+            let (mode, uid, gid) = meta.identity();
             self.inodes.push(PendingInode {
                 number: inode_number,
-                mode: 0o040_755,
+                mode,
+                uid,
+                gid,
                 mtime_ns: meta.mtime_ns,
                 content: PendingContent::Directory(entries),
             });
@@ -1827,19 +1889,26 @@ impl WriteContext {
 
             if file_len <= u64::try_from(self.inline_threshold).unwrap_or(u64::MAX) {
                 let data = std::fs::read(path)?;
+                let (mode, uid, gid) = meta.identity();
                 self.inodes.push(PendingInode {
                     number: inode_number,
-                    mode: 0o100_644,
+                    mode,
+                    uid,
+                    gid,
                     mtime_ns: meta.mtime_ns,
                     content: PendingContent::Inline(data),
                 });
             } else {
                 // Defer to parallel processing — collect the file info.
+                let (mode, uid, gid) = meta.identity();
                 let pf = PendingFile {
                     inode_number,
                     path: path.to_path_buf(),
                     mtime_ns: meta.mtime_ns,
                     file_len,
+                    mode,
+                    uid,
+                    gid,
                 };
                 if let Some(sink) = &self.pending_sink {
                     // Streaming mode: hand the file to the compress
@@ -2348,8 +2417,8 @@ impl WriteContext {
     fn encode_inode(&self, out: &mut Vec<u8>, inode: &PendingInode) {
         out.extend_from_slice(&inode.number.to_le_bytes());
         out.extend_from_slice(&inode.mode.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&inode.uid.to_le_bytes());
+        out.extend_from_slice(&inode.gid.to_le_bytes());
         out.extend_from_slice(&inode.mtime_ns.to_le_bytes());
         out.extend_from_slice(&inode.mtime_ns.to_le_bytes());
         out.extend_from_slice(&1u32.to_le_bytes());
