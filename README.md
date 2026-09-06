@@ -50,6 +50,15 @@ cargo build --release
 - **Remote locators.** HTTP range streaming, S3, IPFS/CAR — slabs can
   live anywhere.
 - **FUSE mount.** Read-only mount on Linux and macOS.
+- **Tar streaming.** `limn --from-tar` packs archives entry-by-entry
+  (mmap'd, staged, packed across cores — nothing materialised);
+  `limni tar` streams an image back out as a tar. Unix modes,
+  ownership, and mtimes survive both directions.
+- **Layers.** `limni layer` writes an image that references a base's
+  drops (only new content stored locally); `--base` resolves the
+  chain in extract, cat, cat-multi, and tar.
+- **Diff + deep check.** `limni diff` reports tree operations
+  between images; `limni check` deep-hashes every drop across cores.
 - **Bounded random reads.** Large drops are stored as seekable
   ~256 KiB frames (zstd-seekable-style); a cold 8 KiB window decodes
   one frame, not the drop. SIEVE-evicted drop and frame caches make
