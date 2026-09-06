@@ -209,6 +209,10 @@ enum Command {
         /// Compression profile to use. Default: balanced.
         #[arg(long)]
         profile: Option<String>,
+        /// Progress reporting during the pack: files/s and MB/s to
+        /// stderr, rate-limited to ~4 Hz.
+        #[arg(long)]
+        verbose: bool,
     },
     /// Stream an image's contents to stdout as a tar archive
     /// (requires a build with the `tar` feature).
@@ -451,7 +455,23 @@ fn run() -> Result<(), CliError> {
             source,
             output,
             profile,
-        } => layer(&base, &source, &output, profile),
+            verbose,
+        } => {
+            let reported = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            if verbose {
+                limnifs_write::progress::set_sink(std::sync::Arc::new(RateLimitedReporter::new(
+                    reported.clone(),
+                )));
+            }
+            let result = layer(&base, &source, &output, profile);
+            if verbose {
+                limnifs_write::progress::clear_sink();
+                if reported.load(std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!();
+                }
+            }
+            result
+        }
         Command::Tar { image, bases } => tar_stream(&image, &bases),
         Command::Ls { image, path } => ls(&image, &path),
         Command::Cat {
