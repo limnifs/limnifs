@@ -22,6 +22,8 @@ getrandom.workspace = true
 rayon.workspace = true
 tar = { version = "0.4", optional = true, default-features = false }
 memmap2 = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
 xattr = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
