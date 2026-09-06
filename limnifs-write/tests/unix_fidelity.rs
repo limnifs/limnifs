@@ -5,6 +5,7 @@
 #![cfg(unix)]
 #![allow(clippy::cast_possible_truncation)]
 
+use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 
@@ -74,30 +75,19 @@ fn directory_pack_captures_real_modes_and_ownership() {
         );
     }
 
-    // Ownership is captured (the current user, not hardcoded 0).
-    let me = users_current_uid();
+    // Ownership is captured (the creating user, not hardcoded 0).
+    // Stat the fixture itself: /tmp can be root-owned (GitHub
+    // runners), which would make a temp-dir stat the wrong oracle.
+    let me = std::fs::metadata(&dir).expect("fixture stat");
     let plain = blob
         .inodes
         .iter()
         .find(|i| i.mode == 0o100_644)
         .expect("plain inode");
-    assert_eq!(plain.uid, me, "uid captured from the filesystem");
-    assert_eq!(plain.gid, users_current_gid(), "gid captured");
+    assert_eq!(plain.uid, me.uid(), "uid captured from the filesystem");
+    assert_eq!(plain.gid, me.gid(), "gid captured");
 
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[cfg(unix)]
-fn users_current_uid() -> u32 {
-    // No external dep: stat the temp dir we just created.
-    use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata(std::env::temp_dir()).map_or(0, |m| m.uid())
-}
-
-#[cfg(unix)]
-fn users_current_gid() -> u32 {
-    use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata(std::env::temp_dir()).map_or(0, |m| m.gid())
 }
 
 #[test]
