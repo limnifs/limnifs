@@ -3,6 +3,7 @@
 //! and (in the CLI) extraction applies mode + mtime.
 
 #![cfg(unix)]
+#![allow(clippy::cast_possible_truncation)]
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
@@ -90,17 +91,13 @@ fn directory_pack_captures_real_modes_and_ownership() {
 fn users_current_uid() -> u32 {
     // No external dep: stat the temp dir we just created.
     use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata(std::env::temp_dir())
-        .map(|m| m.uid())
-        .unwrap_or(0)
+    std::fs::metadata(std::env::temp_dir()).map_or(0, |m| m.uid())
 }
 
 #[cfg(unix)]
 fn users_current_gid() -> u32 {
     use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata(std::env::temp_dir())
-        .map(|m| m.gid())
-        .unwrap_or(0)
+    std::fs::metadata(std::env::temp_dir()).map_or(0, |m| m.gid())
 }
 
 #[test]
