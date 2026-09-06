@@ -1413,6 +1413,13 @@ struct SurveyMeta {
     uid: u32,
     #[cfg(unix)]
     gid: u32,
+    /// Device + inode identity for hardlink detection (unix). A
+    /// second occurrence of the same (dev, ino) becomes a metadata
+    /// reference to the first inode instead of new content.
+    #[cfg(unix)]
+    dev: u64,
+    #[cfg(unix)]
+    ino: u64,
 }
 
 impl SurveyMeta {
@@ -1498,6 +1505,16 @@ fn survey_meta_of(meta: &std::fs::Metadata) -> SurveyMeta {
             use std::os::unix::fs::MetadataExt as _;
             meta.gid()
         },
+        #[cfg(unix)]
+        dev: {
+            use std::os::unix::fs::MetadataExt as _;
+            meta.dev()
+        },
+        #[cfg(unix)]
+        ino: {
+            use std::os::unix::fs::MetadataExt as _;
+            meta.ino()
+        },
     }
 }
 
@@ -1582,6 +1599,13 @@ struct DirNode {
 
 struct WriteContext {
     next_inode: u64,
+    /// (dev, ino) -> inode number of the first occurrence (unix
+    /// hardlink detection during the fold).
+    hardlink_targets: std::collections::HashMap<(u64, u64), u64>,
+    /// inode number -> reference count. `encode_inode` writes the
+    /// real nlink from here — the single source of truth shared by
+    /// the walk, stream, and staged paths.
+    nlink_counts: std::collections::HashMap<u64, u32>,
     inodes: Vec<PendingInode>,
     dir_nodes: Vec<DirNode>,
     drops: Vec<PendingDrop>,
@@ -1669,6 +1693,8 @@ impl WriteContext {
     fn new() -> Self {
         Self {
             next_inode: 1,
+            hardlink_targets: std::collections::HashMap::new(),
+            nlink_counts: std::collections::HashMap::new(),
             inodes: Vec::new(),
             dir_nodes: Vec::new(),
             drops: Vec::new(),
@@ -1882,8 +1908,21 @@ impl WriteContext {
             });
             Ok(inode_number)
         } else if meta.is_file {
+            // Hardlinks (unix): a second directory entry for the same
+            // (dev, ino) references the first inode — no content work,
+            // no second inode, metadata faithful.
+            #[cfg(unix)]
+            if let Some(&existing) = self.hardlink_targets.get(&(meta.dev, meta.ino)) {
+                *self.nlink_counts.entry(existing).or_insert(1) += 1;
+                return Ok(existing);
+            }
             self.file_count += 1;
             let inode_number = self.alloc_inode();
+            #[cfg(unix)]
+            {
+                self.hardlink_targets
+                    .insert((meta.dev, meta.ino), inode_number);
+            }
             let file_len = meta.len;
             crate::progress::emit_file(path, file_len);
 
@@ -2421,7 +2460,8 @@ impl WriteContext {
         out.extend_from_slice(&inode.gid.to_le_bytes());
         out.extend_from_slice(&inode.mtime_ns.to_le_bytes());
         out.extend_from_slice(&inode.mtime_ns.to_le_bytes());
-        out.extend_from_slice(&1u32.to_le_bytes());
+        let nlink = self.nlink_counts.get(&inode.number).copied().unwrap_or(1);
+        out.extend_from_slice(&nlink.to_le_bytes());
         match &inode.content {
             PendingContent::Inline(data) => {
                 let h = hash_section(data);

@@ -1508,11 +1508,22 @@ fn limn_from_tar(
                     writer.add_file(&name, mtime_ns, mode & 0o7777, &mut { entry })
                 }
             }
+            tar::EntryType::Link => {
+                let target = entry.link_name().map_err(|source| CliError::ReadFailed {
+                    path: tar_path.to_path_buf(),
+                    source,
+                })?;
+                let Some(target) = target else {
+                    return Err(CliError::Unsupported {
+                        reason: format!("tar hardlink {name:?} has no link target"),
+                    });
+                };
+                let target = target.to_string_lossy().trim_end_matches('/').to_owned();
+                writer.add_hardlink(&name, &target)
+            }
             other => {
                 return Err(CliError::Unsupported {
-                    reason: format!(
-                        "tar entry {name:?} has unsupported type {other:?} (hardlinks are not supported yet)"
-                    ),
+                    reason: format!("tar entry {name:?} has unsupported type {other:?}"),
                 });
             }
         };
@@ -1593,6 +1604,7 @@ fn tar_stream(image: &Path, bases: &[PathBuf]) -> Result<(), CliError> {
             store: chain
                 .as_ref()
                 .map(|c| c as &dyn limnifs_core::slab_source::SlabSource),
+            seen_inodes: std::collections::HashMap::new(),
         };
         limnifs_core::live_tree::walk_live_tree(&blob, root_inode_number, &mut sink)
             .map_err(map_err)?;
@@ -1621,6 +1633,9 @@ fn tar_stream(_image: &Path, _bases: &[PathBuf]) -> Result<(), CliError> {
 struct TarSink<'a, W: std::io::Write> {
     builder: &'a mut tar::Builder<W>,
     store: Option<&'a dyn limnifs_core::slab_source::SlabSource>,
+    /// inode number -> path of its first emission: later names for
+    /// the same inode become tar hardlink entries.
+    seen_inodes: std::collections::HashMap<u64, String>,
 }
 
 #[cfg(feature = "tar")]
@@ -1659,6 +1674,29 @@ impl<'a, W: std::io::Write> limnifs_core::live_tree::LiveTreeSink for TarSink<'a
         inode: &limnifs_core::Inode,
     ) -> Result<(), CoreError> {
         use limnifs_core::inode::ContentHandle;
+        // A later name for an inode already emitted becomes a tar
+        // hardlink entry pointing at the first path.
+        if let Some(first) = self.seen_inodes.get(&inode.number) {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Link);
+            header.set_size(0);
+            header.set_mode(inode.mode & 0o7777);
+            header.set_mtime(inode.mtime_ns / 1_000_000_000);
+            header.set_uid(u64::from(inode.uid));
+            header.set_gid(u64::from(inode.gid));
+            header
+                .set_link_name(first)
+                .map_err(|source| CoreError::Corrupt {
+                    reason: format!("tar hardlink name {first:?}: {source}"),
+                })?;
+            header.set_cksum();
+            return self
+                .builder
+                .append_data(&mut header, abs_path, std::io::empty())
+                .map_err(io_err);
+        }
+        self.seen_inodes
+            .insert(inode.number, abs_path.to_string_lossy().into_owned());
         let mut header = tar::Header::new_gnu();
         header.set_entry_type(tar::EntryType::Regular);
         header.set_mode(inode.mode & 0o7777);
@@ -2848,6 +2886,14 @@ fn extract(
         .collect();
     if let Some(Some(err)) = write_errors.into_iter().next() {
         return Err(err);
+    }
+
+    // Hardlinks after the parallel writes (targets must exist);
+    // failures fall back to a full copy so content always lands.
+    for (new, target) in &sink.links {
+        if std::fs::hard_link(target, new).is_err() {
+            let _ = std::fs::copy(target, new);
+        }
     }
 
     // Directory identity last: a directory stamped read-only before
@@ -4234,6 +4280,35 @@ mod tests {
         std::fs::write(dir.join("b.txt"), b"bbb").expect("write b.txt");
         std::fs::write(dir.join("sub").join("c.txt"), b"ccc").expect("write c.txt");
         dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_recreates_hardlinks() {
+        let workdir =
+            std::env::temp_dir().join(format!("limni-extract-hardlinks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
+        std::fs::create_dir_all(&workdir).expect("workdir");
+
+        let src = workdir.join("src");
+        std::fs::create_dir_all(&src).expect("src");
+        std::fs::write(src.join("data.bin"), vec![0xA7u8; 300_000]).expect("write");
+        std::fs::hard_link(src.join("data.bin"), src.join("alias.bin")).expect("link");
+
+        let image = workdir.join("img.lim");
+        limn(&src, &image).expect("pack");
+
+        let dest = workdir.join("out");
+        extract(&image, &dest, &[], None).expect("extract");
+
+        use std::os::unix::fs::MetadataExt as _;
+        let data = std::fs::metadata(dest.join("data.bin")).expect("data.bin");
+        let alias = std::fs::metadata(dest.join("alias.bin")).expect("alias.bin");
+        assert_eq!(data.nlink(), 2, "link restored");
+        assert_eq!(alias.nlink(), 2);
+        assert_eq!(data.ino(), alias.ino(), "one inode behind both names");
+
+        let _ = std::fs::remove_dir_all(&workdir);
     }
 
     #[cfg(unix)]
