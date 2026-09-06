@@ -224,6 +224,7 @@ impl<'a> StreamWriter<'a> {
                 uid: 0,
                 gid: 0,
                 mtime_ns,
+                xattrs: Vec::new(),
                 content: PendingContent::Inline(data),
             });
         } else {
@@ -393,6 +394,7 @@ impl<'a> StreamWriter<'a> {
             uid: 0,
             gid: 0,
             mtime_ns,
+            xattrs: Vec::new(),
             content: PendingContent::Symlink(target.to_owned()),
         });
         parent
@@ -485,6 +487,7 @@ impl<'a> StreamWriter<'a> {
                     uid: 0,
                     gid: 0,
                     mtime_ns: entry.mtime_ns,
+                    xattrs: Vec::new(),
                     content: PendingContent::Inline(data),
                 });
             } else {
@@ -518,6 +521,7 @@ impl<'a> StreamWriter<'a> {
             uid: 0,
             gid: 0,
             mtime_ns: dir.mtime_ns,
+            xattrs: Vec::new(),
             content: PendingContent::Directory(entries),
         });
         inode_number

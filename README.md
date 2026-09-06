@@ -138,11 +138,12 @@ is documented in [docs/configuration.md](docs/configuration.md).
 | `fuse` | FUSE mount | system FUSE required |
 | `tar` | `limn --from-tar` / `limni tar` streaming (CLI) | yes |
 | `sparse-index` | layer-build Bloom fast path (CLI accelerator) | yes |
+| `xattr` | capture/restore extended attributes | unix filesystems |
 | `key-wrap` | HPKE X25519 key wrap | yes |
 | `signing` | Ed25519 manifest signing | yes |
 
-Official release binaries are built with `tar` and `sparse-index`
-enabled; the default `cargo build` stays minimal.
+Official release binaries are built with `tar`, `sparse-index`, and
+`xattr` enabled; the default `cargo build` stays minimal.
 
 ## Installation
 

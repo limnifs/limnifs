@@ -8,6 +8,7 @@ repository.workspace = true
 description = "LimniFS writer pipeline — directory tree to .lim image"
 
 [dependencies]
+xattr = { version = "1", optional = true }
 limnifs-format.workspace = true
 limnifs-core.workspace = true
 memmap2.workspace = true
@@ -27,6 +28,7 @@ default = []
 # `<image>.sparse` so layer builds answer "is this drop already in
 # the base?" without opening its slabs (see `BaseDropSet`).
 sparse-index = []
+xattr = ["dep:xattr"]
 
 [lints]
 workspace = true
