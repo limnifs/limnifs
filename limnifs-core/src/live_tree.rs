@@ -352,6 +352,12 @@ pub struct ParallelExtractSink<'a> {
     /// (mode, mtime_ns). Extract applies these AFTER file writes so
     /// a read-only directory cannot block its own children.
     pub dirs: Vec<(PathBuf, u32, u64)>,
+    /// Hardlinks: (new_path, first_path) pairs for inodes already
+    /// written under an earlier name. Created serially after the
+    /// parallel file phase (the target must exist).
+    pub links: Vec<(PathBuf, PathBuf)>,
+    /// inode number -> path of its first occurrence.
+    seen_inodes: std::collections::HashMap<u64, PathBuf>,
     pub dir_count: usize,
 }
 
@@ -364,6 +370,8 @@ impl<'a> ParallelExtractSink<'a> {
             root,
             tasks: Vec::new(),
             dirs: Vec::new(),
+            links: Vec::new(),
+            seen_inodes: std::collections::HashMap::new(),
             dir_count: 0,
         }
     }
@@ -393,6 +401,14 @@ impl<'a> LiveTreeSink for ParallelExtractSink<'a> {
     }
 
     fn on_regular_file(&mut self, abs_path: &Path, inode: &Inode) -> Result<(), CoreError> {
+        // Hardlink: a later name for an inode already extracted —
+        // link to the first occurrence instead of writing a copy.
+        if let Some(first) = self.seen_inodes.get(&inode.number) {
+            self.links.push((self.root.join(abs_path), first.clone()));
+            return Ok(());
+        }
+        self.seen_inodes
+            .insert(inode.number, self.root.join(abs_path));
         // Clone the inode so the rayon phase can outlive the borrow
         // of `blob` held open by `walk_live_tree`. Path is absolute
         // under `root`; the caller joins when popping tasks.

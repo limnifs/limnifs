@@ -344,6 +344,30 @@ impl<'a> StreamWriter<'a> {
         }
     }
 
+    /// Add a hardlink at `name` referencing the file already added
+    /// (by any path method) at `target` — both names share one
+    /// inode, and the emitted inode carries the real nlink. The
+    /// target must exist in the tree and be a regular file.
+    ///
+    /// # Errors
+    ///
+    /// [`WriteError::Io`] if `name` is invalid or conflicting, the
+    /// target is missing, or the target is not a regular file.
+    pub fn add_hardlink(&mut self, name: &str, target: &str) -> Result<(), WriteError> {
+        // Resolve the target before mutably borrowing the tree for
+        // the new name.
+        let inode_number = resolve_file_inode(&self.tree, target)?;
+        let (parent, leaf) = descend(&mut self.tree, name)?;
+        if parent.children.contains_key(leaf) {
+            return Err(name_conflict(name));
+        }
+        *self.ctx.nlink_counts.entry(inode_number).or_insert(1) += 1;
+        parent
+            .children
+            .insert(leaf.to_owned(), StreamNode::File { inode_number });
+        Ok(())
+    }
+
     /// Add a symbolic link at `name` pointing at `target` (stored
     /// raw, exactly as given).
     ///
@@ -531,6 +555,31 @@ fn descend<'a, 'b>(
         return Err(bad_name(name));
     }
     Ok((dir, leaf))
+}
+
+/// Resolve `target` to a file entry's inode number inside the
+/// stream tree. Errors when any component is missing, is a
+/// symlink, or the final component is a directory.
+fn resolve_file_inode(root: &StreamDir, target: &str) -> Result<u64, WriteError> {
+    let bad = || {
+        WriteError::Io(std::io::Error::other(format!(
+            "hardlink target {target:?} is not a file in the tree"
+        )))
+    };
+    let mut dir = root;
+    let mut components = target.split('/').filter(|c| !c.is_empty());
+    loop {
+        let Some(component) = components.next() else {
+            return Err(bad());
+        };
+        match dir.children.get(component) {
+            Some(StreamNode::File { inode_number }) if components.next().is_none() => {
+                return Ok(*inode_number);
+            }
+            Some(StreamNode::Dir(child)) => dir = child,
+            _ => return Err(bad()),
+        }
+    }
 }
 
 fn bad_name(name: &str) -> WriteError {
