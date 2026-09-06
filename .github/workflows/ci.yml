@@ -63,7 +63,7 @@ jobs:
         # compile on this target.
         run: >-
           cargo check --workspace --all-targets
-          --features limnifs-core/http,limnifs-core/key-wrap,limnifs-core/signing,limnifs-write/sparse-index
+          --features limnifs-core/http,limnifs-core/key-wrap,limnifs-core/signing,limnifs-write/sparse-index,limnifs-write/xattr,limni/tar,limni/xattr
       - name: cargo test (default features)
         # Check proves compilation; tests prove behavior — path
         # separators, mmap semantics, and hard-link fallbacks can all
