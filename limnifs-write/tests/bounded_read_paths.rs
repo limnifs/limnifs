@@ -97,7 +97,7 @@ fn extract_round_trips_multi_chunk_content() {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
-    if !help.map(|s| s.success()).unwrap_or(false) {
+    if !help.is_ok_and(|s| s.success()) {
         eprintln!(
             "skipping extract test: limni was built without the `tar` feature (no extract subcommand)"
         );
