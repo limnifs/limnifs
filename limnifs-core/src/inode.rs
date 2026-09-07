@@ -239,6 +239,30 @@ fn parse_xattr_block(cursor: &mut ManifestCursor<'_>) -> Result<Vec<XAttr>, Core
     Ok(xattrs)
 }
 
+/// Enforce the slice-map contract every reader assumes: the map
+/// covers the file contiguously from byte 0 — each slice starts
+/// exactly where the previous ended. Readers append slices
+/// (`file_plaintext`, `FileChunks`) and window over them
+/// (`read_windowed`), so a gapped map silently truncates the file
+/// and an overlapping map can panic the window arithmetic. The
+/// per-slice `start < end` check lives at the field parse; this is
+/// the cross-slice half, checked where the map is assembled.
+fn validate_slice_map(inode_number: u64, slices: &[SliceRef]) -> Result<(), CoreError> {
+    let mut expected_start: u64 = 0;
+    for (i, s) in slices.iter().enumerate() {
+        if s.file_byte_start != expected_start {
+            return Err(CoreError::Corrupt {
+                reason: format!(
+                    "inode {inode_number}: slice {i} starts at byte {}, expected {expected_start} (map must be contiguous from byte 0)",
+                    s.file_byte_start
+                ),
+            });
+        }
+        expected_start = s.file_byte_end;
+    }
+    Ok(())
+}
+
 fn parse_content_handle(
     cursor: &mut ManifestCursor<'_>,
     mode: u32,
@@ -303,6 +327,7 @@ fn parse_content_handle(
                         drop_byte_len,
                     });
                 }
+                validate_slice_map(inode_number, &slices)?;
                 Ok(ContentHandle::SliceMap(slices))
             }
         }
@@ -370,6 +395,84 @@ mod tests {
         bytes.push(0); // flags
         bytes.extend_from_slice(&[0xBB; 32]); // btree_node_hash
         bytes
+    }
+
+    /// A regular slice-backed inode: `ranges` are (file_byte_start,
+    /// file_byte_end) pairs; drop ids are synthesized distinct.
+    fn make_regular_slice_inode(number: u64, ranges: &[(u64, u64)]) -> Vec<u8> {
+        let mode = S_IFREG | 0o644;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&number.to_le_bytes());
+        bytes.extend_from_slice(&mode.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // uid
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // gid
+        bytes.extend_from_slice(&0u64.to_le_bytes()); // mtime
+        bytes.extend_from_slice(&0u64.to_le_bytes()); // ctime
+        bytes.extend_from_slice(&1u32.to_le_bytes()); // nlink
+        bytes.push(0); // flags
+        bytes.extend_from_slice(&u32::try_from(ranges.len()).unwrap().to_le_bytes());
+        for (i, (start, end)) in ranges.iter().enumerate() {
+            bytes.extend_from_slice(&start.to_le_bytes());
+            bytes.extend_from_slice(&end.to_le_bytes());
+            bytes.extend_from_slice(&[i as u8; 32]); // drop id
+            bytes.extend_from_slice(&0u32.to_le_bytes()); // drop_byte_start
+            bytes.extend_from_slice(&u32::try_from(end - start).unwrap().to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn parses_contiguous_slice_map() {
+        let bytes = make_regular_slice_inode(7, &[(0, 100), (100, 250), (250, 251)]);
+        let mut cursor = ManifestCursor::new(&bytes);
+        let inode = parse_inode(&mut cursor).expect("contiguous map parses");
+        match &inode.content_handle {
+            ContentHandle::SliceMap(slices) => {
+                assert_eq!(slices.len(), 3);
+                assert_eq!(inode.file_len(), 251);
+            }
+            other => panic!("expected SliceMap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_gapped_slice_map() {
+        // Gap between slices: bytes 100..150 are silently missing
+        // from every append-based reader.
+        let bytes = make_regular_slice_inode(7, &[(0, 100), (150, 250)]);
+        let mut cursor = ManifestCursor::new(&bytes);
+        match parse_inode(&mut cursor) {
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(reason.contains("contiguous"), "got: {reason}");
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_overlapping_slice_map() {
+        let bytes = make_regular_slice_inode(7, &[(0, 100), (50, 150)]);
+        let mut cursor = ManifestCursor::new(&bytes);
+        match parse_inode(&mut cursor) {
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(reason.contains("contiguous"), "got: {reason}");
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_nonzero_start_slice_map() {
+        // A hole at the file's head: extract would produce a file
+        // missing its first `start` bytes with no error.
+        let bytes = make_regular_slice_inode(7, &[(40, 100)]);
+        let mut cursor = ManifestCursor::new(&bytes);
+        match parse_inode(&mut cursor) {
+            Err(CoreError::Corrupt { reason }) => {
+                assert!(reason.contains("contiguous"), "got: {reason}");
+            }
+            other => panic!("expected Corrupt, got {other:?}"),
+        }
     }
 
     #[test]
