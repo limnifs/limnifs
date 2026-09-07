@@ -1912,6 +1912,20 @@ fn rw_add(
         path: src.to_path_buf(),
         source: e,
     })?;
+    // fs::copy carries the permission bits but not the mtime; stamp
+    // the source's identity so the re-pack captures it.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if let Ok(meta) = std::fs::metadata(src) {
+            let mtime_ns = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos() as u64);
+            limnifs_core::live_tree::apply_unix_identity(&dest_file, meta.mode(), mtime_ns);
+        }
+    }
     eprintln!("added: {dest_path} ({})", src.display());
     let artifact = limnifs_write::write_directory_with_config(&staging, &config)
         .map_err(|source| CliError::WriteFailed { source })?;
@@ -2529,6 +2543,8 @@ fn inspect(image: &Path, json: bool) -> Result<(), CliError> {
             files: usize,
             dirs: usize,
             root_inode: Option<u64>,
+            xattr_inodes: usize,
+            hardlink_groups: usize,
         }
         let blob_info = if meta_ref.is_inlined() {
             meta_ref
@@ -2541,12 +2557,16 @@ fn inspect(image: &Path, json: bool) -> Result<(), CliError> {
                 .map(|blob| {
                     let files = blob.inodes.iter().filter(|i| i.is_regular()).count();
                     let dirs = blob.inodes.iter().filter(|i| i.is_directory()).count();
+                    let xattr_inodes = blob.inodes.iter().filter(|i| !i.xattrs.is_empty()).count();
+                    let hardlink_groups = blob.inodes.iter().filter(|i| i.nlink > 1).count();
                     MetaBlob {
                         inodes: blob.inodes.len(),
                         dir_nodes: blob.dir_nodes.len(),
                         files,
                         dirs,
                         root_inode: blob.root_inode_number(),
+                        xattr_inodes,
+                        hardlink_groups,
                     }
                 })
         } else {
@@ -2763,6 +2783,14 @@ fn stat(image: &Path, path: &str) -> Result<(), CliError> {
     println!("  mode:    0o{:o}", inode.mode & 0o7777);
     println!("  type:    {}", format_file_type(inode.file_type()));
     println!("  nlink:   {}", inode.nlink);
+    if !inode.xattrs.is_empty() {
+        let names: Vec<&str> = inode.xattrs.iter().map(|x| x.key.as_str()).collect();
+        if names.len() > 8 {
+            println!("  xattrs:  {} ({} …)", names.len(), names[..8].join(", "));
+        } else {
+            println!("  xattrs:  {} ({})", names.len(), names.join(", "));
+        }
+    }
     match &inode.content_handle {
         ContentHandle::InlineData(d) => println!("  content: inline ({} bytes)", d.len()),
         ContentHandle::SharedInline(idx) => {
@@ -2939,37 +2967,9 @@ fn extract_file(
     Ok(())
 }
 
-/// Stamp a written path with the inode's permission bits and mtime
-/// (unix). Failure to apply is non-fatal — extraction fidelity is
-/// best-effort, matching tar's default posture; ownership stays
-/// untouched (needs privileges).
-#[cfg(unix)]
-fn apply_unix_identity(path: &Path, mode: u32, mtime_ns: u64) {
-    use std::os::unix::fs::PermissionsExt as _;
-    // Stamp the mtime while the path still carries the writer's
-    // default permissions; a read-open fallback covers directories
-    // (which cannot be opened for writing).
-    let secs = mtime_ns / 1_000_000_000;
-    let nanos = u32::try_from(mtime_ns % 1_000_000_000).unwrap_or(0);
-    if let Some(t) =
-        std::time::SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::new(secs, nanos))
-    {
-        let times = std::fs::FileTimes::new().set_modified(t);
-        let file = std::fs::File::options()
-            .read(true)
-            .write(true)
-            .open(path)
-            .or_else(|_| std::fs::File::open(path));
-        if let Ok(file) = file {
-            let _ = file.set_times(times);
-        }
-    }
-    // Permission bits last: they may make the path read-only.
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777));
-}
-
-#[cfg(not(unix))]
-fn apply_unix_identity(_path: &Path, _mode: u32, _mtime_ns: u64) {}
+/// Extraction fidelity is best-effort and shared with the RW
+/// materializer: one applier in limnifs-core.
+use limnifs_core::live_tree::apply_unix_identity;
 
 /// Reapply extended attributes best-effort (feature `xattr`).
 /// Unsettable attributes (privileges, platform restrictions) are

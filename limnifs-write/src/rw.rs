@@ -389,13 +389,27 @@ impl RwImage {
             }
         }
 
-        // Overlay pending writes.
+        // Overlay pending writes. An UPDATE rewrites content on top
+        // of a materialized live file — `fs::write` would clobber
+        // its captured mode, so preserve it across the rewrite (the
+        // mtime refreshes honestly: the content changed).
         for (path, data) in &self.pending_files {
             let file_path = staging.join(staging_relative(path));
             if let Some(parent) = file_path.parent() {
                 std::fs::create_dir_all(parent).map_err(WriteError::Io)?;
             }
+            let mode = preserved_mode(&file_path);
             std::fs::write(&file_path, data).map_err(WriteError::Io)?;
+            if let Some(mode) = mode {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    let _ =
+                        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(mode));
+                }
+                #[cfg(not(unix))]
+                let _ = mode;
+            }
         }
         Ok(())
     }
@@ -406,7 +420,18 @@ impl RwImage {
             if let Some(parent) = file_path.parent() {
                 std::fs::create_dir_all(parent).map_err(WriteError::Io)?;
             }
+            let mode = preserved_mode(&file_path);
             std::fs::write(&file_path, data).map_err(WriteError::Io)?;
+            if let Some(mode) = mode {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt as _;
+                    let _ =
+                        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(mode));
+                }
+                #[cfg(not(unix))]
+                let _ = mode;
+            }
         }
         Ok(())
     }
@@ -431,7 +456,19 @@ impl RwImage {
             .map(|s| s as &dyn limnifs_core::slab_source::SlabSource);
         let mut sink = limnifs_core::live_tree::FilesystemSink::new(staging, slab_ref);
         limnifs_core::live_tree::walk_live_tree(&state.blob, state.root_inode, &mut sink)
-            .map_err(core_to_io)
+            .map_err(core_to_io)?;
+        // Directory identities (and, under the xattr feature, their
+        // extended attributes) — without this, turnover strips what
+        // the pack captured.
+        for dir in sink.finish() {
+            #[cfg(all(unix, feature = "xattr"))]
+            for x in &dir.xattrs {
+                let _ = xattr::set(&dir.path, &x.key, &x.value);
+            }
+            #[cfg(not(all(unix, feature = "xattr")))]
+            let _ = dir;
+        }
+        Ok(())
     }
 
     /// Persist the produced manifest + slabs to disk, replacing the
@@ -777,6 +814,17 @@ fn normalize_path(path: &str) -> String {
 
 /// Strip the leading `/` so a key can be safely joined onto a
 /// staging root.
+#[cfg(unix)]
+fn preserved_mode(path: &std::path::Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::metadata(path).ok().map(|m| m.mode() & 0o7777)
+}
+
+#[cfg(not(unix))]
+fn preserved_mode(_path: &std::path::Path) -> Option<u32> {
+    None
+}
+
 fn staging_relative(path: &str) -> &str {
     path.trim_start_matches('/')
 }
@@ -861,6 +909,99 @@ fn cleanup_stale_swap_dir(path: &Path) {
 mod tests {
     use super::*;
     use crate::profile;
+
+    #[cfg(unix)]
+    #[test]
+    fn commit_and_turnover_preserve_fidelity() {
+        use std::os::unix::fs::MetadataExt as _;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let workdir =
+            std::env::temp_dir().join(format!("limnifs-rw-fidelity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workdir);
+        std::fs::create_dir_all(&workdir).expect("workdir");
+
+        // A fidelity-rich source: exec bit, hardlink, distinct mtime.
+        let src = workdir.join("src");
+        std::fs::create_dir_all(&src).expect("src");
+        std::fs::write(src.join("run.sh"), b"#!/bin/sh\n").expect("write");
+        std::fs::set_permissions(src.join("run.sh"), std::fs::Permissions::from_mode(0o750))
+            .expect("chmod");
+        std::fs::write(src.join("data.bin"), vec![0x33u8; 300_000]).expect("write");
+        std::fs::hard_link(src.join("data.bin"), src.join("alias.bin")).expect("link");
+        let stamp = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::new(500_000, 42);
+        let f = std::fs::File::options()
+            .write(true)
+            .open(src.join("data.bin"))
+            .unwrap();
+        f.set_times(std::fs::FileTimes::new().set_modified(stamp))
+            .unwrap();
+        drop(f);
+
+        let manifest = workdir.join("image.lim");
+        let artifact =
+            crate::write_directory_with_config(&src, &profile::balanced_rw()).expect("pack");
+        std::fs::write(&manifest, &artifact.bytes).expect("manifest");
+        for slab in &artifact.slabs {
+            std::fs::write(
+                workdir.join(sidecar_name(&slab.locator).unwrap()),
+                &slab.bytes,
+            )
+            .expect("slab");
+        }
+
+        // RW update + commit: the untouched files' identity must
+        // survive the staging round-trip.
+        let mut image = RwImage::open(&manifest, profile::balanced_rw()).expect("open");
+        image
+            .update_file("/run.sh", b"#!/bin/sh\nupdated\n")
+            .expect("update");
+        let artifact = image.commit().expect("commit");
+
+        // Parse the committed blob and assert identity.
+        use limnifs_core::ManifestCursor;
+        let mut cursor = ManifestCursor::new(&artifact.bytes);
+        limnifs_core::parse_manifest_header(&mut cursor).expect("header");
+        limnifs_core::parse_feature_flags_section(&mut cursor).expect("flags");
+        let meta_ref = limnifs_core::parse_metadata_reference(&mut cursor).expect("meta");
+        let inline = meta_ref.inline_metadata.as_ref().expect("inline");
+        let mut blob_cursor = ManifestCursor::new(inline);
+        let blob = limnifs_core::parse_metadata_blob(&mut blob_cursor).expect("blob");
+
+        let run = blob
+            .inodes
+            .iter()
+            .find(|i| i.mode == 0o100_750)
+            .expect("run.sh keeps its 0750 mode through commit");
+        let _ = run;
+        let data = blob
+            .inodes
+            .iter()
+            .find(|i| i.mode == 0o100_644 && i.nlink == 2)
+            .expect("hardlink keeps nlink 2 through commit");
+        assert_eq!(data.mtime_ns, 500_000_000_000_042, "mtime survives");
+
+        // Turnover on the same image also preserves identity.
+        let mut image = RwImage::open(&manifest, profile::balanced_rw()).expect("reopen");
+        let artifact = image.turnover().expect("turnover");
+        let mut cursor = ManifestCursor::new(&artifact.bytes);
+        limnifs_core::parse_manifest_header(&mut cursor).expect("header");
+        limnifs_core::parse_feature_flags_section(&mut cursor).expect("flags");
+        let meta_ref = limnifs_core::parse_metadata_reference(&mut cursor).expect("meta");
+        let inline = meta_ref.inline_metadata.as_ref().expect("inline");
+        let mut blob_cursor = ManifestCursor::new(inline);
+        let blob = limnifs_core::parse_metadata_blob(&mut blob_cursor).expect("blob");
+        assert!(
+            blob.inodes.iter().any(|i| i.mode == 0o100_750),
+            "turnover preserves the exec bit"
+        );
+        assert!(
+            blob.inodes.iter().any(|i| i.nlink == 2),
+            "turnover preserves the hardlink"
+        );
+
+        let _ = std::fs::remove_dir_all(&workdir);
+    }
 
     #[test]
     fn open_cleans_up_stale_new_directory() {

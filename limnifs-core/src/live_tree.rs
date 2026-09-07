@@ -249,6 +249,36 @@ pub fn file_plaintext<S: SlabSource + ?Sized>(
     }
 }
 
+/// Stamp a written path with the inode's permission bits and mtime
+/// (unix). Mtime first — chmod-before-stamp would block the write on
+/// a soon-to-be read-only file; the read-open fallback covers
+/// directories, which cannot be opened for writing. Ownership stays
+/// untouched (needs privileges). Single source for extract, RW
+/// staging, and any future materializer.
+#[cfg(unix)]
+pub fn apply_unix_identity(path: &Path, mode: u32, mtime_ns: u64) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let secs = mtime_ns / 1_000_000_000;
+    let nanos = u32::try_from(mtime_ns % 1_000_000_000).unwrap_or(0);
+    if let Some(t) =
+        std::time::SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::new(secs, nanos))
+    {
+        let times = std::fs::FileTimes::new().set_modified(t);
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .open(path)
+            .or_else(|_| std::fs::File::open(path));
+        if let Ok(file) = file {
+            let _ = file.set_times(times);
+        }
+    }
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777));
+}
+
+#[cfg(not(unix))]
+pub fn apply_unix_identity(_path: &Path, _mode: u32, _mtime_ns: u64) {}
+
 /// Sink that writes the live tree to a filesystem directory.
 /// Directories are created pre-order; regular files are written
 /// inline (no parallelism — wrap with rayon outside if you need
@@ -256,6 +286,13 @@ pub fn file_plaintext<S: SlabSource + ?Sized>(
 pub struct FilesystemSink<'a> {
     root: &'a Path,
     slab_store: Option<&'a dyn SlabSource>,
+    /// Directory identities for the `finish()` pass — a directory
+    /// stamped read-only before its children are written would block
+    /// them; its xattrs ride along for callers that can apply them
+    /// (limnifs-core carries no xattr dependency by design).
+    dirs: Vec<DirIdentity>,
+    /// inode number -> first-written path (hardlink targets).
+    seen_inodes: std::collections::HashMap<u64, PathBuf>,
 }
 
 impl<'a> FilesystemSink<'a> {
@@ -263,7 +300,23 @@ impl<'a> FilesystemSink<'a> {
     /// `slab_store` is `None`, slice-backed files fail extraction.
     #[must_use]
     pub fn new(root: &'a Path, slab_store: Option<&'a dyn SlabSource>) -> Self {
-        Self { root, slab_store }
+        Self {
+            root,
+            slab_store,
+            dirs: Vec::new(),
+            seen_inodes: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Apply directory identities (mode, mtime) after every file
+    /// and hardlink is written, and expose the recorded identities —
+    /// including xattrs — for callers able to apply the latter.
+    /// Must be called once the walk completes.
+    pub fn finish(&mut self) -> &[DirIdentity] {
+        for dir in &self.dirs {
+            apply_unix_identity(&dir.path, dir.mode, dir.mtime_ns);
+        }
+        &self.dirs
     }
 }
 
@@ -277,13 +330,41 @@ impl<'a> LiveTreeSink for FilesystemSink<'a> {
         std::fs::create_dir_all(&path).map_err(io_to_core)
     }
 
+    fn on_directory_inode(&mut self, abs_path: &Path, inode: &Inode) -> Result<(), CoreError> {
+        self.on_directory(abs_path)?;
+        let path = if abs_path.as_os_str().is_empty() {
+            self.root.to_path_buf()
+        } else {
+            self.root.join(abs_path)
+        };
+        self.dirs.push(DirIdentity {
+            path,
+            mode: inode.mode,
+            mtime_ns: inode.mtime_ns,
+            xattrs: inode.xattrs.clone(),
+        });
+        Ok(())
+    }
+
     fn on_regular_file(&mut self, abs_path: &Path, inode: &Inode) -> Result<(), CoreError> {
         let path = self.root.join(abs_path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(io_to_core)?;
         }
+        // Hardlink: serial pre-order means the first name is already
+        // on disk — link instead of writing a second copy.
+        if let Some(first) = self.seen_inodes.get(&inode.number) {
+            if std::fs::hard_link(first, &path).is_ok() {
+                return Ok(());
+            }
+            // Fall through to a copy so content always lands.
+        } else {
+            self.seen_inodes.insert(inode.number, path.clone());
+        }
         let plaintext = file_plaintext(inode, self.slab_store)?;
-        std::fs::write(&path, &plaintext).map_err(io_to_core)
+        std::fs::write(&path, &plaintext).map_err(io_to_core)?;
+        apply_unix_identity(&path, inode.mode, inode.mtime_ns);
+        Ok(())
     }
 
     fn on_symlink(&mut self, abs_path: &Path, target: &str) -> Result<(), CoreError> {
