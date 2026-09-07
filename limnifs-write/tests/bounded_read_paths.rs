@@ -25,22 +25,22 @@ fn make_workdir(name: &str) -> std::path::PathBuf {
 /// streaming path (a real CLI invocation) and byte-compare to the
 /// source. The CLI's `std::fs::read` is independent of the test's
 /// content, so this exercises the stream-to-disk path.
-    fn find_limni() -> std::path::PathBuf {
-        if let Ok(p) = std::env::var("LIMNI") {
-            return std::path::PathBuf::from(p);
-        }
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        for p in [
-            manifest.join("../target/release/limni"),
-            manifest.join("../../target/release/limni"),
-            manifest.join("target/release/limni"),
-        ] {
-            if p.exists() {
-                return p;
-            }
-        }
-        panic!("limni binary not found (set LIMNI env var)");
+fn find_limni() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("LIMNI") {
+        return std::path::PathBuf::from(p);
     }
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for p in [
+        manifest.join("../target/release/limni"),
+        manifest.join("../../target/release/limni"),
+        manifest.join("target/release/limni"),
+    ] {
+        if p.exists() {
+            return p;
+        }
+    }
+    panic!("limni binary not found (set LIMNI env var)");
+}
 
 #[test]
 fn extract_round_trips_multi_chunk_content() {
