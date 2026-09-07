@@ -218,11 +218,26 @@ impl SlabStore {
         manifest_path: &Path,
         slab_index: &crate::slab_index::SlabIndex,
     ) -> Result<Self, CoreError> {
+        let dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+        Self::load_mmap_in(dir, slab_index)
+    }
+
+    /// mmap every slab resolved from `dir` (the manifest's
+    /// directory). Same contract as [`SlabStore::load_mmap`], for
+    /// callers that hold the manifest bytes rather than a path —
+    /// the VFS opens from in-memory manifests.
+    ///
+    /// # Errors
+    /// - [`CoreError::Corrupt`] if any slab file cannot be opened,
+    ///   mmap'd, or parsed.
+    pub fn load_mmap_in(
+        dir: &Path,
+        slab_index: &crate::slab_index::SlabIndex,
+    ) -> Result<Self, CoreError> {
         if slab_index.is_empty() {
             return Ok(Self::default());
         }
 
-        let parent = manifest_path.parent().unwrap_or_else(|| Path::new("."));
         let mut slabs = Vec::with_capacity(slab_index.len());
         let mut drop_index: HashMap<[u8; 32], (usize, usize)> = HashMap::new();
         let mut parsed: Vec<ParsedSlab> = Vec::with_capacity(slab_index.len());
@@ -236,7 +251,7 @@ impl SlabStore {
                     reason: format!("slab_index entry {ordinal}: {e}"),
                 }
             })?;
-            let slab_path = parent.join(slab_name);
+            let slab_path = dir.join(slab_name);
 
             let file = std::fs::File::open(&slab_path).map_err(|e| CoreError::Corrupt {
                 reason: format!(
