@@ -39,7 +39,20 @@ fn find_limni() -> std::path::PathBuf {
             return p;
         }
     }
-    panic!("limni binary not found (set LIMNI env var)");
+    // CI runs `cargo test --workspace` without building the CLI
+    // binary first; build it here (dependencies are warm from this
+    // test's own compilation, so this is one link step).
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let built = std::process::Command::new(cargo)
+        .args(["build", "-p", "limni", "--features", "tar", "--release"])
+        .current_dir(manifest.parent().expect("workspace root"))
+        .status()
+        .expect("spawn cargo build");
+    let p = manifest.join("../target/release/limni");
+    if built.success() && p.exists() {
+        return p;
+    }
+    panic!("limni binary not found and could not be built (set LIMNI env var)");
 }
 
 #[test]
