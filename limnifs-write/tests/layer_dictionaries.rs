@@ -59,7 +59,15 @@ fn dictionary_section_of(
     if cursor.remaining_len() == 0 {
         return None;
     }
-    parse_dictionary_section(&mut cursor).ok()
+    // "Ships dictionaries" means a NON-EMPTY section. Layer
+    // manifests end with the delta-linkage section; when its
+    // base-root bytes happen to parse as version 1 + count 0
+    // (1-in-256 per image), the best-effort trailing parse yields
+    // an EMPTY section — true on paper, meaningless in intent, and
+    // flaky. Filter empties.
+    parse_dictionary_section(&mut cursor)
+        .ok()
+        .filter(|s| !s.dicts.is_empty())
 }
 
 fn file_contents(i: usize) -> Vec<u8> {
