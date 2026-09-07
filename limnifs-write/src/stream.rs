@@ -145,6 +145,7 @@ struct StagedEntry<'a> {
     name: String,
     mtime_ns: u64,
     perms: u32,
+    xattrs: Vec<limnifs_core::inode::XAttr>,
     inode_number: u64,
     data: &'a [u8],
 }
@@ -191,6 +192,7 @@ impl<'a> StreamWriter<'a> {
         name: &str,
         mtime_ns: u64,
         perms: u32,
+        xattrs: &[(String, Vec<u8>)],
         reader: &mut dyn Read,
     ) -> Result<(), WriteError> {
         let (parent, leaf) = descend(&mut self.tree, name)?;
@@ -207,6 +209,7 @@ impl<'a> StreamWriter<'a> {
             uid: 0,
             gid: 0,
         };
+        let wire_xattrs = to_wire_xattrs(xattrs)?;
         self.ctx.pending_files.push(pf.clone());
 
         let chunks = self.codecs.chunker.chunk_reader(reader)?;
@@ -224,7 +227,7 @@ impl<'a> StreamWriter<'a> {
                 uid: 0,
                 gid: 0,
                 mtime_ns,
-                xattrs: Vec::new(),
+                xattrs: wire_xattrs,
                 content: PendingContent::Inline(data),
             });
         } else {
@@ -290,6 +293,7 @@ impl<'a> StreamWriter<'a> {
         name: &str,
         mtime_ns: u64,
         perms: u32,
+        xattrs: &[(String, Vec<u8>)],
         data: &'a [u8],
     ) -> Result<(), WriteError> {
         let (parent, leaf) = descend(&mut self.tree, name)?;
@@ -306,6 +310,7 @@ impl<'a> StreamWriter<'a> {
             name: name.to_owned(),
             mtime_ns,
             perms,
+            xattrs: to_wire_xattrs(xattrs)?,
             inode_number,
             data,
         });
@@ -487,10 +492,15 @@ impl<'a> StreamWriter<'a> {
                     uid: 0,
                     gid: 0,
                     mtime_ns: entry.mtime_ns,
-                    xattrs: Vec::new(),
+                    xattrs: entry.xattrs.clone(),
                     content: PendingContent::Inline(data),
                 });
             } else {
+                if !entry.xattrs.is_empty() {
+                    self.ctx
+                        .inode_xattrs
+                        .insert(entry.inode_number, entry.xattrs.clone());
+                }
                 self.ctx.merge_chunked_file(&pf, result);
             }
         }
@@ -586,6 +596,37 @@ fn resolve_file_inode(root: &StreamDir, target: &str) -> Result<u64, WriteError>
     }
 }
 
+/// Validate and convert caller-supplied xattrs to wire form:
+/// namespace 0, 64 KiB total cap (metadata DoS guard), and the pax
+/// transport's hard limits — keys and values must be NUL-free and
+/// newline-free (a pax record is a length-prefixed text line).
+/// Returns an error naming the offending attribute.
+fn to_wire_xattrs(
+    raw: &[(String, Vec<u8>)],
+) -> Result<Vec<limnifs_core::inode::XAttr>, WriteError> {
+    const TOTAL_CAP: usize = 64 * 1024;
+    let mut out = Vec::with_capacity(raw.len());
+    let mut total = 0usize;
+    for (key, value) in raw {
+        if key.contains('\0') || key.contains('\n') || value.contains(&0) || value.contains(&b'\n')
+        {
+            return Err(WriteError::Io(std::io::Error::other(format!(
+                "xattr {key:?} carries NUL or newline bytes the pax record format cannot represent"
+            ))));
+        }
+        total += key.len() + value.len();
+        if total > TOTAL_CAP {
+            break;
+        }
+        out.push(limnifs_core::inode::XAttr {
+            namespace: 0,
+            key: key.clone(),
+            value: value.clone(),
+        });
+    }
+    Ok(out)
+}
+
 fn bad_name(name: &str) -> WriteError {
     WriteError::Io(std::io::Error::other(format!(
         "invalid stream entry name {name:?}: must be a non-empty relative path without '.' or '..' components"
@@ -626,12 +667,19 @@ mod tests {
             "docs/readme.txt",
             1_000_000_000,
             0o644,
+            &[],
             &mut b"hello stream writer\n".as_slice(),
         )
         .expect("file 1");
         let big = pseudo_random_bytes(9, 600 * 1024);
-        w.add_file("data/big.bin", 2_000_000_000, 0o755, &mut big.as_slice())
-            .expect("file 2");
+        w.add_file(
+            "data/big.bin",
+            2_000_000_000,
+            0o755,
+            &[],
+            &mut big.as_slice(),
+        )
+        .expect("file 2");
         w.add_symlink("latest", "docs/readme.txt", 3_000_000_000, 0o777)
             .expect("symlink");
     }
@@ -682,14 +730,15 @@ mod tests {
                 "tiny.txt",
                 1,
                 0o644,
+                &[],
                 &mut b"small inline entry\n".as_slice(),
             )
             .expect("immediate file");
-            w.stage_file("docs/a.bin", 2, 0o644, &big_a)
+            w.stage_file("docs/a.bin", 2, 0o644, &[], &big_a)
                 .expect("staged a");
-            w.stage_file("docs/b.bin", 3, 0o755, &big_b)
+            w.stage_file("docs/b.bin", 3, 0o755, &[], &big_b)
                 .expect("staged b");
-            w.stage_file("docs/tiny2.txt", 4, 0o600, b"also inline\n")
+            w.stage_file("docs/tiny2.txt", 4, 0o600, &[], b"also inline\n")
                 .expect("staged tiny");
             w.finish().expect("finish staged").bytes
         };
@@ -700,15 +749,22 @@ mod tests {
                 "tiny.txt",
                 1,
                 0o644,
+                &[],
                 &mut b"small inline entry\n".as_slice(),
             )
             .expect("immediate file");
-            w.add_file("docs/a.bin", 2, 0o644, &mut big_a.as_slice())
+            w.add_file("docs/a.bin", 2, 0o644, &[], &mut big_a.as_slice())
                 .expect("serial a");
-            w.add_file("docs/b.bin", 3, 0o755, &mut big_b.as_slice())
+            w.add_file("docs/b.bin", 3, 0o755, &[], &mut big_b.as_slice())
                 .expect("serial b");
-            w.add_file("docs/tiny2.txt", 4, 0o600, &mut b"also inline\n".as_slice())
-                .expect("serial tiny");
+            w.add_file(
+                "docs/tiny2.txt",
+                4,
+                0o600,
+                &[],
+                &mut b"also inline\n".as_slice(),
+            )
+            .expect("serial tiny");
             w.finish().expect("finish serial").bytes
         };
         assert_eq!(staged, serial, "staged flush must equal the serial path");
@@ -717,25 +773,33 @@ mod tests {
     #[test]
     fn staged_detects_conflicts_and_bad_names() {
         let mut w = writer();
-        w.stage_file("a.txt", 0, 0o644, b"x").expect("stage");
-        assert!(w.stage_file("a.txt", 0, 0o644, b"y").is_err());
-        assert!(w.stage_file("", 0, 0o644, b"y").is_err());
-        assert!(w.stage_file("/abs", 0, 0o644, b"y").is_err());
-        assert!(w.stage_file("a.txt/child", 0, 0o644, b"y").is_err());
+        w.stage_file("a.txt", 0, 0o644, &[], b"x").expect("stage");
+        assert!(w.stage_file("a.txt", 0, 0o644, &[], b"y").is_err());
+        assert!(w.stage_file("", 0, 0o644, &[], b"y").is_err());
+        assert!(w.stage_file("/abs", 0, 0o644, &[], b"y").is_err());
+        assert!(w.stage_file("a.txt/child", 0, 0o644, &[], b"y").is_err());
     }
 
     #[test]
     fn rejects_bad_and_conflicting_names() {
         let mut w = writer();
-        assert!(w.add_file("", 0, 0o644, &mut [].as_slice()).is_err());
-        assert!(w.add_file("/abs", 0, 0o644, &mut [].as_slice()).is_err());
-        assert!(w.add_file("a/../b", 0, 0o644, &mut [].as_slice()).is_err());
-        assert!(w.add_file("ok.txt", 0, 0o644, &mut [].as_slice()).is_ok());
+        assert!(w.add_file("", 0, 0o644, &[], &mut [].as_slice()).is_err());
+        assert!(w
+            .add_file("/abs", 0, 0o644, &[], &mut [].as_slice())
+            .is_err());
+        assert!(w
+            .add_file("a/../b", 0, 0o644, &[], &mut [].as_slice())
+            .is_err());
+        assert!(w
+            .add_file("ok.txt", 0, 0o644, &[], &mut [].as_slice())
+            .is_ok());
         // Same leaf again, even with identical type: conflict.
-        assert!(w.add_file("ok.txt", 0, 0o644, &mut [].as_slice()).is_err());
+        assert!(w
+            .add_file("ok.txt", 0, 0o644, &[], &mut [].as_slice())
+            .is_err());
         // File where a directory must pass through.
         assert!(w
-            .add_file("ok.txt/child", 0, 0o644, &mut [].as_slice())
+            .add_file("ok.txt/child", 0, 0o644, &[], &mut [].as_slice())
             .is_err());
         // Symlink over a file.
         assert!(w.add_symlink("ok.txt", "x", 0, 0o777).is_err());

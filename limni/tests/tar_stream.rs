@@ -11,6 +11,11 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 
+use limnifs_core::{
+    parse_feature_flags_section, parse_manifest_header, parse_metadata_blob,
+    parse_metadata_reference, ManifestCursor,
+};
+
 use limnifs_write::stream::StreamWriter;
 use limnifs_write::WriteConfig;
 
@@ -31,6 +36,16 @@ fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
         let mut entry = entry.expect("entry");
         let mtime_ns = entry.header().mtime().unwrap_or(0) * 1_000_000_000;
         let mode = entry.header().mode().unwrap_or(0o644) & 0o7777;
+        let mut pax_xattrs: Vec<(String, Vec<u8>)> = Vec::new();
+        if let Ok(Some(exts)) = entry.pax_extensions() {
+            for ext in exts.flatten() {
+                if let Ok(key) = ext.key() {
+                    if let Some(name) = key.strip_prefix("SCHILY.xattr.") {
+                        pax_xattrs.push((name.to_owned(), ext.value_bytes().to_vec()));
+                    }
+                }
+            }
+        }
         let name = entry
             .path()
             .expect("path")
@@ -57,11 +72,11 @@ fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
                     let end = start + usize::try_from(declared).expect("size");
                     let data = tar_bytes.get(start..end).expect("entry range");
                     writer
-                        .stage_file(&name, mtime_ns, mode, data)
+                        .stage_file(&name, mtime_ns, mode, &pax_xattrs, data)
                         .expect("staged file");
                 } else {
                     writer
-                        .add_file(&name, mtime_ns, mode, &mut entry)
+                        .add_file(&name, mtime_ns, mode, &pax_xattrs, &mut entry)
                         .expect("streamed file");
                 }
             }
@@ -263,4 +278,96 @@ fn pseudo_random(seed: u64, count: usize) -> Vec<u8> {
         out.push(u8::try_from(state >> 56).expect("fits u8"));
     }
     out
+}
+
+// --- PAX xattr round-trip (TODO.features/21) -------------------------
+
+fn build_pax_tar() -> Vec<u8> {
+    let line = "SCHILY.xattr.user.test=abc";
+    let len = line.len() + 4; // "NN " + line + "\n"
+    let records = format!("{len} {line}\n");
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut x = tar::Header::new_gnu();
+    x.set_entry_type(tar::EntryType::XHeader);
+    x.set_size(records.len() as u64);
+    x.set_mode(0o644);
+    x.set_cksum();
+    builder
+        .append_data(&mut x, "PaxHeaders/f.txt", records.as_bytes())
+        .expect("x entry");
+    let mut h = tar::Header::new_gnu();
+    h.set_size(4);
+    h.set_mode(0o644);
+    h.set_cksum();
+    builder
+        .append_data(&mut h, "f.txt", &b"body"[..])
+        .expect("file entry");
+    builder.into_inner().expect("tar bytes")
+}
+
+/// The CLI loop, lifted: x-entries skipped, SCHILY records staged.
+fn pack_pax_tar(tar_bytes: &[u8]) -> limnifs_write::WriteArtifact {
+    let config: &'static limnifs_write::WriteConfig =
+        Box::leak(Box::new(limnifs_write::WriteConfig::default_v0_1()));
+    let mut archive = tar::Archive::new(tar_bytes);
+    let mut writer = limnifs_write::stream::StreamWriter::new(config).expect("writer");
+    for entry in archive.entries().expect("entries") {
+        let mut entry = entry.expect("entry");
+        let mtime_ns = entry.header().mtime().unwrap_or(0) * 1_000_000_000;
+        let mode = entry.header().mode().unwrap_or(0o644) & 0o7777;
+        let mut pax_xattrs: Vec<(String, Vec<u8>)> = Vec::new();
+        if let Ok(Some(exts)) = entry.pax_extensions() {
+            for ext in exts.flatten() {
+                if let Ok(key) = ext.key() {
+                    if let Some(name) = key.strip_prefix("SCHILY.xattr.") {
+                        pax_xattrs.push((name.to_owned(), ext.value_bytes().to_vec()));
+                    }
+                }
+            }
+        }
+        match entry.header().entry_type() {
+            // (pax 'x' members are consumed by the crate itself and
+            // never surface as entries)
+            tar::EntryType::Regular => writer
+                .stage_file("f.txt", mtime_ns, mode, &pax_xattrs, b"body")
+                .expect("stage"),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    writer.finish().expect("finish")
+}
+
+#[test]
+fn schily_records_reach_the_inode() {
+    let artifact = pack_pax_tar(&build_pax_tar());
+    // Parse the blob from the artifact (same walk as collect_tree's
+    // header parse, but returning inodes directly).
+    let mut cursor = ManifestCursor::new(&artifact.bytes);
+    parse_manifest_header(&mut cursor).expect("header");
+    parse_feature_flags_section(&mut cursor).expect("flags");
+    let meta_ref = parse_metadata_reference(&mut cursor).expect("meta");
+    let inline = meta_ref.inline_metadata.as_ref().expect("inline");
+    let mut blob_cursor = ManifestCursor::new(inline);
+    let blob = parse_metadata_blob(&mut blob_cursor).expect("blob");
+    let file = blob
+        .inodes
+        .iter()
+        .find(|i| i.is_regular())
+        .expect("file inode");
+    assert_eq!(file.xattrs.len(), 1);
+    assert_eq!(file.xattrs[0].key, "user.test");
+    assert_eq!(file.xattrs[0].value, b"abc");
+    assert_eq!(file.xattrs[0].namespace, 0);
+}
+
+#[test]
+fn unrepresentable_xattrs_are_rejected() {
+    let config: &'static limnifs_write::WriteConfig =
+        Box::leak(Box::new(limnifs_write::WriteConfig::default_v0_1()));
+    let mut writer = limnifs_write::stream::StreamWriter::new(config).expect("writer");
+    let bad = vec![("bad\nkey".to_owned(), b"v".to_vec())];
+    assert!(
+        writer.stage_file("f.txt", 0, 0o644, &bad, b"body").is_err(),
+        "newline in key is unrepresentable in pax framing"
+    );
 }

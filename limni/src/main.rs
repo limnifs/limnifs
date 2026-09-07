@@ -1439,7 +1439,7 @@ fn limn_from_tar(
         path: tar_path.to_path_buf(),
         source,
     })? {
-        let entry = entry.map_err(|source| CliError::ReadFailed {
+        let mut entry = entry.map_err(|source| CliError::ReadFailed {
             path: tar_path.to_path_buf(),
             source,
         })?;
@@ -1455,6 +1455,18 @@ fn limn_from_tar(
                 tar::EntryType::Directory => 0o755,
                 _ => 0o644,
             }) as u32;
+        // GNU tar --xattrs carries attributes as PAX records keyed
+        // SCHILY.xattr.<name>; they ride into the inode verbatim.
+        let mut pax_xattrs: Vec<(String, Vec<u8>)> = Vec::new();
+        if let Ok(Some(exts)) = entry.pax_extensions() {
+            for ext in exts.flatten() {
+                if let Ok(key) = ext.key() {
+                    if let Some(name) = key.strip_prefix("SCHILY.xattr.") {
+                        pax_xattrs.push((name.to_owned(), ext.value_bytes().to_vec()));
+                    }
+                }
+            }
+        }
         let path = entry
             .path()
             .map_err(|source| CliError::ReadFailed {
@@ -1470,6 +1482,9 @@ fn limn_from_tar(
             .trim_end_matches('/')
             .to_owned();
         let add = match entry.header().entry_type() {
+            // PAX extended-header members are transport metadata for
+            // the entries that follow, not tree content.
+            tar::EntryType::XHeader | tar::EntryType::XGlobalHeader => continue,
             tar::EntryType::Directory => writer.add_dir(&name, mtime_ns, mode & 0o7777),
             tar::EntryType::Symlink => {
                 let target = entry.link_name().map_err(|source| CliError::ReadFailed {
@@ -1503,9 +1518,9 @@ fn limn_from_tar(
                         .ok_or_else(|| CliError::Unsupported {
                             reason: format!("tar entry {name:?} data range outside archive"),
                         })?;
-                    writer.stage_file(&name, mtime_ns, mode & 0o7777, data)
+                    writer.stage_file(&name, mtime_ns, mode & 0o7777, &pax_xattrs, data)
                 } else {
-                    writer.add_file(&name, mtime_ns, mode & 0o7777, &mut { entry })
+                    writer.add_file(&name, mtime_ns, mode & 0o7777, &pax_xattrs, &mut { entry })
                 }
             }
             tar::EntryType::Link => {
@@ -1674,6 +1689,53 @@ impl<'a, W: std::io::Write> limnifs_core::live_tree::LiveTreeSink for TarSink<'a
         inode: &limnifs_core::Inode,
     ) -> Result<(), CoreError> {
         use limnifs_core::inode::ContentHandle;
+        // PAX records for the inode's attributes: one
+        // `PaxHeaders/<path>` extended-header entry precedes the
+        // file entry. Values containing NUL or newline cannot be
+        // represented in pax framing and are skipped (GNU tar has
+        // the same limitation).
+        if !inode.xattrs.is_empty() {
+            let mut records = String::new();
+            for x in &inode.xattrs {
+                if x.key.contains('\0')
+                    || x.key.contains('\n')
+                    || x.value.contains(&0)
+                    || x.value.contains(&b'\n')
+                {
+                    continue;
+                }
+                let line = format!(
+                    "SCHILY.xattr.{}={}",
+                    x.key,
+                    String::from_utf8_lossy(&x.value)
+                );
+                // PAX record framing: "<total-len> <key>=<value>\n"
+                // where the length counts its own decimal digits:
+                // len = line + ' ' + digits + '\n', self-consistent.
+                let mut digits = 1usize;
+                loop {
+                    let len = line.len() + digits + 2;
+                    let printed = len.to_string().len();
+                    if printed == digits {
+                        records.push_str(&format!("{len} {line}\n"));
+                        break;
+                    }
+                    digits = printed;
+                }
+            }
+            if !records.is_empty() {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::XHeader);
+                header.set_size(records.len() as u64);
+                header.set_mode(0o644);
+                header.set_mtime(inode.mtime_ns / 1_000_000_000);
+                header.set_cksum();
+                let name = format!("PaxHeaders/{}", abs_path.display());
+                self.builder
+                    .append_data(&mut header, name.as_str(), records.as_bytes())
+                    .map_err(io_err)?;
+            }
+        }
         // A later name for an inode already emitted becomes a tar
         // hardlink entry pointing at the first path.
         if let Some(first) = self.seen_inodes.get(&inode.number) {
