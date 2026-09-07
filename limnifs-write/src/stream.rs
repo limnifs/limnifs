@@ -547,6 +547,12 @@ fn descend<'a, 'b>(
     if name.is_empty() || name.starts_with('/') || name.ends_with('/') {
         return Err(bad_name(name));
     }
+    // `\` is a path separator on Windows and NUL is an io error:
+    // both must fail loudly at pack time, or the image they
+    // produce escapes the extract root on Windows binaries.
+    if name.contains(['\\', '\0']) {
+        return Err(bad_name(name));
+    }
     let mut dir = root;
     let mut components = name.split('/').peekable();
     let leaf = components.next_back().expect("non-empty name has a leaf");
@@ -629,7 +635,7 @@ fn to_wire_xattrs(
 
 fn bad_name(name: &str) -> WriteError {
     WriteError::Io(std::io::Error::other(format!(
-        "invalid stream entry name {name:?}: must be a non-empty relative path without '.' or '..' components"
+        "invalid stream entry name {name:?}: must be a non-empty relative path without '.', '..', '\\', or NUL components"
     )))
 }
 
@@ -803,5 +809,14 @@ mod tests {
             .is_err());
         // Symlink over a file.
         assert!(w.add_symlink("ok.txt", "x", 0, 0o777).is_err());
+        // Windows-separator and NUL names escape extraction on
+        // Windows binaries (or crash the io layer); reject at pack.
+        assert!(w
+            .add_file(r"a\b", 0, 0o644, &[], &mut [].as_slice())
+            .is_err());
+        assert!(w.add_dir(r"\\server\share", 0, 0o755).is_err());
+        assert!(w
+            .add_file("nul\0x", 0, 0o644, &[], &mut [].as_slice())
+            .is_err());
     }
 }

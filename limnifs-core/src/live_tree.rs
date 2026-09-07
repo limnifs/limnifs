@@ -95,6 +95,42 @@ pub fn walk_live_tree(
     walk_dir(blob, root, Path::new(""), sink, &mut visited)
 }
 
+/// A tree entry name is one filesystem component. Once a name
+/// leaves an image file it is attacker-controlled: joined
+/// unvalidated, `..` or an absolute name escapes the extract root,
+/// and on Windows `\` replaces the whole path (UNC/drive escape).
+/// Unix legacy images may legally contain `\` as a literal
+/// filename byte, where joins are safe — it is refused only where
+/// it is a separator.
+///
+/// # Errors
+///
+/// Returns the reason the name must never reach a `Path::join`.
+pub fn validate_tree_name(name: &str) -> Result<(), &'static str> {
+    if name.is_empty() {
+        return Err("is empty");
+    }
+    if name == "." {
+        return Err("is '.'");
+    }
+    if name == ".." {
+        return Err("is '..'");
+    }
+    if name.starts_with('/') {
+        return Err("is absolute");
+    }
+    if name.contains('/') {
+        return Err("contains a '/' separator");
+    }
+    if name.contains('\0') {
+        return Err("contains a NUL byte");
+    }
+    if cfg!(windows) && name.contains('\\') {
+        return Err("contains a '\\' separator");
+    }
+    Ok(())
+}
+
 fn walk_dir(
     blob: &MetadataBlob,
     dir_inode: &Inode,
@@ -121,6 +157,15 @@ fn walk_dir(
             ),
         })?;
     for entry in &node.entries {
+        if let Err(reason) = validate_tree_name(&entry.name) {
+            return Err(CoreError::Corrupt {
+                reason: format!(
+                    "walk_live_tree: directory node {} entry name {:?} {reason}",
+                    hex_prefix(&hash),
+                    entry.name
+                ),
+            });
+        }
         let child_path = if dir_path.as_os_str().is_empty() {
             PathBuf::from(&entry.name)
         } else {
@@ -741,5 +786,61 @@ mod tests {
             sink.drop_ids.is_empty(),
             "inline-only tree references no drops"
         );
+    }
+
+    fn build_blob_with_named_entry(name: &str) -> MetadataBlob {
+        let plaintext = b"hostile".to_vec();
+        let file_inode = make_regular_inline_inode(2, 0o100_644, &plaintext);
+        let entries = vec![(name.to_string(), 2u64, 0x01u8)];
+        let dir_node_bytes = make_dir_node_bytes(&entries);
+        let dir_hash = hash_section(&dir_node_bytes);
+        let root_inode = make_directory_inode(1, dir_hash);
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&root_inode);
+        bytes.extend_from_slice(&file_inode);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&dir_node_bytes);
+
+        let mut cursor = crate::cursor::ManifestCursor::new(&bytes);
+        crate::metadata::parse_metadata_blob(&mut cursor).expect("parse")
+    }
+
+    #[test]
+    fn walk_refuses_unsafe_entry_names() {
+        // The dir-node parser already refuses empty/'/'/NUL names,
+        // so the walk-side guard's uncovered vectors are the
+        // path-semantic ones: '.' and '..' escape the walk root
+        // through a legal parse.
+        for name in ["..", "."] {
+            let blob = build_blob_with_named_entry(name);
+            let mut sink = DropIdCollectorSink::default();
+            let err = walk_live_tree(&blob, 1, &mut sink)
+                .expect_err("unsafe entry name must refuse the walk");
+            assert!(
+                matches!(err, CoreError::Corrupt { ref reason } if reason.contains("entry name")),
+                "name {name:?}: wrong error {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_tree_name_accepts_plain_components() {
+        assert!(validate_tree_name("hello.txt").is_ok());
+        assert!(validate_tree_name("a b").is_ok());
+        assert!(validate_tree_name("..hidden").is_ok());
+        assert!(validate_tree_name("...").is_ok());
+        assert!(validate_tree_name(r"a\b").is_ok() || cfg!(windows));
+    }
+
+    #[test]
+    fn validate_tree_name_refuses_encoding_and_traversal() {
+        for name in ["", ".", "..", "/etc/passwd", "a/b", "nul\0"] {
+            assert!(validate_tree_name(name).is_err(), "name {name:?}");
+        }
+        if cfg!(windows) {
+            assert!(validate_tree_name(r"\\evil\share").is_err());
+        }
     }
 }
