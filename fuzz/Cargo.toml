@@ -12,7 +12,9 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
-limnifs-core = { path = "../limnifs-core", version = "0.1.0" }
+# No version req: the path dep always resolves, so the workspace
+# version bumps (0.1 → 0.3.x) can't silently break nightly fuzz.
+limnifs-core = { path = "../limnifs-core" }
 libfuzzer-sys = "0.4"
 
 [[bin]]

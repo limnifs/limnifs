@@ -95,13 +95,13 @@ impl From<std::io::Error> for VfsError {
 
 impl Vfs {
     /// Open a `.lim` image file and construct a VFS. Parses the
-    /// manifest, extracts the inlined metadata blob, and loads all
-    /// referenced slabs into memory.
+    /// manifest, extracts the inlined metadata blob, and mmaps all
+    /// referenced slabs (only accessed pages enter RSS).
     ///
     /// # Errors
     ///
     /// Returns [`VfsError`] if the image fails to parse or any slab
-    /// file cannot be read.
+    /// file cannot be opened or mapped.
     pub fn open(image_path: &Path) -> Result<Self, VfsError> {
         let bytes = std::fs::read(image_path)?;
         let image_dir = image_path
@@ -117,7 +117,7 @@ impl Vfs {
     /// # Errors
     ///
     /// Returns [`VfsError`] if the manifest fails to parse or any
-    /// slab file cannot be read.
+    /// slab file cannot be opened or mapped.
     pub fn from_bytes(bytes: &[u8], image_dir: &Path) -> Result<Self, VfsError> {
         let mut cursor = ManifestCursor::new(bytes);
         let _ = parse_manifest_header(&mut cursor)?;
@@ -138,29 +138,11 @@ impl Vfs {
             })
         })?;
 
-        let mut slab_count: u64 = 0;
-        for entry in &slab_index.entries {
-            slab_count = slab_count.max(entry.slab_id.ordinal + 1);
-        }
-        let mut slabs: Vec<Vec<u8>> = vec![Vec::new(); usize::try_from(slab_count).unwrap_or(0)];
-        for entry in &slab_index.entries {
-            for locator in &entry.locators {
-                let uri = &locator.uri;
-                let name =
-                    limnifs_core::locator::local_sidecar_name(uri).map_err(VfsError::Core)?;
-                let path = image_dir.join(name);
-                if path.exists() {
-                    let slab_bytes = std::fs::read(&path)?;
-                    let idx =
-                        usize::try_from(entry.slab_id.ordinal).expect("slab ordinal fits usize");
-                    slabs[idx] = slab_bytes;
-                    break;
-                }
-            }
-        }
-
-        let slab_store =
-            limnifs_core::slab_store::SlabStore::from_bytes(slabs).map_err(VfsError::Core)?;
+        // mmap the slabs: a mount must not be peak-RSS-bound by
+        // total slab bytes. Missing sidecars fail the mount here —
+        // every read through them would fail anyway.
+        let slab_store = limnifs_core::slab_store::SlabStore::load_mmap_in(image_dir, &slab_index)
+            .map_err(VfsError::Core)?;
 
         Ok(Self {
             metadata_blob,
@@ -513,5 +495,30 @@ mod tests {
         let b_ino = vfs.lookup(sub_ino, "b.txt").expect("found b");
         let data = vfs.read(b_ino, 0, 100).expect("read");
         assert_eq!(data, b"world");
+    }
+
+    /// Slabs are mmapped at open: a missing sidecar must fail the
+    /// mount outright rather than defer broken reads to lookup time.
+    #[test]
+    fn vfs_open_fails_fast_on_missing_slab() {
+        let id = VFS_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("limnifs-vfs-miss-{id}"));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("big.bin"), [0u8; 600 * 1024]).expect("write big");
+        let artifact = limnifs_write::write_directory(&dir).expect("write");
+        assert!(artifact.drop_count > 0, "fixture must reference slabs");
+        // Manifest only — no slab sidecars beside it.
+        let img_dir = std::env::temp_dir().join(format!("limnifs-vfs-miss-img-{id}"));
+        std::fs::create_dir_all(&img_dir).expect("mkdir img");
+        std::fs::write(img_dir.join("img.lim"), &artifact.bytes).expect("manifest");
+
+        let result = Vfs::open(&img_dir.join("img.lim"));
+        assert!(
+            result.is_err(),
+            "mount over a missing slab sidecar must fail fast"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&img_dir);
     }
 }
