@@ -95,11 +95,11 @@ fn stream_entries_carry_permission_bits() {
     let config: &'static WriteConfig = Box::leak(Box::new(WriteConfig::default_v0_1()));
     let mut writer = StreamWriter::new(config).expect("writer");
     writer
-        .stage_file("script.sh", 1, 0o755, b"#!/bin/sh\necho hi\n")
+        .stage_file("script.sh", 1, 0o755, &[], b"#!/bin/sh\necho hi\n")
         .expect("stage");
     writer.add_dir("dir", 2, 0o700).expect("dir");
     writer
-        .add_file("dir/ro.txt", 3, 0o400, &mut b"read only".as_slice())
+        .add_file("dir/ro.txt", 3, 0o400, &[], &mut b"read only".as_slice())
         .expect("file");
     writer
         .add_symlink("link", "dir/ro.txt", 4, 0o777)
