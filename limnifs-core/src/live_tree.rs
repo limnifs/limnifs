@@ -210,6 +210,95 @@ const DECODE_BATCH_SLICES: usize = 64;
 /// Below this slice count the sequential loop beats task overhead.
 const DECODE_PARALLEL_THRESHOLD: usize = 8;
 
+/// Streaming chunk iterator over a file's plaintext: one item per
+/// slice (drop-windowed), or the single inline blob. Memory is
+/// bounded by one chunk (~max chunk size); callers that need the
+/// whole file use [`file_plaintext`], which shares this decode
+/// path. Iteration yields `Result`s so a mid-file decode failure
+/// surfaces with position context from the caller.
+pub struct FileChunks<'a, S: SlabSource + ?Sized> {
+    inode: &'a Inode,
+    store: Option<&'a S>,
+    /// Index into the slice map; `usize::MAX` = not started,
+    /// exhausted when idx >= len.
+    idx: usize,
+    /// Buffered inline chunk, yielded once.
+    inline: Option<Vec<u8>>,
+    done: bool,
+}
+
+impl<'a, S: SlabSource + ?Sized> FileChunks<'a, S> {
+    #[must_use]
+    pub fn new(inode: &'a Inode, store: Option<&'a S>) -> Self {
+        match &inode.content_handle {
+            ContentHandle::InlineData(data) => Self {
+                inode,
+                store,
+                idx: 0,
+                inline: Some(data.clone()),
+                done: false,
+            },
+            ContentHandle::SliceMap(_) => Self {
+                inode,
+                store,
+                idx: 0,
+                inline: None,
+                done: false,
+            },
+            _ => Self {
+                inode,
+                store,
+                idx: 0,
+                inline: None,
+                done: true,
+            },
+        }
+    }
+}
+
+impl<S: SlabSource + ?Sized> Iterator for FileChunks<'_, S> {
+    type Item = Result<Vec<u8>, CoreError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        if let Some(data) = self.inline.take() {
+            self.done = true;
+            return Some(Ok(data));
+        }
+        let ContentHandle::SliceMap(slices) = &self.inode.content_handle else {
+            self.done = true;
+            return None;
+        };
+        if self.idx >= slices.len() {
+            self.done = true;
+            return None;
+        }
+        let store = match self.store {
+            Some(s) => s,
+            None => {
+                self.done = true;
+                return Some(Err(CoreError::Corrupt {
+                    reason: "file_chunks: slice-backed file but no slab store provided".into(),
+                }));
+            }
+        };
+        let slice = &slices[self.idx];
+        self.idx += 1;
+        Some(decode_slice(store, slice))
+    }
+}
+
+/// Streaming form of [`file_plaintext`]: bounded memory, one chunk
+/// per item. `file_plaintext` remains for callers that want a Vec.
+pub fn file_chunks<'a, S: SlabSource + ?Sized>(
+    inode: &'a Inode,
+    store: Option<&'a S>,
+) -> FileChunks<'a, S> {
+    FileChunks::new(inode, store)
+}
+
 pub fn file_plaintext<S: SlabSource + ?Sized>(
     inode: &Inode,
     slab_store: Option<&S>,
@@ -361,8 +450,16 @@ impl<'a> LiveTreeSink for FilesystemSink<'a> {
         } else {
             self.seen_inodes.insert(inode.number, path.clone());
         }
-        let plaintext = file_plaintext(inode, self.slab_store)?;
-        std::fs::write(&path, &plaintext).map_err(io_to_core)?;
+        // Chunk-streamed (bounded memory): staging a multi-GiB
+        // tree must not become multi-GiB RSS.
+        use std::io::Write as _;
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&path).map_err(io_to_core)?);
+        for chunk in file_chunks(inode, self.slab_store) {
+            let chunk = chunk?;
+            out.write_all(&chunk).map_err(io_to_core)?;
+        }
+        out.flush().map_err(io_to_core)?;
+        drop(out);
         apply_unix_identity(&path, inode.mode, inode.mtime_ns);
         Ok(())
     }

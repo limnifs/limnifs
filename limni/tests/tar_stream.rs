@@ -36,6 +36,18 @@ fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
         let mut entry = entry.expect("entry");
         let mtime_ns = entry.header().mtime().unwrap_or(0) * 1_000_000_000;
         let mode = entry.header().mode().unwrap_or(0o644) & 0o7777;
+        // Mirror the CLI: AppleDouble members are transport noise.
+        if entry
+            .path()
+            .ok()
+            .and_then(|p| {
+                p.file_name()
+                    .map(|f| f.to_string_lossy().starts_with("._").to_owned())
+            })
+            .unwrap_or(false)
+        {
+            continue;
+        }
         let mut pax_xattrs: Vec<(String, Vec<u8>)> = Vec::new();
         if let Ok(Some(exts)) = entry.pax_extensions() {
             for ext in exts.flatten() {
@@ -369,5 +381,34 @@ fn unrepresentable_xattrs_are_rejected() {
     assert!(
         writer.stage_file("f.txt", 0, 0o644, &bad, b"body").is_err(),
         "newline in key is unrepresentable in pax framing"
+    );
+}
+
+#[test]
+fn appledouble_members_are_skipped() {
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut h = tar::Header::new_gnu();
+    h.set_size(3);
+    h.set_mode(0o644);
+    h.set_cksum();
+    builder
+        .append_data(&mut h, "real.txt", &b"abc"[..])
+        .expect("real");
+    let mut ad = tar::Header::new_gnu();
+    ad.set_size(4);
+    ad.set_mode(0o644);
+    ad.set_cksum();
+    builder
+        .append_data(&mut ad, "._real.txt", &b"junk"[..])
+        .expect("appledouble");
+    let tar_bytes = builder.into_inner().expect("tar");
+
+    let artifact = pack_tar(&mut tar_bytes.as_slice());
+    let tree = collect_tree(&artifact);
+    assert!(tree.contains_key("real.txt"), "real content packed");
+    assert!(
+        !tree.keys().any(|k| k.starts_with("._")),
+        "AppleDouble members must not become tree content: {:?}",
+        tree.keys().collect::<Vec<_>>()
     );
 }
