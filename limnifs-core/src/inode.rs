@@ -115,6 +115,22 @@ impl Inode {
     pub fn is_directory(&self) -> bool {
         self.file_type() == S_IFDIR
     }
+
+    /// Logical byte length for regular files (inline or
+    /// slice-backed); 0 for other handles. The slice form is the
+    /// span from the first slice's start to the last slice's end —
+    /// slices are contiguous by construction.
+    #[must_use]
+    pub fn file_len(&self) -> u64 {
+        match &self.content_handle {
+            ContentHandle::InlineData(data) => u64::try_from(data.len()).unwrap_or(u64::MAX),
+            ContentHandle::SliceMap(slices) => slices.last().map_or(0, |last| {
+                last.file_byte_end
+                    .saturating_sub(slices.first().map_or(0, |f| f.file_byte_start))
+            }),
+            _ => 0,
+        }
+    }
 }
 
 /// Parse an inode record from the cursor's current position.
