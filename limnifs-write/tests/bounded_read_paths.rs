@@ -87,6 +87,23 @@ fn extract_round_trips_multi_chunk_content() {
     // binary is built at the workspace target dir; the test's PWD
     // is this package's, so walk up to the workspace root.
     let limni = find_limni();
+    // The `extract` subcommand lives behind the opt-in `tar` feature
+    // (it joins the same slab-loading code path). A default-features
+    // build (e.g. `cargo test` on a CI runner that omits tar) has no
+    // `extract` command — skip rather than fabricate one.
+    let help = std::process::Command::new(&limni)
+        .arg("extract")
+        .arg("--help")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if !help.map(|s| s.success()).unwrap_or(false) {
+        eprintln!(
+            "skipping extract test: limni was built without the `tar` feature (no extract subcommand)"
+        );
+        let _ = std::fs::remove_dir_all(&workdir);
+        return;
+    }
     let out_dir = workdir.join("out");
     std::fs::create_dir_all(&out_dir).expect("out");
     let status = std::process::Command::new(&limni)
