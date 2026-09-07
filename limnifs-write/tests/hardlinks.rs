@@ -101,7 +101,7 @@ fn stream_hardlink_shares_inode() {
     let data = vec![0x11u8; 600 * 1024];
     let mut writer = StreamWriter::new(config).expect("writer");
     writer
-        .stage_file("orig.bin", 1, 0o644, &data)
+        .stage_file("orig.bin", 1, 0o644, &[], &data)
         .expect("stage");
     writer.add_hardlink("link.bin", "orig.bin").expect("link");
     let artifact = writer.finish().expect("finish");
