@@ -43,6 +43,7 @@ use crate::error::CoreError;
 use crate::inode::{ContentHandle, Inode, SliceRef};
 use crate::metadata::MetadataBlob;
 use crate::slab_cache::CachedSlabStore;
+use crate::slab_source::SlabSource;
 use crate::slab_store::SlabStore;
 use crate::{
     parse_feature_flags_section, parse_manifest_header, parse_metadata_blob,
@@ -318,54 +319,7 @@ impl<'a> FileReader<'a> {
     /// [`CoreError`] when a covering drop is missing or fails to
     /// decode.
     pub fn read_at_into(&self, offset: u64, buf: &mut [u8]) -> Result<usize, CoreError> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        let window_end = offset.saturating_add(buf.len() as u64);
-        let mut filled = 0usize;
-        match &self.inode.content_handle {
-            ContentHandle::InlineData(d) => {
-                let start = usize::try_from(offset).unwrap_or(usize::MAX);
-                if start >= d.len() {
-                    return Ok(0);
-                }
-                let end = (start + buf.len()).min(d.len());
-                buf[..end - start].copy_from_slice(&d[start..end]);
-                Ok(end - start)
-            }
-            ContentHandle::SliceMap(slices) => {
-                for slice in slices {
-                    if slice.file_byte_end <= offset || slice.file_byte_start >= window_end {
-                        continue;
-                    }
-                    let from_abs = offset.max(slice.file_byte_start);
-                    let to_abs = window_end.min(slice.file_byte_end);
-                    let want = (to_abs - from_abs) as usize;
-                    if want == 0 {
-                        continue;
-                    }
-                    // Zero-copy: write directly into the remaining
-                    // slice of the caller's buffer.
-                    let n = self
-                        .store
-                        .decoded_range_into(
-                            slice.drop_id.as_bytes(),
-                            from_abs - slice.file_byte_start,
-                            &mut buf[filled..filled + want],
-                        )
-                        .transpose()?
-                        .ok_or_else(|| CoreError::Corrupt {
-                            reason: "slice references a drop missing from every slab".into(),
-                        })?;
-                    filled += n;
-                    if filled == buf.len() || slice.file_byte_end >= window_end {
-                        break;
-                    }
-                }
-                Ok(filled)
-            }
-            _ => Ok(0),
-        }
+        read_window_into(self.inode, Some(self.store), offset, buf)
     }
 }
 
@@ -376,6 +330,79 @@ impl Read for FileReader<'_> {
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         self.pos += n as u64;
         Ok(n)
+    }
+}
+
+/// Fill `buf` with the bytes at `[offset, offset + buf.len())` of
+/// `inode`'s content, returning how many were filled (0 at or past
+/// the end). THE windowed-read implementation: `FileReader`, the
+/// FUSE VFS, and `limni cat` all delegate here.
+///
+/// Decompresses only the drops the window covers — slices entirely
+/// before or after the window are never touched (a deep-offset
+/// read costs the covering drops, not everything before them).
+/// Slice maps are contiguous from byte 0 (enforced at parse), so
+/// the returned count is exact up to the file's end.
+///
+/// # Errors
+///
+/// [`CoreError::Corrupt`] when a slice-backed file is given no
+/// store, or a covering drop is missing from every slab.
+pub fn read_window_into(
+    inode: &Inode,
+    store: Option<&dyn SlabSource>,
+    offset: u64,
+    buf: &mut [u8],
+) -> Result<usize, CoreError> {
+    if buf.is_empty() {
+        return Ok(0);
+    }
+    let window_end = offset.saturating_add(buf.len() as u64);
+    match &inode.content_handle {
+        ContentHandle::InlineData(d) => {
+            let start = usize::try_from(offset).unwrap_or(usize::MAX);
+            if start >= d.len() {
+                return Ok(0);
+            }
+            let end = (start + buf.len()).min(d.len());
+            buf[..end - start].copy_from_slice(&d[start..end]);
+            Ok(end - start)
+        }
+        ContentHandle::SliceMap(slices) => {
+            let store = store.ok_or_else(|| CoreError::Corrupt {
+                reason: "read_window_into: slice-backed file but no slab store provided".into(),
+            })?;
+            let mut filled = 0usize;
+            for slice in slices {
+                if slice.file_byte_end <= offset || slice.file_byte_start >= window_end {
+                    continue;
+                }
+                let from_abs = offset.max(slice.file_byte_start);
+                let to_abs = window_end.min(slice.file_byte_end);
+                let want = (to_abs - from_abs) as usize;
+                if want == 0 {
+                    continue;
+                }
+                // Zero-copy: write directly into the remaining
+                // slice of the caller's buffer.
+                let n = store
+                    .decoded_range_into(
+                        slice.drop_id.as_bytes(),
+                        from_abs - slice.file_byte_start,
+                        &mut buf[filled..filled + want],
+                    )
+                    .transpose()?
+                    .ok_or_else(|| CoreError::Corrupt {
+                        reason: "slice references a drop missing from every slab".into(),
+                    })?;
+                filled += n;
+                if filled == buf.len() || slice.file_byte_end >= window_end {
+                    break;
+                }
+            }
+            Ok(filled)
+        }
+        _ => Ok(0),
     }
 }
 
@@ -446,6 +473,7 @@ mod tests {
 
     struct Fixture {
         dir: std::path::PathBuf,
+        drops: usize,
     }
 
     impl Fixture {
@@ -473,7 +501,10 @@ mod tests {
                     .expect("flat metadata locator");
                 std::fs::write(dir.join(name), &side.bytes).expect("metadata sidecar");
             }
-            Fixture { dir }
+            Fixture {
+                dir,
+                drops: art.drop_count,
+            }
         }
 
         fn image(&self) -> PathBuf {
@@ -559,6 +590,69 @@ mod tests {
             reader.cache_stats()
         );
         let _ = std::fs::remove_dir_all(&src);
+    }
+
+    /// v0.3.44 windowed seam: a deep-offset window must decode at
+    /// most the drops it covers — the drops before the window are
+    /// skipped without decoding (the pre-window cost of `cat
+    /// --offset` was the whole prefix).
+    #[test]
+    fn deep_window_decodes_only_covering_drops() {
+        let mut whole = Vec::with_capacity(96 * 16 * 1024);
+        let mut state = 0xD1CE_D1CE_D1CE_D1CEu64;
+        while whole.len() < 96 * 16 * 1024 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            whole.push((state >> 56) as u8);
+        }
+        let src = build_src("deepwin");
+        std::fs::write(src.join("multi.bin"), &whole).expect("write multi");
+        let fx = Fixture::pack(&src);
+        assert!(
+            fx.drops >= 5,
+            "fixture must span many drops (got {})",
+            fx.drops
+        );
+
+        let reader = ImageReader::open(&fx.image(), ReadConfig::default()).expect("open");
+        let file = reader.file("/multi.bin").expect("file");
+        let before = reader.cache_stats().misses;
+
+        // The file's last byte is covered by exactly one drop: a
+        // fresh reader serving it must decode that drop and no other.
+        let mut last = [0u8; 1];
+        let n = file
+            .read_at(whole.len() as u64 - 1, &mut last)
+            .expect("read_at tail");
+        assert_eq!(n, 1);
+        assert_eq!(last[0], whole[whole.len() - 1]);
+
+        // <= 2: a cold non-seekable drop counts its miss twice
+        // (the range preamble's lookup and `decoded`'s own) — the
+        // bound pins "the covering drop(s) only", never the prefix;
+        // the fixture spans at least 5.
+        let decoded = reader.cache_stats().misses - before;
+        assert!(
+            decoded <= 2,
+            "one-byte tail window decoded {decoded} drops; only the covering one may decode"
+        );
+
+        // The first byte, on a fresh reader: same bound, other end.
+        let reader2 = ImageReader::open(&fx.image(), ReadConfig::default()).expect("open");
+        let file2 = reader2.file("/multi.bin").expect("file");
+        let before2 = reader2.cache_stats().misses;
+        let n = file2.read_at(0, &mut last).expect("read_at head");
+        assert_eq!(n, 1);
+        assert_eq!(last[0], whole[0]);
+        let decoded2 = reader2.cache_stats().misses - before2;
+        assert!(
+            decoded2 <= 2,
+            "one-byte head window decoded {decoded2} drops"
+        );
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&fx.dir);
     }
 
     #[test]

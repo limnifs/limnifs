@@ -621,6 +621,17 @@ impl crate::slab_source::SlabSource for CachedSlabStore {
     fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, crate::CoreError>> {
         CachedSlabStore::plaintext_for(self, drop_id)
     }
+    /// Seekable/zero-copy fast path over the inherent method; every
+    /// other source falls back to the trait's decode-and-copy
+    /// default. One seekable implementation, two views.
+    fn decoded_range_into(
+        &self,
+        drop_id: &[u8; 32],
+        off: u64,
+        buf: &mut [u8],
+    ) -> Option<Result<usize, crate::CoreError>> {
+        CachedSlabStore::decoded_range_into(self, drop_id, off, buf)
+    }
     fn slab_count(&self) -> usize {
         self.slab_count()
     }

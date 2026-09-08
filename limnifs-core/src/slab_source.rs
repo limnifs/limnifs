@@ -30,6 +30,45 @@ pub trait SlabSource: Send + Sync {
     #[must_use]
     fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>>;
 
+    /// Zero-copy ranged decode: write the plaintext bytes at
+    /// `[off, off + buf.len())` of `drop_id` directly into `buf`,
+    /// returning how many were filled (`0` past the drop's end).
+    ///
+    /// Returns:
+    /// - `None` if no slab contains this drop.
+    /// - `Some(Err(..))` if the drop fails to decode.
+    /// - `Some(Ok(n))` with `n <= buf.len()` on success.
+    ///
+    /// The default decodes the whole drop and copies the window —
+    /// correct for every source. Seekable-aware sources (the
+    /// decoded-drop cache) override it to decode only the frames
+    /// the window covers, which is what makes deep-offset reads
+    /// cheap (`limni cat --offset`, FUSE random access).
+    fn decoded_range_into(
+        &self,
+        drop_id: &[u8; 32],
+        off: u64,
+        buf: &mut [u8],
+    ) -> Option<Result<usize, CoreError>> {
+        if buf.is_empty() {
+            return Some(Ok(0));
+        }
+        match self.plaintext_for(drop_id) {
+            None => None,
+            Some(Err(e)) => Some(Err(e)),
+            Some(Ok(full)) => {
+                let total = full.len() as u64;
+                Some(if off >= total {
+                    Ok(0)
+                } else {
+                    let avail = usize::try_from(total - off).unwrap_or(0).min(buf.len());
+                    buf[..avail].copy_from_slice(&full[off as usize..off as usize + avail]);
+                    Ok(avail)
+                })
+            }
+        }
+    }
+
     /// Number of slabs in the source.
     #[must_use]
     fn slab_count(&self) -> usize;
