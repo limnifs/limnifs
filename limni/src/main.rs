@@ -2228,43 +2228,43 @@ fn cat(
         }
     }
 
-    // Stream chunk-by-chunk (bounded by one chunk of memory) and
-    // apply offset/length at chunk boundaries — identical output to
-    // the old materialize-then-slice path, without multi-GiB RSS
-    // on multi-GiB files.
+    // Serve [start, start+take) through the shared windowed-read
+    // seam: slices before the window are never decoded (a deep
+    // --offset costs the covering drops, not everything before
+    // them), memory is bounded by one window, and the output is
+    // byte-identical to the materialize-then-slice path.
     let total_len = target_inode.file_len();
     let start = offset.unwrap_or(0).min(total_len);
     let remaining = total_len - start;
     let take = length.unwrap_or(remaining).min(remaining);
-    let mut skipped = 0u64;
-    let mut written = 0u64;
     let chain = load_slab_chain(image, &slab_index, _dict_section.as_ref(), bases)?;
     let store: Option<&dyn limnifs_core::slab_source::SlabSource> = chain
         .as_ref()
         .map(|c| c as &dyn limnifs_core::slab_source::SlabSource);
+    const CAT_WINDOW: usize = 256 * 1024;
+    let window_len = CAT_WINDOW.min(usize::try_from(take).unwrap_or(CAT_WINDOW));
+    let mut window = vec![0u8; window_len.max(1)];
+    let mut pos = start;
+    let mut written = 0u64;
     let out = std::io::stdout();
     let mut out = out.lock();
-    for chunk in limnifs_core::live_tree::file_chunks(&target_inode, store) {
-        let chunk = chunk.map_err(map_err)?;
-        let chunk_len = u64::try_from(chunk.len()).unwrap_or(u64::MAX);
-        let chunk_end = skipped.saturating_add(chunk_len);
-        // Overlap of [skipped, chunk_end) with [start, start+take).
-        let lo = skipped.max(start);
-        let hi = chunk_end.min(start.saturating_add(take));
-        if hi > lo {
-            let lo_us = usize::try_from(lo - skipped).unwrap_or(0);
-            let hi_us = usize::try_from(hi - skipped).unwrap_or(chunk.len());
-            out.write_all(&chunk[lo_us..hi_us])
-                .map_err(|source| CliError::ReadFailed {
-                    path: image.to_path_buf(),
-                    source,
-                })?;
-            written += hi - lo;
-        }
-        skipped = chunk_end;
-        if written >= take {
+    while written < take {
+        let want = window
+            .len()
+            .min(usize::try_from(take - written).unwrap_or(window.len()));
+        let n =
+            limnifs_core::read::read_window_into(&target_inode, store, pos, &mut window[..want])
+                .map_err(map_err)?;
+        if n == 0 {
             break;
         }
+        out.write_all(&window[..n])
+            .map_err(|source| CliError::ReadFailed {
+                path: image.to_path_buf(),
+                source,
+            })?;
+        pos += n as u64;
+        written += n as u64;
     }
     Ok(())
 }

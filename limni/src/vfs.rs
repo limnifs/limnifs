@@ -221,72 +221,22 @@ impl Vfs {
             .metadata_blob
             .inode_by_number(ino)
             .ok_or(VfsError::NotFound)?;
-        match &inode.content_handle {
-            ContentHandle::InlineData(d) => {
-                let start = usize::try_from(offset).unwrap_or(0);
-                let end = start.saturating_add(len).min(d.len());
-                if start >= d.len() {
-                    return Ok(Vec::new());
-                }
-                Ok(d[start..end].to_vec())
-            }
-            ContentHandle::SliceMap(slices) => self.read_windowed(slices, offset, len),
-            _ => Err(VfsError::NotFound),
+        if !matches!(
+            inode.content_handle,
+            ContentHandle::InlineData(_) | ContentHandle::SliceMap(_)
+        ) {
+            return Err(VfsError::NotFound);
         }
+        let mut buf = vec![0u8; len];
+        let n = limnifs_core::read::read_window_into(inode, Some(&self.store), offset, &mut buf)?;
+        buf.truncate(n);
+        Ok(buf)
     }
 
     /// Snapshot of the decoded-drop cache counters.
     #[must_use]
     pub fn cache_stats(&self) -> limnifs_core::slab_cache::CacheStats {
         self.store.cache_stats()
-    }
-
-    /// Serve [offset, offset+len) by decompressing ONLY the drops the
-    /// window actually covers (limnifs#192): locate the covering
-    /// slice(s), decode each once through the bounded cache, copy the
-    /// covering bytes out of the shared handle. Never materializes
-    /// the whole file.
-    fn read_windowed(
-        &self,
-        slices: &[limnifs_core::inode::SliceRef],
-        offset: u64,
-        len: usize,
-    ) -> Result<Vec<u8>, VfsError> {
-        if len == 0 {
-            return Ok(Vec::new());
-        }
-        let window_end = offset.saturating_add(u64::try_from(len).unwrap_or(u64::MAX));
-        // Zero-copy: decode writes directly into the output buffer
-        // (no intermediate Vec). The buffer starts zeroed so the
-        // unused tail is initialized; `truncate(filled)` discards it.
-        let mut out = vec![0u8; len];
-        let mut filled = 0usize;
-        for slice in slices {
-            if slice.file_byte_end <= offset || slice.file_byte_start >= window_end {
-                continue;
-            }
-            let from_abs = offset.max(slice.file_byte_start);
-            let to_abs = window_end.min(slice.file_byte_end);
-            let want = (to_abs - from_abs) as usize;
-            if want == 0 {
-                continue;
-            }
-            let n = self
-                .store
-                .decoded_range_into(
-                    slice.drop_id.as_bytes(),
-                    from_abs - slice.file_byte_start,
-                    &mut out[filled..filled + want],
-                )
-                .ok_or(VfsError::NotFound)?
-                .map_err(VfsError::Core)?;
-            filled += n;
-            if filled == len || slice.file_byte_end >= window_end {
-                break;
-            }
-        }
-        out.truncate(filled);
-        Ok(out)
     }
 }
 
