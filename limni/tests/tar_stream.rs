@@ -16,7 +16,7 @@ use limnifs_core::{
     parse_metadata_reference, ManifestCursor,
 };
 
-use limnifs_write::stream::StreamWriter;
+use limnifs_write::stream::{EntryMeta, StreamWriter};
 use limnifs_write::WriteConfig;
 
 /// The CLI's `limn --from-tar` loop, lifted verbatim enough to be
@@ -36,6 +36,9 @@ fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
         let mut entry = entry.expect("entry");
         let mtime_ns = entry.header().mtime().unwrap_or(0) * 1_000_000_000;
         let mode = entry.header().mode().unwrap_or(0o644) & 0o7777;
+        let uid = u32::try_from(entry.header().uid().unwrap_or(0)).unwrap_or(u32::MAX);
+        let gid = u32::try_from(entry.header().gid().unwrap_or(0)).unwrap_or(u32::MAX);
+        let meta = EntryMeta::new(mtime_ns, mode).owner(uid, gid);
         // Mirror the CLI: AppleDouble members are transport noise.
         if entry
             .path()
@@ -66,11 +69,11 @@ fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
             .trim_end_matches('/')
             .to_owned();
         match entry.header().entry_type() {
-            tar::EntryType::Directory => writer.add_dir(&name, mtime_ns, mode).expect("dir"),
+            tar::EntryType::Directory => writer.add_dir(&name, meta).expect("dir"),
             tar::EntryType::Symlink => {
                 let target = entry.link_name().expect("link").expect("target");
                 writer
-                    .add_symlink(&name, &target.to_string_lossy(), mtime_ns, mode)
+                    .add_symlink(&name, &target.to_string_lossy(), meta)
                     .expect("symlink");
             }
             tar::EntryType::Regular => {
@@ -84,11 +87,11 @@ fn pack_tar<R: Read>(tar_bytes: &mut R) -> limnifs_write::WriteArtifact {
                     let end = start + usize::try_from(declared).expect("size");
                     let data = tar_bytes.get(start..end).expect("entry range");
                     writer
-                        .stage_file(&name, mtime_ns, mode, &pax_xattrs, data)
+                        .stage_file(&name, meta, &pax_xattrs, data)
                         .expect("staged file");
                 } else {
                     writer
-                        .add_file(&name, mtime_ns, mode, &pax_xattrs, &mut entry)
+                        .add_file(&name, meta, &pax_xattrs, &mut entry)
                         .expect("streamed file");
                 }
             }
@@ -178,6 +181,17 @@ impl limnifs_core::live_tree::LiveTreeSink for CollectSink<'_> {
         );
         Ok(())
     }
+}
+
+/// The artifact's parsed metadata blob (test trees stay inline).
+fn parse_blob(artifact: &limnifs_write::WriteArtifact) -> limnifs_core::MetadataBlob {
+    let mut cursor = limnifs_core::ManifestCursor::new(&artifact.bytes);
+    limnifs_core::parse_manifest_header(&mut cursor).expect("header");
+    limnifs_core::parse_feature_flags_section(&mut cursor).expect("flags");
+    let meta_ref = limnifs_core::parse_metadata_reference(&mut cursor).expect("metadata reference");
+    let inline = meta_ref.inline_metadata.as_ref().expect("inline");
+    let mut blob_cursor = limnifs_core::ManifestCursor::new(inline);
+    limnifs_core::parse_metadata_blob(&mut blob_cursor).expect("blob")
 }
 
 /// Walk the artifact's metadata tree via the CLI's own read path
@@ -327,6 +341,7 @@ fn pack_pax_tar(tar_bytes: &[u8]) -> limnifs_write::WriteArtifact {
         let mut entry = entry.expect("entry");
         let mtime_ns = entry.header().mtime().unwrap_or(0) * 1_000_000_000;
         let mode = entry.header().mode().unwrap_or(0o644) & 0o7777;
+        let meta = EntryMeta::new(mtime_ns, mode);
         let mut pax_xattrs: Vec<(String, Vec<u8>)> = Vec::new();
         if let Ok(Some(exts)) = entry.pax_extensions() {
             for ext in exts.flatten() {
@@ -341,7 +356,7 @@ fn pack_pax_tar(tar_bytes: &[u8]) -> limnifs_write::WriteArtifact {
             // (pax 'x' members are consumed by the crate itself and
             // never surface as entries)
             tar::EntryType::Regular => writer
-                .stage_file("f.txt", mtime_ns, mode, &pax_xattrs, b"body")
+                .stage_file("f.txt", meta, &pax_xattrs, b"body")
                 .expect("stage"),
             other => panic!("unexpected {other:?}"),
         }
@@ -379,9 +394,40 @@ fn unrepresentable_xattrs_are_rejected() {
     let mut writer = limnifs_write::stream::StreamWriter::new(config).expect("writer");
     let bad = vec![("bad\nkey".to_owned(), b"v".to_vec())];
     assert!(
-        writer.stage_file("f.txt", 0, 0o644, &bad, b"body").is_err(),
+        writer
+            .stage_file("f.txt", EntryMeta::new(0, 0o644), &bad, b"body")
+            .is_err(),
         "newline in key is unrepresentable in pax framing"
     );
+}
+
+/// v0.3.44: tar header uid/gid are first-class — ingestion must
+/// carry them onto the inode, not stamp root.
+#[test]
+fn tar_header_ownership_lands_on_inodes() {
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut h = tar::Header::new_gnu();
+    h.set_size(5);
+    h.set_mode(0o640);
+    h.set_uid(1000);
+    h.set_gid(20);
+    h.set_mtime(1_700_000_123);
+    h.set_cksum();
+    builder
+        .append_data(&mut h, "owned.txt", &b"hello"[..])
+        .expect("owned");
+    let tar_bytes = builder.into_inner().expect("tar");
+
+    let artifact = pack_tar(&mut tar_bytes.as_slice());
+    // Locate the inode by its distinctive mode+owner.
+    let blob = parse_blob(&artifact);
+    let inode = blob
+        .inodes
+        .iter()
+        .find(|i| i.uid == 1000 && i.gid == 20)
+        .expect("owned inode");
+    assert_eq!(inode.mode & 0o7777, 0o640);
+    assert_eq!(inode.mtime_ns, 1_700_000_123 * 1_000_000_000);
 }
 
 #[test]

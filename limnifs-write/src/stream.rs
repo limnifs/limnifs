@@ -74,23 +74,52 @@ impl StreamCodecs {
     }
 }
 
+/// One entry's unix identity, applied to its emitted inode:
+/// nanosecond mtime, permission bits, and owner. Replaces the
+/// scattered `(mtime_ns, perms)` pairs — ownership is identity,
+/// not an afterthought (the tar headers carry it first-class and
+/// the directory writer captures it since v0.3.37).
+#[derive(Clone, Copy, Debug)]
+pub struct EntryMeta {
+    pub mtime_ns: u64,
+    pub perms: u32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+impl EntryMeta {
+    /// Identity with root ownership; chain `.owner` for real uid/gid.
+    #[must_use]
+    pub const fn new(mtime_ns: u64, perms: u32) -> Self {
+        Self {
+            mtime_ns,
+            perms,
+            uid: 0,
+            gid: 0,
+        }
+    }
+
+    /// Set the owner.
+    #[must_use]
+    pub const fn owner(mut self, uid: u32, gid: u32) -> Self {
+        self.uid = uid;
+        self.gid = gid;
+        self
+    }
+}
+
 /// A directory level under construction: children in name order,
-/// plus the mtime carried by an explicit `add_dir` (implicit
-/// directories created by a nested file path keep mtime 0).
+/// plus the identity carried by an explicit `add_dir` (implicit
+/// directories created by a nested file path keep mtime 0 / root).
 struct StreamDir {
-    mtime_ns: u64,
-    /// Permission bits for the emitted directory inode. The default
-    /// (root and implicit parents) mirrors the directory writer's
-    /// historical 0755 — a zero here would lock extracted trees.
-    perms: u32,
+    meta: EntryMeta,
     children: BTreeMap<String, StreamNode>,
 }
 
 impl Default for StreamDir {
     fn default() -> Self {
         Self {
-            mtime_ns: 0,
-            perms: 0o755,
+            meta: EntryMeta::new(0, 0o755),
             children: BTreeMap::new(),
         }
     }
@@ -143,8 +172,7 @@ pub struct StreamWriter<'a> {
 /// the chunk/hash/compress work is pending.
 struct StagedEntry<'a> {
     name: String,
-    mtime_ns: u64,
-    perms: u32,
+    meta: EntryMeta,
     xattrs: Vec<limnifs_core::inode::XAttr>,
     inode_number: u64,
     data: &'a [u8],
@@ -190,8 +218,7 @@ impl<'a> StreamWriter<'a> {
     pub fn add_file(
         &mut self,
         name: &str,
-        mtime_ns: u64,
-        perms: u32,
+        meta: EntryMeta,
         xattrs: &[(String, Vec<u8>)],
         reader: &mut dyn Read,
     ) -> Result<(), WriteError> {
@@ -204,10 +231,10 @@ impl<'a> StreamWriter<'a> {
             path: PathBuf::from(name),
             inode_number,
             file_len: 0,
-            mtime_ns,
-            mode: limnifs_core::inode::S_IFREG | (perms & 0o7777),
-            uid: 0,
-            gid: 0,
+            mtime_ns: meta.mtime_ns,
+            mode: limnifs_core::inode::S_IFREG | (meta.perms & 0o7777),
+            uid: meta.uid,
+            gid: meta.gid,
         };
         let wire_xattrs = to_wire_xattrs(xattrs)?;
         self.ctx.pending_files.push(pf.clone());
@@ -223,10 +250,10 @@ impl<'a> StreamWriter<'a> {
             }
             self.ctx.inodes.push(PendingInode {
                 number: inode_number,
-                mode: limnifs_core::inode::S_IFREG | (perms & 0o7777),
-                uid: 0,
-                gid: 0,
-                mtime_ns,
+                mode: limnifs_core::inode::S_IFREG | (meta.perms & 0o7777),
+                uid: meta.uid,
+                gid: meta.gid,
+                mtime_ns: meta.mtime_ns,
                 xattrs: wire_xattrs,
                 content: PendingContent::Inline(data),
             });
@@ -291,8 +318,7 @@ impl<'a> StreamWriter<'a> {
     pub fn stage_file(
         &mut self,
         name: &str,
-        mtime_ns: u64,
-        perms: u32,
+        meta: EntryMeta,
         xattrs: &[(String, Vec<u8>)],
         data: &'a [u8],
     ) -> Result<(), WriteError> {
@@ -308,8 +334,7 @@ impl<'a> StreamWriter<'a> {
             .insert(leaf.to_owned(), StreamNode::File { inode_number });
         self.staged.push(StagedEntry {
             name: name.to_owned(),
-            mtime_ns,
-            perms,
+            meta,
             xattrs: to_wire_xattrs(xattrs)?,
             inode_number,
             data,
@@ -317,15 +342,16 @@ impl<'a> StreamWriter<'a> {
         Ok(())
     }
 
-    /// Add (or declare) a directory at `name` with the given mtime.
-    /// Implicit parents created by nested entries keep mtime 0;
-    /// calling this on an existing implicit directory stamps it.
+    /// Add (or declare) a directory at `name` with the given
+    /// identity. Implicit parents created by nested entries keep
+    /// mtime 0 / root; calling this on an existing implicit
+    /// directory stamps it.
     ///
     /// # Errors
     ///
     /// [`WriteError::Io`] if the name is invalid or conflicts with
     /// a non-directory entry.
-    pub fn add_dir(&mut self, name: &str, mtime_ns: u64, perms: u32) -> Result<(), WriteError> {
+    pub fn add_dir(&mut self, name: &str, meta: EntryMeta) -> Result<(), WriteError> {
         if name == "/" {
             return Ok(()); // the root is materialised at finish
         }
@@ -335,15 +361,14 @@ impl<'a> StreamWriter<'a> {
                 parent.children.insert(
                     leaf.to_owned(),
                     StreamNode::Dir(StreamDir {
-                        mtime_ns,
-                        perms,
+                        meta,
                         children: BTreeMap::new(),
                     }),
                 );
                 Ok(())
             }
             Some(StreamNode::Dir(dir)) => {
-                dir.mtime_ns = mtime_ns;
+                dir.meta.mtime_ns = meta.mtime_ns;
                 Ok(())
             }
             Some(_) => Err(name_conflict(name)),
@@ -385,8 +410,7 @@ impl<'a> StreamWriter<'a> {
         &mut self,
         name: &str,
         target: &str,
-        mtime_ns: u64,
-        perms: u32,
+        meta: EntryMeta,
     ) -> Result<(), WriteError> {
         let (parent, leaf) = descend(&mut self.tree, name)?;
         if parent.children.contains_key(leaf) {
@@ -395,10 +419,10 @@ impl<'a> StreamWriter<'a> {
         let inode_number = self.ctx.alloc_inode();
         self.ctx.inodes.push(PendingInode {
             number: inode_number,
-            mode: limnifs_core::inode::S_IFLNK | (perms & 0o7777),
-            uid: 0,
-            gid: 0,
-            mtime_ns,
+            mode: limnifs_core::inode::S_IFLNK | (meta.perms & 0o7777),
+            uid: meta.uid,
+            gid: meta.gid,
+            mtime_ns: meta.mtime_ns,
             xattrs: Vec::new(),
             content: PendingContent::Symlink(target.to_owned()),
         });
@@ -474,10 +498,10 @@ impl<'a> StreamWriter<'a> {
                 path: std::path::PathBuf::from(&entry.name),
                 inode_number: entry.inode_number,
                 file_len: total_len,
-                mtime_ns: entry.mtime_ns,
-                mode: limnifs_core::inode::S_IFREG | (entry.perms & 0o7777),
-                uid: 0,
-                gid: 0,
+                mtime_ns: entry.meta.mtime_ns,
+                mode: limnifs_core::inode::S_IFREG | (entry.meta.perms & 0o7777),
+                uid: entry.meta.uid,
+                gid: entry.meta.gid,
             };
             self.ctx.pending_files.push(pf.clone());
             if total_len <= self.inline_threshold {
@@ -488,10 +512,10 @@ impl<'a> StreamWriter<'a> {
                 data.extend_from_slice(entry.data);
                 self.ctx.inodes.push(PendingInode {
                     number: entry.inode_number,
-                    mode: limnifs_core::inode::S_IFREG | (entry.perms & 0o7777),
-                    uid: 0,
-                    gid: 0,
-                    mtime_ns: entry.mtime_ns,
+                    mode: limnifs_core::inode::S_IFREG | (entry.meta.perms & 0o7777),
+                    uid: entry.meta.uid,
+                    gid: entry.meta.gid,
+                    mtime_ns: entry.meta.mtime_ns,
                     xattrs: entry.xattrs.clone(),
                     content: PendingContent::Inline(data),
                 });
@@ -527,10 +551,10 @@ impl<'a> StreamWriter<'a> {
         self.ctx.dir_nodes.push(encode_dir_node(&entries));
         self.ctx.inodes.push(PendingInode {
             number: inode_number,
-            mode: limnifs_core::inode::S_IFDIR | (dir.perms & 0o7777),
-            uid: 0,
-            gid: 0,
-            mtime_ns: dir.mtime_ns,
+            mode: limnifs_core::inode::S_IFDIR | (dir.meta.perms & 0o7777),
+            uid: dir.meta.uid,
+            gid: dir.meta.gid,
+            mtime_ns: dir.meta.mtime_ns,
             xattrs: Vec::new(),
             content: PendingContent::Directory(entries),
         });
@@ -668,11 +692,11 @@ mod tests {
     }
 
     fn add_all(w: &mut StreamWriter<'_>) {
-        w.add_dir("docs", 7_000_000_000_000, 0o755).expect("dir");
+        w.add_dir("docs", EntryMeta::new(7_000_000_000_000, 0o755))
+            .expect("dir");
         w.add_file(
             "docs/readme.txt",
-            1_000_000_000,
-            0o644,
+            EntryMeta::new(1_000_000_000, 0o644),
             &[],
             &mut b"hello stream writer\n".as_slice(),
         )
@@ -680,14 +704,17 @@ mod tests {
         let big = pseudo_random_bytes(9, 600 * 1024);
         w.add_file(
             "data/big.bin",
-            2_000_000_000,
-            0o755,
+            EntryMeta::new(2_000_000_000, 0o755),
             &[],
             &mut big.as_slice(),
         )
         .expect("file 2");
-        w.add_symlink("latest", "docs/readme.txt", 3_000_000_000, 0o777)
-            .expect("symlink");
+        w.add_symlink(
+            "latest",
+            "docs/readme.txt",
+            EntryMeta::new(3_000_000_000, 0o777),
+        )
+        .expect("symlink");
     }
 
     #[test]
@@ -713,6 +740,67 @@ mod tests {
         assert!(artifact.slabs.is_empty());
     }
 
+    /// v0.3.44: the stream seam carries ownership, not just
+    /// mtime/perms — EntryMeta lands verbatim on the emitted inode
+    /// for every entry kind (file, staged file, dir, symlink).
+    #[test]
+    fn entry_meta_lands_on_inodes() {
+        let artifact = {
+            let mut w = writer();
+            w.add_dir("d", EntryMeta::new(1_111_111_111_111, 0o755).owner(12, 34))
+                .expect("dir");
+            w.add_file(
+                "d/f.txt",
+                EntryMeta::new(1_234_567_891_234, 0o640).owner(1000, 20),
+                &[],
+                &mut b"body\n".as_slice(),
+            )
+            .expect("file");
+            w.stage_file(
+                "d/s.bin",
+                EntryMeta::new(2_222_222_222_222, 0o600).owner(1001, 21),
+                &[],
+                b"staged",
+            )
+            .expect("staged");
+            w.add_symlink(
+                "d/l",
+                "d/f.txt",
+                EntryMeta::new(3_333_333_333_333, 0o777).owner(1002, 22),
+            )
+            .expect("symlink");
+            w.finish().expect("finish")
+        };
+        use limnifs_core::{parse_metadata_blob, parse_metadata_reference, ManifestCursor};
+        let mut cursor = ManifestCursor::new(&artifact.bytes);
+        limnifs_core::parse_manifest_header(&mut cursor).expect("header");
+        limnifs_core::parse_feature_flags_section(&mut cursor).expect("flags");
+        let meta_ref = parse_metadata_reference(&mut cursor).expect("meta");
+        let inline = meta_ref.inline_metadata.as_ref().expect("inline");
+        let mut blob_cursor = ManifestCursor::new(inline);
+        let blob = parse_metadata_blob(&mut blob_cursor).expect("blob");
+
+        let file = blob
+            .inodes
+            .iter()
+            .find(|i| i.uid == 1000 && i.gid == 20)
+            .expect("owned file inode");
+        assert_eq!(file.mtime_ns, 1_234_567_891_234);
+        assert_eq!(file.mode & 0o7777, 0o640);
+        assert!(blob
+            .inodes
+            .iter()
+            .any(|i| i.uid == 1001 && i.gid == 21 && i.mtime_ns == 2_222_222_222_222));
+        assert!(blob
+            .inodes
+            .iter()
+            .any(|i| i.uid == 1002 && i.gid == 22 && i.mtime_ns == 3_333_333_333_333));
+        assert!(blob.inodes.iter().any(|i| i.is_directory()
+            && i.uid == 12
+            && i.gid == 34
+            && i.mtime_ns == 1_111_111_111_111));
+    }
+
     #[test]
     fn small_files_inline_and_big_files_slab() {
         let artifact = {
@@ -731,42 +819,56 @@ mod tests {
         let big_b = pseudo_random_bytes(32, 900 * 1024);
         let staged = {
             let mut w = writer();
-            w.add_dir("docs", 7_000_000_000_000, 0o755).expect("dir");
+            w.add_dir("docs", EntryMeta::new(7_000_000_000_000, 0o755))
+                .expect("dir");
             w.add_file(
                 "tiny.txt",
-                1,
-                0o644,
+                EntryMeta::new(1, 0o644),
                 &[],
                 &mut b"small inline entry\n".as_slice(),
             )
             .expect("immediate file");
-            w.stage_file("docs/a.bin", 2, 0o644, &[], &big_a)
+            w.stage_file("docs/a.bin", EntryMeta::new(2, 0o644), &[], &big_a)
                 .expect("staged a");
-            w.stage_file("docs/b.bin", 3, 0o755, &[], &big_b)
+            w.stage_file("docs/b.bin", EntryMeta::new(3, 0o755), &[], &big_b)
                 .expect("staged b");
-            w.stage_file("docs/tiny2.txt", 4, 0o600, &[], b"also inline\n")
-                .expect("staged tiny");
+            w.stage_file(
+                "docs/tiny2.txt",
+                EntryMeta::new(4, 0o600),
+                &[],
+                b"also inline\n",
+            )
+            .expect("staged tiny");
             w.finish().expect("finish staged").bytes
         };
         let serial = {
             let mut w = writer();
-            w.add_dir("docs", 7_000_000_000_000, 0o755).expect("dir");
+            w.add_dir("docs", EntryMeta::new(7_000_000_000_000, 0o755))
+                .expect("dir");
             w.add_file(
                 "tiny.txt",
-                1,
-                0o644,
+                EntryMeta::new(1, 0o644),
                 &[],
                 &mut b"small inline entry\n".as_slice(),
             )
             .expect("immediate file");
-            w.add_file("docs/a.bin", 2, 0o644, &[], &mut big_a.as_slice())
-                .expect("serial a");
-            w.add_file("docs/b.bin", 3, 0o755, &[], &mut big_b.as_slice())
-                .expect("serial b");
+            w.add_file(
+                "docs/a.bin",
+                EntryMeta::new(2, 0o644),
+                &[],
+                &mut big_a.as_slice(),
+            )
+            .expect("serial a");
+            w.add_file(
+                "docs/b.bin",
+                EntryMeta::new(3, 0o755),
+                &[],
+                &mut big_b.as_slice(),
+            )
+            .expect("serial b");
             w.add_file(
                 "docs/tiny2.txt",
-                4,
-                0o600,
+                EntryMeta::new(4, 0o600),
                 &[],
                 &mut b"also inline\n".as_slice(),
             )
@@ -779,44 +881,64 @@ mod tests {
     #[test]
     fn staged_detects_conflicts_and_bad_names() {
         let mut w = writer();
-        w.stage_file("a.txt", 0, 0o644, &[], b"x").expect("stage");
-        assert!(w.stage_file("a.txt", 0, 0o644, &[], b"y").is_err());
-        assert!(w.stage_file("", 0, 0o644, &[], b"y").is_err());
-        assert!(w.stage_file("/abs", 0, 0o644, &[], b"y").is_err());
-        assert!(w.stage_file("a.txt/child", 0, 0o644, &[], b"y").is_err());
+        w.stage_file("a.txt", EntryMeta::new(0, 0o644), &[], b"x")
+            .expect("stage");
+        assert!(w
+            .stage_file("a.txt", EntryMeta::new(0, 0o644), &[], b"y")
+            .is_err());
+        assert!(w
+            .stage_file("", EntryMeta::new(0, 0o644), &[], b"y")
+            .is_err());
+        assert!(w
+            .stage_file("/abs", EntryMeta::new(0, 0o644), &[], b"y")
+            .is_err());
+        assert!(w
+            .stage_file("a.txt/child", EntryMeta::new(0, 0o644), &[], b"y")
+            .is_err());
     }
 
     #[test]
     fn rejects_bad_and_conflicting_names() {
         let mut w = writer();
-        assert!(w.add_file("", 0, 0o644, &[], &mut [].as_slice()).is_err());
         assert!(w
-            .add_file("/abs", 0, 0o644, &[], &mut [].as_slice())
+            .add_file("", EntryMeta::new(0, 0o644), &[], &mut [].as_slice())
             .is_err());
         assert!(w
-            .add_file("a/../b", 0, 0o644, &[], &mut [].as_slice())
+            .add_file("/abs", EntryMeta::new(0, 0o644), &[], &mut [].as_slice())
             .is_err());
         assert!(w
-            .add_file("ok.txt", 0, 0o644, &[], &mut [].as_slice())
+            .add_file("a/../b", EntryMeta::new(0, 0o644), &[], &mut [].as_slice())
+            .is_err());
+        assert!(w
+            .add_file("ok.txt", EntryMeta::new(0, 0o644), &[], &mut [].as_slice())
             .is_ok());
         // Same leaf again, even with identical type: conflict.
         assert!(w
-            .add_file("ok.txt", 0, 0o644, &[], &mut [].as_slice())
+            .add_file("ok.txt", EntryMeta::new(0, 0o644), &[], &mut [].as_slice())
             .is_err());
         // File where a directory must pass through.
         assert!(w
-            .add_file("ok.txt/child", 0, 0o644, &[], &mut [].as_slice())
+            .add_file(
+                "ok.txt/child",
+                EntryMeta::new(0, 0o644),
+                &[],
+                &mut [].as_slice()
+            )
             .is_err());
         // Symlink over a file.
-        assert!(w.add_symlink("ok.txt", "x", 0, 0o777).is_err());
+        assert!(w
+            .add_symlink("ok.txt", "x", EntryMeta::new(0, 0o777))
+            .is_err());
         // Windows-separator and NUL names escape extraction on
         // Windows binaries (or crash the io layer); reject at pack.
         assert!(w
-            .add_file(r"a\b", 0, 0o644, &[], &mut [].as_slice())
+            .add_file(r"a\b", EntryMeta::new(0, 0o644), &[], &mut [].as_slice())
             .is_err());
-        assert!(w.add_dir(r"\\server\share", 0, 0o755).is_err());
         assert!(w
-            .add_file("nul\0x", 0, 0o644, &[], &mut [].as_slice())
+            .add_dir(r"\\server\share", EntryMeta::new(0, 0o755))
+            .is_err());
+        assert!(w
+            .add_file("nul\0x", EntryMeta::new(0, 0o644), &[], &mut [].as_slice())
             .is_err());
     }
 }

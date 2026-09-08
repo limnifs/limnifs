@@ -13,7 +13,7 @@ use limnifs_core::{
     parse_feature_flags_section, parse_manifest_header, parse_metadata_blob,
     parse_metadata_reference, ManifestCursor, MetadataBlob,
 };
-use limnifs_write::stream::StreamWriter;
+use limnifs_write::stream::{EntryMeta, StreamWriter};
 use limnifs_write::{write_directory_with_config, WriteArtifact, WriteConfig};
 
 fn make_workdir(name: &str) -> PathBuf {
@@ -101,7 +101,7 @@ fn stream_hardlink_shares_inode() {
     let data = vec![0x11u8; 600 * 1024];
     let mut writer = StreamWriter::new(config).expect("writer");
     writer
-        .stage_file("orig.bin", 1, 0o644, &[], &data)
+        .stage_file("orig.bin", EntryMeta::new(1, 0o644), &[], &data)
         .expect("stage");
     writer.add_hardlink("link.bin", "orig.bin").expect("link");
     let artifact = writer.finish().expect("finish");
@@ -138,6 +138,6 @@ fn stream_hardlink_shares_inode() {
     // Bad targets are rejected.
     let mut w = StreamWriter::new(config).expect("writer");
     assert!(w.add_hardlink("x", "missing").is_err());
-    w.add_dir("d", 1, 0o755).expect("dir");
+    w.add_dir("d", EntryMeta::new(1, 0o755)).expect("dir");
     assert!(w.add_hardlink("x", "d").is_err(), "directory target");
 }

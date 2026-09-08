@@ -13,7 +13,7 @@ use limnifs_core::{
     parse_feature_flags_section, parse_manifest_header, parse_metadata_blob,
     parse_metadata_reference, ManifestCursor, MetadataBlob,
 };
-use limnifs_write::stream::StreamWriter;
+use limnifs_write::stream::{EntryMeta, StreamWriter};
 use limnifs_write::{write_directory_with_config, WriteArtifact, WriteConfig};
 
 fn make_workdir(name: &str) -> PathBuf {
@@ -95,14 +95,26 @@ fn stream_entries_carry_permission_bits() {
     let config: &'static WriteConfig = Box::leak(Box::new(WriteConfig::default_v0_1()));
     let mut writer = StreamWriter::new(config).expect("writer");
     writer
-        .stage_file("script.sh", 1, 0o755, &[], b"#!/bin/sh\necho hi\n")
+        .stage_file(
+            "script.sh",
+            EntryMeta::new(1, 0o755),
+            &[],
+            b"#!/bin/sh\necho hi\n",
+        )
         .expect("stage");
-    writer.add_dir("dir", 2, 0o700).expect("dir");
     writer
-        .add_file("dir/ro.txt", 3, 0o400, &[], &mut b"read only".as_slice())
+        .add_dir("dir", EntryMeta::new(2, 0o700))
+        .expect("dir");
+    writer
+        .add_file(
+            "dir/ro.txt",
+            EntryMeta::new(3, 0o400),
+            &[],
+            &mut b"read only".as_slice(),
+        )
         .expect("file");
     writer
-        .add_symlink("link", "dir/ro.txt", 4, 0o777)
+        .add_symlink("link", "dir/ro.txt", EntryMeta::new(4, 0o777))
         .expect("symlink");
     let artifact = writer.finish().expect("finish");
     let blob = parse_blob(&artifact);

@@ -1390,6 +1390,31 @@ fn layer(
     Ok(())
 }
 
+/// Parse a pax `mtime` record value — decimal `seconds[.fraction]`
+/// — into nanoseconds. String arithmetic only: 1.7e9 seconds with
+/// 9 fractional digits is not f64-exact, so there is no float
+/// path. Fractions are right-padded to 9 digits (the pax spec
+/// allows at most 9; longer runs are truncated, not rejected).
+/// Returns `None` on any malformed value; the caller falls back to
+/// the ustar header's whole seconds.
+#[cfg(feature = "tar")]
+fn parse_pax_mtime_ns(value: &str) -> Option<u64> {
+    let (secs, frac) = match value.split_once('.') {
+        Some((s, f)) => (s, f),
+        None => (value, ""),
+    };
+    let secs: u64 = secs.parse().ok()?;
+    if !frac.is_empty() && !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mut digits: String = frac.chars().take(9).collect();
+    while digits.len() < 9 {
+        digits.push('0');
+    }
+    let ns: u64 = digits.parse().ok()?;
+    secs.checked_mul(1_000_000_000)?.checked_add(ns)
+}
+
 #[cfg(feature = "tar")]
 fn limn_from_tar(
     tar_path: &Path,
@@ -1443,11 +1468,7 @@ fn limn_from_tar(
             path: tar_path.to_path_buf(),
             source,
         })?;
-        let mtime_ns = entry
-            .header()
-            .mtime()
-            .unwrap_or(0)
-            .saturating_mul(1_000_000_000);
+        let mtime_secs = entry.header().mtime().unwrap_or(0);
         let mode = entry
             .header()
             .mode()
@@ -1455,12 +1476,26 @@ fn limn_from_tar(
                 tar::EntryType::Directory => 0o755,
                 _ => 0o644,
             }) as u32;
+        // Owner from the header fields (first-class in tar since
+        // the format's beginning; the inode carries them since
+        // v0.3.37 and the stream seam since v0.3.44).
+        let uid = u32::try_from(entry.header().uid().unwrap_or(0)).unwrap_or(u32::MAX);
+        let gid = u32::try_from(entry.header().gid().unwrap_or(0)).unwrap_or(u32::MAX);
         // GNU tar --xattrs carries attributes as PAX records keyed
         // SCHILY.xattr.<name>; they ride into the inode verbatim.
+        // A pax `mtime` record (decimal seconds.fraction) carries
+        // sub-second precision the ustar header cannot.
         let mut pax_xattrs: Vec<(String, Vec<u8>)> = Vec::new();
+        let mut pax_mtime_ns: Option<u64> = None;
         if let Ok(Some(exts)) = entry.pax_extensions() {
             for ext in exts.flatten() {
                 if let Ok(key) = ext.key() {
+                    if key == "mtime" {
+                        if let Ok(value) = ext.value() {
+                            pax_mtime_ns = pax_mtime_ns.or_else(|| parse_pax_mtime_ns(value));
+                        }
+                        continue;
+                    }
                     if let Some(name) = key.strip_prefix("SCHILY.xattr.") {
                         pax_xattrs.push((name.to_owned(), ext.value_bytes().to_vec()));
                     }
@@ -1490,11 +1525,16 @@ fn limn_from_tar(
         {
             continue;
         }
+        let meta = limnifs_write::stream::EntryMeta::new(
+            pax_mtime_ns.unwrap_or_else(|| mtime_secs.saturating_mul(1_000_000_000)),
+            mode & 0o7777,
+        )
+        .owner(uid, gid);
         let add = match entry.header().entry_type() {
             // PAX extended-header members are transport metadata for
             // the entries that follow, not tree content.
             tar::EntryType::XHeader | tar::EntryType::XGlobalHeader => continue,
-            tar::EntryType::Directory => writer.add_dir(&name, mtime_ns, mode & 0o7777),
+            tar::EntryType::Directory => writer.add_dir(&name, meta),
             tar::EntryType::Symlink => {
                 let target = entry.link_name().map_err(|source| CliError::ReadFailed {
                     path: tar_path.to_path_buf(),
@@ -1506,7 +1546,7 @@ fn limn_from_tar(
                     });
                 };
                 let target = target.to_string_lossy().into_owned();
-                writer.add_symlink(&name, &target, mtime_ns, mode & 0o7777)
+                writer.add_symlink(&name, &target, meta)
             }
             tar::EntryType::Regular => {
                 // The raw slice is the entry's data only when no PAX
@@ -1527,9 +1567,9 @@ fn limn_from_tar(
                         .ok_or_else(|| CliError::Unsupported {
                             reason: format!("tar entry {name:?} data range outside archive"),
                         })?;
-                    writer.stage_file(&name, mtime_ns, mode & 0o7777, &pax_xattrs, data)
+                    writer.stage_file(&name, meta, &pax_xattrs, data)
                 } else {
-                    writer.add_file(&name, mtime_ns, mode & 0o7777, &pax_xattrs, &mut { entry })
+                    writer.add_file(&name, meta, &pax_xattrs, &mut { entry })
                 }
             }
             tar::EntryType::Link => {
@@ -4283,6 +4323,35 @@ mod tests {
             other => panic!("expected UnsupportedFeature, got {other:?}"),
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    #[cfg(feature = "tar")]
+    #[test]
+    fn pax_mtime_parses_decimal_fraction_exactly() {
+        // No float path: seconds must survive at full precision.
+        assert_eq!(
+            parse_pax_mtime_ns("1725702000.123456789"),
+            Some(1_725_702_000_123_456_789)
+        );
+        // Short fractions pad right; bare seconds pass through.
+        assert_eq!(
+            parse_pax_mtime_ns("1725702000.5"),
+            Some(1_725_702_000_500_000_000)
+        );
+        assert_eq!(
+            parse_pax_mtime_ns("1725702000"),
+            Some(1_725_702_000_000_000_000)
+        );
+        // Over-long fractions truncate to nanoseconds.
+        assert_eq!(parse_pax_mtime_ns("1.1234567891"), Some(1_123_456_789));
+        // Malformed values yield None (caller falls back to header).
+        assert_eq!(parse_pax_mtime_ns("1.2.3"), None);
+        assert_eq!(parse_pax_mtime_ns("x.1"), None);
+        assert_eq!(parse_pax_mtime_ns(""), None);
+        assert_eq!(parse_pax_mtime_ns("1.-5"), None);
+        // u64 saturation, not wraparound.
+        assert_eq!(parse_pax_mtime_ns("18446744073.709551616"), None);
     }
 
     #[test]

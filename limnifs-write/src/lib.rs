@@ -256,7 +256,12 @@ pub fn write_stream<R: std::io::Read>(
     config: &WriteConfig,
 ) -> Result<WriteArtifact, WriteError> {
     let mut writer = crate::stream::StreamWriter::new(config)?;
-    writer.add_file(name, 0, 0o644, &[], &mut reader)?;
+    writer.add_file(
+        name,
+        crate::stream::EntryMeta::new(0, 0o644),
+        &[],
+        &mut reader,
+    )?;
     writer.finish()
 }
 
