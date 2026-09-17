@@ -134,6 +134,12 @@ enum StreamNode {
     Symlink {
         inode_number: u64,
     },
+    /// A hardlink whose target resolves at `finish`, once the whole
+    /// tree exists — the tar format lets a Link member precede the
+    /// regular entry it shares an inode with.
+    DeferredLink {
+        target: String,
+    },
 }
 
 /// Build one `.lim` image from a sequence of named streams.
@@ -385,17 +391,19 @@ impl<'a> StreamWriter<'a> {
     /// [`WriteError::Io`] if `name` is invalid or conflicting, the
     /// target is missing, or the target is not a regular file.
     pub fn add_hardlink(&mut self, name: &str, target: &str) -> Result<(), WriteError> {
-        // Resolve the target before mutably borrowing the tree for
-        // the new name.
-        let inode_number = resolve_file_inode(&self.tree, target)?;
         let (parent, leaf) = descend(&mut self.tree, name)?;
         if parent.children.contains_key(leaf) {
             return Err(name_conflict(name));
         }
-        *self.ctx.nlink_counts.entry(inode_number).or_insert(1) += 1;
-        parent
-            .children
-            .insert(leaf.to_owned(), StreamNode::File { inode_number });
+        // Deferred: the target may not exist yet (the tar format
+        // permits a Link member before its target). `finish`
+        // resolves every deferred link against the completed tree.
+        parent.children.insert(
+            leaf.to_owned(),
+            StreamNode::DeferredLink {
+                target: target.to_owned(),
+            },
+        );
         Ok(())
     }
 
@@ -439,7 +447,8 @@ impl<'a> StreamWriter<'a> {
     /// [`WriteError::Io`] on any writer-pipeline error.
     pub fn finish(mut self) -> Result<WriteArtifact, WriteError> {
         self.flush_staged()?;
-        let tree = std::mem::take(&mut self.tree);
+        let mut tree = std::mem::take(&mut self.tree);
+        resolve_deferred_links(&mut tree, &mut self.ctx)?;
         self.ctx.root_inode_number = self.materialize_dir(tree);
         self.ctx
             .train_and_apply_dictionary(&self.config.dictionaries);
@@ -542,6 +551,9 @@ impl<'a> StreamWriter<'a> {
                 StreamNode::Dir(child) => (self.materialize_dir(child), 0x02),
                 StreamNode::File { inode_number } => (inode_number, 0x01),
                 StreamNode::Symlink { inode_number } => (inode_number, 0x03),
+                StreamNode::DeferredLink { .. } => {
+                    unreachable!("hardlinks resolve before materialize")
+                }
             };
             entries.push((name, child_inode, entry_type));
         }
@@ -590,9 +602,9 @@ fn descend<'a, 'b>(
             .or_insert_with(|| StreamNode::Dir(StreamDir::default()))
         {
             StreamNode::Dir(child) => child,
-            StreamNode::File { .. } | StreamNode::Symlink { .. } => {
-                return Err(name_conflict(name))
-            }
+            StreamNode::File { .. }
+            | StreamNode::Symlink { .. }
+            | StreamNode::DeferredLink { .. } => return Err(name_conflict(name)),
         };
     }
     if leaf.is_empty() || leaf == "." || leaf == ".." {
@@ -601,29 +613,85 @@ fn descend<'a, 'b>(
     Ok((dir, leaf))
 }
 
-/// Resolve `target` to a file entry's inode number inside the
-/// stream tree. Errors when any component is missing, is a
-/// symlink, or the final component is a directory.
-fn resolve_file_inode(root: &StreamDir, target: &str) -> Result<u64, WriteError> {
-    let bad = || {
+/// Resolve every deferred hardlink against the completed tree:
+/// collect targets in tree order (deterministic), chase each to a
+/// regular file's inode (a target may itself be a deferred link;
+/// cycles are refused), then replace the placeholders and bump
+/// nlink in the same order. A target-first tar therefore packs
+/// byte-identically to the call-order the old eager resolution
+/// produced.
+fn resolve_deferred_links(root: &mut StreamDir, ctx: &mut WriteContext) -> Result<(), WriteError> {
+    fn bad(target: &str) -> WriteError {
         WriteError::Io(std::io::Error::other(format!(
             "hardlink target {target:?} is not a file in the tree"
         )))
-    };
-    let mut dir = root;
-    let mut components = target.split('/').filter(|c| !c.is_empty());
-    loop {
-        let Some(component) = components.next() else {
-            return Err(bad());
-        };
-        match dir.children.get(component) {
-            Some(StreamNode::File { inode_number }) if components.next().is_none() => {
-                return Ok(*inode_number);
+    }
+
+    fn collect(dir: &StreamDir, out: &mut Vec<String>) {
+        for node in dir.children.values() {
+            match node {
+                StreamNode::DeferredLink { target } => out.push(target.clone()),
+                StreamNode::Dir(child) => collect(child, out),
+                _ => {}
             }
-            Some(StreamNode::Dir(child)) => dir = child,
-            _ => return Err(bad()),
         }
     }
+
+    fn chase(root: &StreamDir, target: &str, seen: &mut Vec<String>) -> Result<u64, WriteError> {
+        if seen.iter().any(|s| s == target) {
+            return Err(bad(target)); // link cycle
+        }
+        seen.push(target.to_owned());
+        let mut dir = root;
+        let mut components = target.split('/').filter(|c| !c.is_empty());
+        loop {
+            let Some(component) = components.next() else {
+                return Err(bad(target));
+            };
+            match dir.children.get(component) {
+                Some(StreamNode::File { inode_number }) if components.next().is_none() => {
+                    return Ok(*inode_number);
+                }
+                // The last component is another hardlink: share its
+                // target's inode (link-to-link).
+                Some(StreamNode::DeferredLink { target: t }) if components.next().is_none() => {
+                    return chase(root, t, seen);
+                }
+                Some(StreamNode::Dir(child)) => dir = child,
+                _ => return Err(bad(target)),
+            }
+        }
+    }
+
+    fn replace(
+        dir: &mut StreamDir,
+        resolved: &mut std::vec::IntoIter<u64>,
+        ctx: &mut WriteContext,
+    ) {
+        for node in dir.children.values_mut() {
+            match node {
+                StreamNode::DeferredLink { .. } => {
+                    let inode_number = resolved.next().expect("collected matches replaced");
+                    *ctx.nlink_counts.entry(inode_number).or_insert(1) += 1;
+                    *node = StreamNode::File { inode_number };
+                }
+                StreamNode::Dir(child) => replace(child, resolved, ctx),
+                _ => {}
+            }
+        }
+    }
+
+    let mut targets = Vec::new();
+    collect(root, &mut targets);
+    if targets.is_empty() {
+        return Ok(());
+    }
+    let mut resolved = Vec::with_capacity(targets.len());
+    for target in &targets {
+        resolved.push(chase(root, target, &mut Vec::new())?);
+    }
+    replace(root, &mut resolved.into_iter(), ctx);
+    Ok(())
 }
 
 /// Validate and convert caller-supplied xattrs to wire form:
