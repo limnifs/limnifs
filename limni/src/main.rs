@@ -1290,7 +1290,13 @@ fn load_slab_chain(
                 install_dicts(&mut store, &d);
             }
         }
-        sources.push(Box::new(store));
+        // Bases get the decoded-drop cache too: through a raw store,
+        // every windowed read re-decompressed the covering drop with
+        // no ranged/seekable path at all. Bounded by the same
+        // default budget as the image's own store.
+        sources.push(Box::new(
+            limnifs_core::slab_cache::CachedSlabStore::with_default_capacity(store),
+        ));
     }
     if sources.is_empty() {
         Ok(None)

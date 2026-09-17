@@ -280,8 +280,18 @@ impl CachedSlabStore {
                 return Some(Ok(hit));
             }
         }
-        // Miss: fetch from inner (drop the cache lock during the
-        // decompress so concurrent readers of other drops proceed).
+        self.decoded_fetch_insert(drop_id)
+    }
+
+    /// The known-miss path: fetch from inner (cache lock dropped
+    /// during the decompress so concurrent readers of other drops
+    /// proceed) and insert. Callers that have ALREADY looked the
+    /// drop up and missed use this instead of `decoded` — a second
+    /// lookup would count the same cold read as two misses.
+    fn decoded_fetch_insert(
+        &self,
+        drop_id: &[u8; 32],
+    ) -> Option<Result<std::sync::Arc<[u8]>, CoreError>> {
         let plaintext = self.inner.plaintext_for(drop_id)?;
         match plaintext {
             Ok(bytes) => {
@@ -328,7 +338,7 @@ impl CachedSlabStore {
             return self.cached_frame_range(drop_id, off, len);
         }
         // Non-seekable: full decode (populating the cache), then slice.
-        match self.decoded(drop_id)? {
+        match self.decoded_fetch_insert(drop_id)? {
             Ok(full) => {
                 let total = full.len() as u64;
                 Some(if off > total || off + len as u64 > total {
@@ -383,7 +393,7 @@ impl CachedSlabStore {
         }
         // Non-seekable: full decode (populating the cache), then
         // slice directly into the caller's buffer.
-        match self.decoded(drop_id)? {
+        match self.decoded_fetch_insert(drop_id)? {
             Ok(full) => {
                 let total = full.len() as u64;
                 Some(if off >= total {
@@ -576,7 +586,7 @@ impl CachedSlabStore {
     /// hot path — every call pays one copy.
     #[must_use]
     pub fn plaintext_for(&self, drop_id: &[u8; 32]) -> Option<Result<Vec<u8>, CoreError>> {
-        match self.decoded(drop_id)? {
+        match self.decoded_fetch_insert(drop_id)? {
             Ok(shared) => Some(Ok(shared.to_vec())),
             Err(e) => Some(Err(e)),
         }
