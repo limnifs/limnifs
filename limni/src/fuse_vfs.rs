@@ -124,27 +124,26 @@ impl Filesystem for FuseVfs {
         mut reply: ReplyDirectory,
     ) {
         let vfs_ino = self.map_inode(ino);
-        let entries = self.vfs.readdir(vfs_ino);
 
-        if offset == 0 {
-            if reply.add(ino, 1, FileType::Directory, ".") {
-                return;
-            }
-            if reply.add(ino, 2, FileType::Directory, "..") {
-                return;
-            }
+        // Kernel offset = the entry index to START from: 0 = ".",
+        // 1 = "..", 2+i = the i-th child (cookies are next-index).
+        // Entries stream borrowed from the dir node straight into
+        // the reply buffer — no per-call list clone.
+        if offset == 0 && reply.add(ino, 1, FileType::Directory, ".") {
+            return;
+        }
+        if offset <= 1 && reply.add(ino, 2, FileType::Directory, "..") {
+            return;
         }
 
-        for (i, (child_ino, name, kind)) in entries.iter().enumerate() {
-            let entry_idx = u64::try_from(i).unwrap_or(0) + 2;
-            if entry_idx < offset {
-                continue;
-            }
-            let ftype = Self::vfs_type_to_ftype(*kind);
-            if reply.add(INodeNo(*child_ino), entry_idx + 1, ftype, name) {
-                break;
-            }
-        }
+        let start_idx = offset.saturating_sub(2) as usize;
+        let base = start_idx as u64 + 2;
+        self.vfs
+            .readdir_at(vfs_ino, start_idx, &mut |i, child_ino, name, kind| {
+                let entry_idx = base + i as u64;
+                let ftype = Self::vfs_type_to_ftype(kind);
+                !reply.add(INodeNo(child_ino), entry_idx + 1, ftype, name)
+            });
         reply.ok();
     }
 
