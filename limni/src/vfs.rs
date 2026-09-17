@@ -186,23 +186,48 @@ impl Vfs {
     /// non-directory inodes.
     #[must_use]
     pub fn readdir(&self, ino: u64) -> Vec<(u64, String, VfsType)> {
+        let mut out = Vec::new();
+        self.readdir_at(ino, 0, &mut |_, child_ino, name, kind| {
+            out.push((child_ino, name.to_owned(), kind));
+            true
+        });
+        out
+    }
+
+    /// Offer directory entries to `add` starting at entry index
+    /// `start_idx`, WITHOUT cloning: each callback receives the
+    /// entry's absolute index (stable — entries are name-sorted at
+    /// parse) and borrowed `(child_ino, name, kind)`. Return `false`
+    /// from `add` to stop (caller buffer full); the walk resumes at
+    /// any later `start_idx`. This is the FUSE getdents path:
+    /// cloning an N-entry list per ~4 KiB buffer made listings
+    /// O(N²) in allocations.
+    pub fn readdir_at(
+        &self,
+        ino: u64,
+        start_idx: usize,
+        add: &mut dyn FnMut(usize, u64, &str, VfsType) -> bool,
+    ) {
         let Some(inode) = self.metadata_blob.inode_by_number(ino) else {
-            return Vec::new();
+            return;
         };
         let hash = match &inode.content_handle {
             ContentHandle::Directory(h) => *h,
-            _ => return Vec::new(),
+            _ => return,
         };
         let Some(node) = self.metadata_blob.dir_node_by_hash(&hash) else {
-            return Vec::new();
+            return;
         };
-        node.entries
-            .iter()
-            .map(|e| {
-                let kind = entry_vfs_type(e.entry_type);
-                (e.inode_number, e.name.clone(), kind)
-            })
-            .collect()
+        for (i, entry) in node.entries.iter().enumerate().skip(start_idx) {
+            if !add(
+                i,
+                entry.inode_number,
+                &entry.name,
+                entry_vfs_type(entry.entry_type),
+            ) {
+                return;
+            }
+        }
     }
 
     /// Read `len` bytes starting at `offset` from the file identified
@@ -445,6 +470,46 @@ mod tests {
         let b_ino = vfs.lookup(sub_ino, "b.txt").expect("found b");
         let data = vfs.read(b_ino, 0, 100).expect("read");
         assert_eq!(data, b"world");
+    }
+
+    /// v0.3.46: readdir_at must serve a paginated walk (small
+    /// page sizes, arbitrary resume points) that reproduces the
+    /// full readdir listing exactly — the FUSE getdents contract.
+    #[test]
+    fn readdir_at_pages_reproduce_full_listing() {
+        let source = make_source_tree();
+        let bytes = make_image(&source);
+        std::fs::remove_dir_all(&source).ok();
+        let vfs = Vfs::from_bytes(&bytes, std::path::Path::new(".")).expect("opens");
+        let root = vfs.root_inode();
+
+        let full = vfs.readdir(root);
+        assert!(!full.is_empty(), "fixture root must have entries");
+
+        // Walk with page size 1 (every entry its own reply buffer)
+        // and page size 2, resuming from the returned next index —
+        // exactly what the kernel does with our cookies.
+        for page in [1usize, 2, 3] {
+            let mut walked: Vec<(u64, String, VfsType)> = Vec::new();
+            let mut idx = 0usize;
+            loop {
+                let mut taken = 0usize;
+                let mut stop = false;
+                vfs.readdir_at(root, idx, &mut |i, child_ino, name, kind| {
+                    taken += 1;
+                    idx = i + 1;
+                    walked.push((child_ino, name.to_owned(), kind));
+                    if taken == page {
+                        stop = true;
+                    }
+                    !stop
+                });
+                if taken < page {
+                    break;
+                }
+            }
+            assert_eq!(walked, full, "page={page}");
+        }
     }
 
     /// Slabs are mmapped at open: a missing sidecar must fail the
