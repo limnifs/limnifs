@@ -647,7 +647,7 @@ mod tests {
         assert_eq!(last[0], whole[0]);
         let decoded2 = reader2.cache_stats().misses - before2;
         assert!(
-            decoded2 <= 2,
+            decoded2 <= 1,
             "one-byte head window decoded {decoded2} drops"
         );
 
