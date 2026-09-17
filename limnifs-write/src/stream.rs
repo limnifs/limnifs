@@ -449,7 +449,7 @@ impl<'a> StreamWriter<'a> {
         self.flush_staged()?;
         let mut tree = std::mem::take(&mut self.tree);
         resolve_deferred_links(&mut tree, &mut self.ctx)?;
-        self.ctx.root_inode_number = self.materialize_dir(tree);
+        self.ctx.root_inode_number = self.materialize_dir(tree)?;
         self.ctx
             .train_and_apply_dictionary(&self.config.dictionaries);
         Ok(self.ctx.assemble())
@@ -542,17 +542,19 @@ impl<'a> StreamWriter<'a> {
 
     /// Allocate this directory's inode, then recurse into children
     /// in name order — parent-first, mirroring the directory walk.
-    fn materialize_dir(&mut self, dir: StreamDir) -> u64 {
+    fn materialize_dir(&mut self, dir: StreamDir) -> Result<u64, WriteError> {
         let inode_number = self.ctx.alloc_inode();
         self.ctx.dir_count += 1;
         let mut entries = Vec::with_capacity(dir.children.len());
         for (name, node) in dir.children {
             let (child_inode, entry_type) = match node {
-                StreamNode::Dir(child) => (self.materialize_dir(child), 0x02),
+                StreamNode::Dir(child) => (self.materialize_dir(child)?, 0x02),
                 StreamNode::File { inode_number } => (inode_number, 0x01),
                 StreamNode::Symlink { inode_number } => (inode_number, 0x03),
                 StreamNode::DeferredLink { .. } => {
-                    unreachable!("hardlinks resolve before materialize")
+                    return Err(WriteError::Io(std::io::Error::other(
+                        "internal: unresolved hardlink reached materialization",
+                    )));
                 }
             };
             entries.push((name, child_inode, entry_type));
@@ -570,7 +572,7 @@ impl<'a> StreamWriter<'a> {
             xattrs: Vec::new(),
             content: PendingContent::Directory(entries),
         });
-        inode_number
+        Ok(inode_number)
     }
 }
 
