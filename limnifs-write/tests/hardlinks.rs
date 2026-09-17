@@ -135,9 +135,100 @@ fn stream_hardlink_shares_inode() {
         .expect("inode");
     assert_eq!(inode.nlink, 2);
 
-    // Bad targets are rejected.
+    // Bad targets are rejected at finish, when deferred links
+    // resolve against the completed tree.
     let mut w = StreamWriter::new(config).expect("writer");
-    assert!(w.add_hardlink("x", "missing").is_err());
+    w.add_hardlink("x", "missing").expect("deferred");
+    assert!(w.finish().is_err(), "missing target");
+    let mut w = StreamWriter::new(config).expect("writer");
     w.add_dir("d", EntryMeta::new(1, 0o755)).expect("dir");
-    assert!(w.add_hardlink("x", "d").is_err(), "directory target");
+    w.add_hardlink("x", "d").expect("deferred");
+    assert!(w.finish().is_err(), "directory target");
+}
+
+/// v0.3.46: the tar format lets a Link member precede its target —
+/// resolution happens at finish, and the packed image is identical
+/// to the target-first order (same shared inode, real nlink).
+#[test]
+fn stream_hardlink_before_target_shares_inode() {
+    let config: &'static WriteConfig = Box::leak(Box::new(WriteConfig::default_v0_1()));
+    let data = vec![0x22u8; 600 * 1024];
+    let mut writer = StreamWriter::new(config).expect("writer");
+    writer.add_hardlink("link.bin", "orig.bin").expect("link");
+    writer
+        .stage_file("orig.bin", EntryMeta::new(1, 0o644), &[], &data)
+        .expect("stage");
+    let artifact = writer.finish().expect("finish");
+    let blob = parse_blob(&artifact);
+
+    let root = blob
+        .inodes
+        .iter()
+        .find(|i| i.is_directory())
+        .expect("root dir");
+    let hash = match &root.content_handle {
+        limnifs_core::ContentHandle::Directory(h) => *h,
+        _ => panic!("root dir"),
+    };
+    let node = blob.dir_node_by_hash(&hash).expect("dir node");
+    let orig = node
+        .entries
+        .iter()
+        .find(|e| e.name == "orig.bin")
+        .expect("orig");
+    let link = node
+        .entries
+        .iter()
+        .find(|e| e.name == "link.bin")
+        .expect("link");
+    assert_eq!(orig.inode_number, link.inode_number, "shared inode");
+    let inode = blob
+        .inodes
+        .iter()
+        .find(|i| i.number == orig.inode_number)
+        .expect("inode");
+    assert_eq!(inode.nlink, 2);
+}
+
+/// A hardlink whose target is itself a hardlink shares the chain's
+/// original inode; a link cycle is refused at finish.
+#[test]
+fn stream_hardlink_chain_and_cycle() {
+    let config: &'static WriteConfig = Box::leak(Box::new(WriteConfig::default_v0_1()));
+    let data = vec![0x33u8; 600 * 1024];
+    let mut writer = StreamWriter::new(config).expect("writer");
+    writer
+        .stage_file("orig.bin", EntryMeta::new(1, 0o644), &[], &data)
+        .expect("stage");
+    writer.add_hardlink("a", "orig.bin").expect("a");
+    writer.add_hardlink("b", "a").expect("b -> a");
+    let artifact = writer.finish().expect("finish");
+    let blob = parse_blob(&artifact);
+    let root = blob.inodes.iter().find(|i| i.is_directory()).expect("root");
+    let hash = match &root.content_handle {
+        limnifs_core::ContentHandle::Directory(h) => *h,
+        _ => panic!("root dir"),
+    };
+    let node = blob.dir_node_by_hash(&hash).expect("dir node");
+    let orig = node
+        .entries
+        .iter()
+        .find(|e| e.name == "orig.bin")
+        .expect("orig");
+    for name in ["a", "b"] {
+        let e = node.entries.iter().find(|e| e.name == name).expect(name);
+        assert_eq!(e.inode_number, orig.inode_number, "{name} shares inode");
+    }
+    let inode = blob
+        .inodes
+        .iter()
+        .find(|i| i.number == orig.inode_number)
+        .expect("inode");
+    assert_eq!(inode.nlink, 3);
+
+    // Cycle: a -> b -> a never resolves to a file.
+    let mut w = StreamWriter::new(config).expect("writer");
+    w.add_hardlink("a", "b").expect("deferred");
+    w.add_hardlink("b", "a").expect("deferred");
+    assert!(w.finish().is_err(), "link cycle");
 }
