@@ -431,19 +431,29 @@ pub fn extract_file(
             if config.parallel_decode && slices.len() > 1 {
                 use rayon::prelude::*;
                 let store = file.store;
-                let decoded: Vec<std::sync::Arc<[u8]>> = slices
-                    .par_iter()
-                    .map(|s| {
-                        store
-                            .decoded(s.drop_id.as_bytes())
-                            .transpose()?
-                            .ok_or_else(|| CoreError::Corrupt {
-                                reason: "slice references a drop missing from every slab".into(),
-                            })
-                    })
-                    .collect::<Result<_, CoreError>>()?;
-                for bytes in decoded {
-                    writer.write_all(&bytes).map_err(io_err)?;
+                // Decode in bounded batches: K drops in flight, each
+                // batch written in order before the next decodes.
+                // Peak RSS <= K x largest drop no matter the file
+                // size — decoding ALL drops up front materialized
+                // the whole file (multi-GiB RSS), the same
+                // bounded-memory violation the CLI paths had.
+                const BATCH: usize = 8;
+                for batch in slices.chunks(BATCH) {
+                    let decoded: Vec<std::sync::Arc<[u8]>> = batch
+                        .par_iter()
+                        .map(|s| {
+                            store
+                                .decoded(s.drop_id.as_bytes())
+                                .transpose()?
+                                .ok_or_else(|| CoreError::Corrupt {
+                                    reason: "slice references a drop missing from every slab"
+                                        .into(),
+                                })
+                        })
+                        .collect::<Result<_, CoreError>>()?;
+                    for bytes in decoded {
+                        writer.write_all(&bytes).map_err(io_err)?;
+                    }
                 }
                 Ok(())
             } else {
