@@ -32,6 +32,10 @@ jobs:
   rust:
     name: Rust matrix
     uses: limnifs/.github/.github/workflows/rust-ci.yml@main
+    with:
+      # Pinned in CI since v0.3.52: an accidental 1.76+ std API
+      # must fail the PR, not the next downstream build.
+      msrv: "1.75"
 
   # Native Windows build check. The Linux+macOS matrices above do not
   # compile Windows-only cfg branches; v0.3.2 shipped a broken Windows
