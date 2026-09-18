@@ -904,9 +904,9 @@ mod tests {
         let artifact = w.finish().expect("finish");
 
         let mut cursor = crate::cursor::ManifestCursor::new(&artifact.bytes);
-        crate::metadata::parse_manifest_header(&mut cursor).expect("header");
-        crate::metadata::parse_feature_flags_section(&mut cursor).expect("flags");
-        let meta_ref = crate::metadata::parse_metadata_reference(&mut cursor).expect("meta");
+        crate::parse_manifest_header(&mut cursor).expect("header");
+        crate::parse_feature_flags_section(&mut cursor).expect("flags");
+        let meta_ref = crate::parse_metadata_reference(&mut cursor).expect("meta");
         let inline = meta_ref.inline_metadata.as_ref().expect("inline");
         let mut blob_cursor = crate::cursor::ManifestCursor::new(inline);
         let blob = crate::metadata::parse_metadata_blob(&mut blob_cursor).expect("blob");
