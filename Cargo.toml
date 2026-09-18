@@ -43,7 +43,7 @@ limnifs-ocb3 = { path = "limnifs-ocb3", version = "0.3.52" }
 limnifs-core = { path = "limnifs-core", version = "0.3.52" }
 limnifs-write = { path = "limnifs-write", version = "0.3.52" }
 aes-gcm = "0.10"
-blake3 = { version = "1.8.7", default-features = false, features = ["std", "rayon"] }
+blake3 = { version = "1.8.2", default-features = false, features = ["std", "rayon"] }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "getrandom"] }
 clap = { version = "4.5", features = ["derive", "string"] }
 ed25519-dalek = { version = "2.1", default-features = false, features = ["rand_core"] }
