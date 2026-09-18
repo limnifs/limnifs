@@ -147,6 +147,61 @@ impl Filesystem for FuseVfs {
         reply.ok();
     }
 
+    /// Get one extended attribute. The kernel probes names like
+    /// `system.posix_acl_access` routinely — a stored-key miss is
+    /// ENODATA (the contract), never ENOSYS (which would disable
+    /// xattr queries for the whole mount).
+    fn getxattr(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        name: &OsStr,
+        size: u32,
+        reply: fuser::ReplyXattr,
+    ) {
+        let vfs_ino = self.map_inode(ino);
+        let Some(name) = name.to_str() else {
+            // Stored keys are UTF-8; a non-UTF-8 probe can never hit.
+            reply.error(Errno::NO_XATTR);
+            return;
+        };
+        let Some(value) = self.vfs.xattr(vfs_ino, name) else {
+            reply.error(Errno::NO_XATTR);
+            return;
+        };
+        let len = u32::try_from(value.len()).unwrap_or(u32::MAX);
+        if size == 0 {
+            reply.size(len);
+        } else if (len as usize) > size as usize {
+            reply.error(Errno::ERANGE);
+        } else {
+            reply.data(value);
+        }
+    }
+
+    /// List xattr names: NUL-terminated concatenation, same size
+    /// protocol as getxattr (size 0 asks for the total length).
+    fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: fuser::ReplyXattr) {
+        let vfs_ino = self.map_inode(ino);
+        let names = self.vfs.xattr_names(vfs_ino);
+        let total: usize = names.iter().map(|n| n.len() + 1).sum();
+        let len = u32::try_from(total).unwrap_or(u32::MAX);
+        if size == 0 {
+            reply.size(len);
+            return;
+        }
+        if total > size as usize {
+            reply.error(Errno::ERANGE);
+            return;
+        }
+        let mut buf = Vec::with_capacity(total);
+        for name in names {
+            buf.extend_from_slice(name.as_bytes());
+            buf.push(0);
+        }
+        reply.data(&buf);
+    }
+
     fn open(&self, _req: &Request, _ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
         reply.opened(FileHandle(0), FopenFlags::empty());
     }
