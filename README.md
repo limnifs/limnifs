@@ -147,6 +147,26 @@ Official release binaries are built with `tar`, `sparse-index`, and
 
 ## Installation
 
+### Release binaries
+
+Per-release `limni` binaries (tar.gz + sha256) are attached to every
+GitHub release:
+
+| Platform | Target |
+|---|---|
+| Linux x86_64 (glibc) | `x86_64-unknown-linux-gnu` |
+| Linux x86_64 (musl, static) | `x86_64-unknown-linux-musl` |
+| Linux arm64 (glibc) | `aarch64-unknown-linux-gnu` |
+| Linux arm64 (musl, static) | `aarch64-unknown-linux-musl` |
+| macOS arm64 | `aarch64-apple-darwin` |
+| macOS Intel | `x86_64-apple-darwin` |
+| Windows x86_64 | `x86_64-pc-windows-msvc` |
+| Windows ARM64 | `aarch64-pc-windows-msvc` |
+
+Every artifact executes a pack/extract round-trip smoke on its
+native runner before upload (the macOS Intel binary additionally
+under a Rosetta run).
+
 ### From source
 
 ```bash

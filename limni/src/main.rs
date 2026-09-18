@@ -496,6 +496,7 @@ fn run() -> Result<(), CliError> {
             dest,
             bases,
             verify_key,
+            verbose,
         } => extract(&image, &dest, &bases, verify_key.as_deref(), verbose),
         Command::Add {
             image,
@@ -3414,7 +3415,7 @@ fn compact(source: &Path, output: &Path) -> Result<(), CliError> {
             .map_or(0u128, |d| d.as_nanos()),
     ));
 
-    extract(source, &temp_dir, &[], None)?;
+    extract(source, &temp_dir, &[], None, false)?;
 
     let artifact = limnifs_write::write_directory(&temp_dir)
         .map_err(|e| CliError::WriteFailed { source: e })?;
@@ -3620,7 +3621,7 @@ fn benchmark() -> Result<(), CliError> {
 
     // Extract benchmark.
     let t2 = Instant::now();
-    extract(&img, &dest, &[], None).expect("extract");
+    extract(&img, &dest, &[], None, false).expect("extract");
     let extract_ms = t2.elapsed().as_millis();
 
     let write_throughput = if write_ms > 0 {
@@ -4483,7 +4484,7 @@ mod tests {
         limn(&src, &image).expect("pack");
 
         let dest = workdir.join("out");
-        extract(&image, &dest, &[], None).expect("extract");
+        extract(&image, &dest, &[], None, false).expect("extract");
         let back = xattr::get(dest.join("tagged.txt"), "user.limni.test")
             .expect("get xattr")
             .expect("xattr present after extract");
@@ -4509,7 +4510,7 @@ mod tests {
         limn(&src, &image).expect("pack");
 
         let dest = workdir.join("out");
-        extract(&image, &dest, &[], None).expect("extract");
+        extract(&image, &dest, &[], None, false).expect("extract");
 
         use std::os::unix::fs::MetadataExt as _;
         let data = std::fs::metadata(dest.join("data.bin")).expect("data.bin");
@@ -4557,7 +4558,7 @@ mod tests {
         limn(&src, &image).expect("pack");
 
         let dest = workdir.join("out");
-        extract(&image, &dest, &[], None).expect("extract");
+        extract(&image, &dest, &[], None, false).expect("extract");
 
         let run = std::fs::metadata(dest.join("run.sh")).expect("run.sh");
         assert_eq!(
@@ -4636,7 +4637,8 @@ mod tests {
         }
 
         let dest = workdir.join("out");
-        extract(&layer_image, &dest, &[base_image.clone()], None).expect("extract through base");
+        extract(&layer_image, &dest, &[base_image.clone()], None, false)
+            .expect("extract through base");
         let extracted = std::fs::read(dest.join("shared.bin")).expect("extracted shared");
         assert_eq!(extracted, shared);
         let _ = std::fs::remove_dir_all(&workdir);
@@ -4816,7 +4818,7 @@ mod tests {
         stat(&img, "/small.txt").expect("stat succeeds");
 
         // Extract and verify round-trip.
-        extract(&img, &dest, &[], None).expect("extract succeeds");
+        extract(&img, &dest, &[], None, false).expect("extract succeeds");
         let orig = std::fs::read(src.join("small.txt")).expect("read orig");
         let extracted = std::fs::read(dest.join("small.txt")).expect("read extracted");
         assert_eq!(orig, extracted, "small.txt round-trip mismatch");
