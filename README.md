@@ -82,20 +82,20 @@ code never changes (open/closed via [`CodecRegistry`]).
 ## Performance
 
 **Gated in CI.** Every claim below is a hard gate that runs on every
-pull request and blocks every release (v0.3.18 readings, 2-core
-GitHub runner, median of three):
+pull request and blocks every release (v0.3.52 tag-run readings,
+2-core GitHub runner, median of three):
 
-| Gate | Floor | v0.3.18 reading |
+| Gate | Floor | v0.3.52 reading |
 |---|---:|---:|
-| Warm 8 KiB random windows (`readperf`) | ≥ 200 MB/s | **13,980 MB/s** |
-| Sequential extract (`readperf`) | ≥ 100 MB/s | **1,635 MB/s** |
-| Create / pack throughput (`createperf`) | ≥ 50 MB/s | **209 MB/s** |
+| Warm 8 KiB random windows (`readperf`) | ≥ 200 MB/s | **13,638 MB/s** |
+| Sequential extract (`readperf`) | ≥ 100 MB/s | **1,655 MB/s** |
+| Create / pack throughput (`createperf`) | ≥ 50 MB/s | **185 MB/s** |
 | Content hashes (`verify --deep`, E2E) | all match | green, every PR |
 | BCJ-x86 on real ELF binaries | informational | 4.3% smaller than plain LZ4 |
 | ZSTD dictionary win on text corpora | measured | positive, never larger |
 
-**Why the reads are fast** — measured at v0.2.65 (Apple M-series)
-and unchanged in shape since: a cold 8 KiB window into a 19.5 MiB
+**Why the reads are fast** — shape measured at v0.2.65 (Apple
+M-series) and re-confirmed at v0.3.52: a cold 8 KiB window into a 19.5 MiB
 drop decodes ~1.03 × 256 KiB seekable frames, never the whole drop.
 The failure mode behind limnifs#192 (~48 GiB of wasted decode) is
 gone by construction:
