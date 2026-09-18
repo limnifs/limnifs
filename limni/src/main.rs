@@ -16,7 +16,7 @@
 
 pub mod vfs;
 
-#[cfg(feature = "fuse")]
+#[cfg(all(feature = "fuse", unix))]
 pub mod fuse_vfs;
 
 use std::collections::HashSet;
@@ -400,7 +400,7 @@ enum Command {
     ///
     /// Requires the `fuse` feature (built with `--features fuse`) and
     /// FUSE kernel support (macFUSE on macOS, libfuse on Linux).
-    #[cfg(feature = "fuse")]
+    #[cfg(all(feature = "fuse", unix))]
     Mount {
         /// Path to the `.lim` image to mount.
         image: PathBuf,
@@ -537,7 +537,7 @@ fn run() -> Result<(), CliError> {
             shares,
         } => shamir_split(&input, &output_prefix, threshold, shares),
         Command::ShamirCombine { shares, output } => shamir_combine(&shares, &output),
-        #[cfg(feature = "fuse")]
+        #[cfg(all(feature = "fuse", unix))]
         Command::Mount { image, mountpoint } => mount(&image, &mountpoint),
     }
 }
@@ -2402,7 +2402,7 @@ fn cat_multi(image: &Path, paths: &[String], bases: &[PathBuf]) -> Result<(), Cl
 }
 
 /// Mount a `.lim` image as a read-only FUSE filesystem.
-#[cfg(feature = "fuse")]
+#[cfg(all(feature = "fuse", unix))]
 fn mount(image: &Path, mountpoint: &Path) -> Result<(), CliError> {
     let vfs = crate::vfs::Vfs::open(image).map_err(|e| match e {
         crate::vfs::VfsError::Core(c) => CliError::FormatFailed {

@@ -207,9 +207,40 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }} --bin limni --features tar,sparse-index,xattr
       # Rosetta smoke: the x86_64-apple-darwin artifact must run on
       # Apple Silicon (the runner is arm64 — this executes emulated).
-      - name: Rosetta smoke test
-        if: matrix.target == 'x86_64-apple-darwin'
-        run: file "target/${{ matrix.target }}/release/limni" && "target/${{ matrix.target }}/release/limni" --version
+      # Every shipped binary EXECUTES on its native runner before
+      # upload: a runtime-only break must fail the release, not the
+      # user. Musl artifacts are static and run on the build host;
+      # the darwin x86_64 job executes under Rosetta (arm64 runner).
+      - name: Smoke test (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/limni"
+          file "$bin"
+          "$bin" --version
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          printf 'smoke %s\n' "${{ matrix.target }}" > "$tmp/in.txt"
+          mkdir "$tmp/src" "$tmp/out"
+          cp "$tmp/in.txt" "$tmp/src/"
+          "$bin" limn "$tmp/src" "$tmp/img.lim"
+          "$bin" extract "$tmp/img.lim" "$tmp/out"
+          cmp "$tmp/in.txt" "$tmp/out/in.txt"
+      - name: Smoke test (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/limni.exe"
+          "$bin" --version
+          tmp="$(mktemp -d)"
+          printf 'smoke %s\n' "${{ matrix.target }}" > "$tmp/in.txt"
+          mkdir "$tmp/src" "$tmp/out"
+          cp "$tmp/in.txt" "$tmp/src/"
+          "$bin" limn "$tmp/src" "$tmp/img.lim"
+          "$bin" extract "$tmp/img.lim" "$tmp/out"
+          cmp "$tmp/in.txt" "$tmp/out/in.txt"
       - name: Package
         shell: bash
         env:
