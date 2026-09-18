@@ -10,7 +10,7 @@
 //! Implements a read-only filesystem. All mutating operations
 //! (`create`, `write`, `unlink`, etc.) return `ENOSYS`.
 
-#![cfg(feature = "fuse")]
+#![cfg(all(feature = "fuse", unix))]
 
 use std::ffi::OsStr;
 use std::time::Duration;
