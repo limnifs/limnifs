@@ -411,7 +411,22 @@ pub fn apply_unix_identity(path: &Path, mode: u32, mtime_ns: u64) {
 }
 
 #[cfg(not(unix))]
-pub fn apply_unix_identity(_path: &Path, _mode: u32, _mtime_ns: u64) {}
+pub fn apply_unix_identity(path: &Path, _mode: u32, mtime_ns: u64) {
+    // Mtime is portable (`File::set_modified`, std 1.75); mode and
+    // ownership are unix concepts with no non-unix equivalent.
+    // Directories need FILE_FLAG_BACKUP_SEMANTICS to open for
+    // write on Windows (no std surface) and keep their now().
+    let secs = mtime_ns / 1_000_000_000;
+    let nanos = u32::try_from(mtime_ns % 1_000_000_000).unwrap_or(0);
+    let Some(t) =
+        std::time::SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::new(secs, nanos))
+    else {
+        return;
+    };
+    if let Ok(f) = std::fs::File::options().write(true).read(true).open(path) {
+        let _ = f.set_modified(t);
+    }
+}
 
 /// Sink that writes the live tree to a filesystem directory.
 /// Directories are created pre-order; regular files are written
@@ -515,10 +530,14 @@ impl<'a> LiveTreeSink for FilesystemSink<'a> {
         {
             std::os::unix::fs::symlink(target, &path).map_err(io_to_core)
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            // No symlink support on this platform; write the target
-            // as a regular file so the tree shape is preserved.
+            create_symlink_best_effort(&path, target)
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            // No symlink surface on this platform; the link is
+            // skipped rather than materialized as a bogus file.
             let _ = path;
             let _ = target;
             Ok(())
@@ -659,12 +678,33 @@ impl<'a> LiveTreeSink for ParallelExtractSink<'a> {
         {
             std::os::unix::fs::symlink(target, &path).map_err(io_to_core)?;
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            create_symlink_best_effort(&path, target)?;
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = (path, target);
         }
         Ok(())
     }
+}
+
+/// Best-effort symlink off unix: Windows can create them with
+/// Developer Mode or SeCreateSymbolicLinkPrivilege. The flavor
+/// must match the target's kind for resolution; without knowing
+/// it, try file then dir, and skip only when the OS refuses —
+/// the same best-effort law as xattr application (v0.3.50).
+#[cfg(windows)]
+fn create_symlink_best_effort(path: &Path, target: &str) -> Result<(), CoreError> {
+    use std::os::windows::fs as win_fs;
+    if win_fs::symlink_file(target, path)
+        .or_else(|_| win_fs::symlink_dir(target, path))
+        .is_ok()
+    {
+        return Ok(());
+    }
+    Ok(())
 }
 
 fn io_to_core(e: std::io::Error) -> CoreError {
@@ -823,6 +863,84 @@ mod tests {
                 "name {name:?}: wrong error {err:?}"
             );
         }
+    }
+
+    /// v0.3.51: extraction carries file mtimes off unix and keeps
+    /// symlink names (creating real links when the runner has the
+    /// privilege). Runs on the Windows CI legs only.
+    #[cfg(windows)]
+    #[test]
+    fn windows_extract_stamps_mtime_and_keeps_link_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "limnifs-win-fidelity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos() as u64)
+                .unwrap_or(0),
+        ));
+        let src = dir.join("src");
+        let out = dir.join("out");
+        std::fs::create_dir_all(&src).expect("mkdir src");
+        std::fs::create_dir_all(&out).expect("mkdir out");
+
+        const MTIME_NS: u64 = 1_700_000_123_000_000_000;
+        let config: &'static limnifs_write::WriteConfig =
+            Box::leak(Box::new(limnifs_write::WriteConfig::default_v0_1()));
+        let mut w = limnifs_write::stream::StreamWriter::new(config).expect("writer");
+        w.add_file(
+            "f.txt",
+            limnifs_write::stream::EntryMeta::new(MTIME_NS, 0o644),
+            &[],
+            &mut b"body\n".as_slice(),
+        )
+        .expect("file");
+        w.add_symlink(
+            "lnk",
+            "f.txt",
+            limnifs_write::stream::EntryMeta::new(1, 0o777),
+        )
+        .expect("symlink");
+        let artifact = w.finish().expect("finish");
+
+        let mut cursor = crate::cursor::ManifestCursor::new(&artifact.bytes);
+        crate::metadata::parse_manifest_header(&mut cursor).expect("header");
+        crate::metadata::parse_feature_flags_section(&mut cursor).expect("flags");
+        let meta_ref = crate::metadata::parse_metadata_reference(&mut cursor).expect("meta");
+        let inline = meta_ref.inline_metadata.as_ref().expect("inline");
+        let mut blob_cursor = crate::cursor::ManifestCursor::new(inline);
+        let blob = crate::metadata::parse_metadata_blob(&mut blob_cursor).expect("blob");
+        let root_ino = blob.root_inode_number().expect("root");
+
+        let mut sink = FilesystemSink::new(&out, None);
+        walk_live_tree(&blob, root_ino, &mut sink).expect("walk");
+
+        let got = std::fs::metadata(out.join("f.txt"))
+            .expect("file extracted")
+            .modified()
+            .expect("mtime");
+        let got_ns = got
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("post-epoch")
+            .as_nanos() as i128;
+        let want_ns = i128::from(MTIME_NS);
+        assert!(
+            (got_ns - want_ns).abs() < 2_000_000_000,
+            "mtime drifted {got_ns} vs {want_ns}"
+        );
+
+        let link = std::fs::symlink_metadata(out.join("lnk")).expect("link name preserved");
+        if link.file_type().is_symlink() {
+            assert_eq!(
+                std::fs::read_link(out.join("lnk"))
+                    .expect("read link")
+                    .to_str()
+                    .unwrap_or_default(),
+                "f.txt"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
