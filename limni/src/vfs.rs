@@ -230,6 +230,32 @@ impl Vfs {
         }
     }
 
+    /// The xattr names carried by `ino`, borrowed from the parsed
+    /// inode. Keys are served verbatim — writer-side keys already
+    /// carry their namespace prefix (`user.comment`). Empty for
+    /// missing inodes or attribute-free entries.
+    #[must_use]
+    pub fn xattr_names(&self, ino: u64) -> Vec<&str> {
+        self.metadata_blob
+            .inode_by_number(ino)
+            .map_or_else(Vec::new, |inode| {
+                inode.xattrs.iter().map(|x| x.key.as_str()).collect()
+            })
+    }
+
+    /// The value of `name` on `ino`, borrowed. Keys match exactly;
+    /// a name that was never stored (including every non-UTF-8 name
+    /// a caller could pose) answers `None`.
+    #[must_use]
+    pub fn xattr(&self, ino: u64, name: &str) -> Option<&[u8]> {
+        self.metadata_blob
+            .inode_by_number(ino)?
+            .xattrs
+            .iter()
+            .find(|x| x.key == name)
+            .map(|x| x.value.as_slice())
+    }
+
     /// Read `len` bytes starting at `offset` from the file identified
     /// by `ino`. For inline-data files, reads directly from the inode.
     /// For slab-backed files, loads the slab and decompresses the drop.
@@ -470,6 +496,44 @@ mod tests {
         let b_ino = vfs.lookup(sub_ino, "b.txt").expect("found b");
         let data = vfs.read(b_ino, 0, 100).expect("read");
         assert_eq!(data, b"world");
+    }
+
+    /// v0.3.47: xattrs stored on the inode are listable and
+    /// fetchable by exact name — the FUSE getxattr/listxattr contract.
+    #[test]
+    fn xattrs_list_and_fetch_by_exact_name() {
+        let config: &'static limnifs_write::WriteConfig =
+            Box::leak(Box::new(limnifs_write::WriteConfig::default_v0_1()));
+        let mut writer = limnifs_write::stream::StreamWriter::new(config).expect("writer");
+        writer
+            .stage_file(
+                "f.bin",
+                limnifs_write::stream::EntryMeta::new(1, 0o644),
+                &[
+                    ("user.comment".to_owned(), b"hello xattr".to_vec()),
+                    ("user.other".to_owned(), b"second".to_vec()),
+                ],
+                b"body",
+            )
+            .expect("stage");
+        let artifact = writer.finish().expect("finish");
+        let vfs = Vfs::from_bytes(&artifact.bytes, std::path::Path::new(".")).expect("opens");
+        let root = vfs.root_inode();
+        let f_ino = vfs.lookup(root, "f.bin").expect("file");
+
+        let names = vfs.xattr_names(f_ino);
+        assert_eq!(names, vec!["user.comment", "user.other"]);
+        assert_eq!(vfs.xattr(f_ino, "user.comment"), Some(&b"hello xattr"[..]));
+        assert_eq!(vfs.xattr(f_ino, "user.other"), Some(&b"second"[..]));
+        // Misses — including the kernel's routine ACL/security
+        // probes — answer None (the handler maps this to NO_XATTR).
+        assert!(vfs.xattr(f_ino, "system.posix_acl_access").is_none());
+        assert!(vfs.xattr(f_ino, "security.capability").is_none());
+        assert!(vfs.xattr(f_ino, "user.missing").is_none());
+        // Attribute-free entries list empty; missing inodes too.
+        assert!(vfs.xattr_names(root).is_empty());
+        assert!(vfs.xattr_names(999_999).is_empty());
+        assert!(vfs.xattr(999_999, "user.comment").is_none());
     }
 
     /// v0.3.46: readdir_at must serve a paginated walk (small
