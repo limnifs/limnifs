@@ -238,6 +238,9 @@ enum Command {
         /// extraction starts; a missing or invalid signature aborts.
         #[arg(long)]
         verify_key: Option<PathBuf>,
+        /// Rate-limited extraction progress on stderr (files, bytes).
+        #[arg(long)]
+        verbose: bool,
     },
     /// Add a file to an existing image (RW).
     Add {
@@ -493,7 +496,7 @@ fn run() -> Result<(), CliError> {
             dest,
             bases,
             verify_key,
-        } => extract(&image, &dest, &bases, verify_key.as_deref()),
+        } => extract(&image, &dest, &bases, verify_key.as_deref(), verbose),
         Command::Add {
             image,
             dest,
@@ -2011,7 +2014,7 @@ fn rw_add(
     let staging = std::env::temp_dir().join(format!("limnifs-rw-add-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     if image.exists() {
-        extract(image, &staging, &[], None)?;
+        extract(image, &staging, &[], None, false)?;
     } else {
         std::fs::create_dir_all(&staging).map_err(|e| CliError::ReadFailed {
             path: staging.clone(),
@@ -2083,7 +2086,7 @@ fn rw_delete(image: &Path, path: &str, profile: Option<String>) -> Result<(), Cl
     };
     let staging = std::env::temp_dir().join(format!("limnifs-rw-del-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
-    extract(image, &staging, &[], None)?;
+    extract(image, &staging, &[], None, false)?;
     let target = staging.join(path);
     std::fs::remove_file(&target).map_err(|e| CliError::ReadFailed {
         path: target.clone(),
@@ -2123,7 +2126,7 @@ fn turnover_cmd(image: &Path, profile_name: &str) -> Result<(), CliError> {
 
     let staging = std::env::temp_dir().join(format!("limnifs-turnover-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
-    extract(image, &staging, &[], None)?;
+    extract(image, &staging, &[], None, false)?;
 
     let config = limnifs_write::WriteConfig::from_profile(profile_name).unwrap_or_else(|| {
         eprintln!("warning: unknown profile '{profile_name}', using max-ratio");
@@ -2973,8 +2976,17 @@ fn extract(
     dest: &Path,
     bases: &[PathBuf],
     verify_key: Option<&Path>,
+    verbose: bool,
 ) -> Result<(), CliError> {
     use rayon::prelude::*;
+    // Progress rides the write side's global sink: same 250 ms
+    // rate limiter, same verbose gating, stderr-only.
+    let reported = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if verbose {
+        limnifs_write::progress::set_sink(std::sync::Arc::new(RateLimitedReporter::new(
+            reported.clone(),
+        )));
+    }
     if let Some(key) = verify_key {
         check_signature(image, key)?;
         eprintln!("signature verified against {}", key.display());
@@ -3020,6 +3032,12 @@ fn extract(
         .collect();
     if let Some(Some(err)) = write_errors.into_iter().next() {
         return Err(err);
+    }
+    if verbose {
+        limnifs_write::progress::clear_sink();
+        if reported.load(std::sync::atomic::Ordering::Relaxed) {
+            eprintln!();
+        }
     }
 
     // Hardlinks after the parallel writes (targets must exist);
