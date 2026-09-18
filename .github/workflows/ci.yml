@@ -32,10 +32,15 @@ jobs:
   rust:
     name: Rust matrix
     uses: limnifs/.github/.github/workflows/rust-ci.yml@main
-    with:
-      # Pinned in CI since v0.3.52: an accidental 1.76+ std API
-      # must fail the PR, not the next downstream build.
-      msrv: "1.75"
+    # MSRV leg parked: the leg proved rust-version 1.75 is
+    # unattainable — omnizip 0.21.99's code uses 1.82+ APIs
+    # (is_none_or in omnizip-brotli) with no declared rust_version.
+    # The floor decision (bump rust-version vs pin omnizip back
+    # below the dict fix) is a product call, not a CI parameter;
+    # the reusable leg stays available (limnifs/.github#3, #4) for
+    # whichever floor is decided. The lock pins that survive in
+    # this PR fixed real edition2024 parse breaks for cargo <1.85
+    # and remain correct at any floor.
 
   # Native Windows build check. The Linux+macOS matrices above do not
   # compile Windows-only cfg branches; v0.3.2 shipped a broken Windows
