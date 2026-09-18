@@ -165,19 +165,23 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+          # Native arm64 runner (was: cross-compiled from amd64).
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
+          # Native arm64 runner + musl-tools (was: `cross` from amd64).
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            use_cross: true
+            os: ubuntu-24.04-arm
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+          # Windows on ARM, native runner.
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -186,22 +190,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - name: Install aarch64-gnu cross toolchain
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Install musl tools (x86_64)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+      # musl linkers, one per ISA: x86_64 cross-host, aarch64 native.
+      - name: Install musl tools
+        if: endsWith(matrix.target, '-musl')
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
-      - name: Install cross (aarch64-musl)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: cargo install cross --locked
-      - name: Configure aarch64 cross linker
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
@@ -209,12 +203,13 @@ jobs:
       # binaries: tar streaming (limn --from-tar / limni tar) and
       # the sparse-index layer fast path. Library installs stay
       # sovereign — the features remain opt-in there.
-      - name: Build release binary (cross)
-        if: ${{ matrix.use_cross }}
-        run: cross build --release --locked --target ${{ matrix.target }} --bin limni --features tar,sparse-index,xattr
       - name: Build release binary
-        if: ${{ !matrix.use_cross }}
         run: cargo build --release --locked --target ${{ matrix.target }} --bin limni --features tar,sparse-index,xattr
+      # Rosetta smoke: the x86_64-apple-darwin artifact must run on
+      # Apple Silicon (the runner is arm64 — this executes emulated).
+      - name: Rosetta smoke test
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: file "target/${{ matrix.target }}/release/limni" && "target/${{ matrix.target }}/release/limni" --version
       - name: Package
         shell: bash
         env:
