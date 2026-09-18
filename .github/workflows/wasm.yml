@@ -13,6 +13,11 @@ on:
       - "v*.*.*"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Tag pushes are release traffic — never cancel mid-flight.
+  cancel-in-progress: false
+
 permissions:
   contents: read
 

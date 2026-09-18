@@ -41,7 +41,13 @@ jobs:
   # same class of break at PR time.
   windows:
     name: Windows check
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both ISA halves: the release feature set must compile
+        # natively on Windows ARM64 too (aarch64-pc-windows-msvc).
+        os: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
