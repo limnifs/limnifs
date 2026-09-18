@@ -154,8 +154,7 @@ struct CollectSink<'s> {
 impl limnifs_core::live_tree::LiveTreeSink for CollectSink<'_> {
     fn on_directory(&mut self, path: &std::path::Path) -> Result<(), limnifs_core::CoreError> {
         if !path.as_os_str().is_empty() {
-            self.out
-                .insert(path.to_string_lossy().into_owned(), Expected::Dir);
+            self.out.insert(tree_key(path), Expected::Dir);
         }
         Ok(())
     }
@@ -166,8 +165,7 @@ impl limnifs_core::live_tree::LiveTreeSink for CollectSink<'_> {
     ) -> Result<(), limnifs_core::CoreError> {
         let data =
             limnifs_core::live_tree::file_plaintext(inode, Some(self.store)).expect("plaintext");
-        self.out
-            .insert(path.to_string_lossy().into_owned(), Expected::File(data));
+        self.out.insert(tree_key(path), Expected::File(data));
         Ok(())
     }
     fn on_symlink(
@@ -175,10 +173,8 @@ impl limnifs_core::live_tree::LiveTreeSink for CollectSink<'_> {
         path: &std::path::Path,
         target: &str,
     ) -> Result<(), limnifs_core::CoreError> {
-        self.out.insert(
-            path.to_string_lossy().into_owned(),
-            Expected::Symlink(target.to_owned()),
-        );
+        self.out
+            .insert(tree_key(path), Expected::Symlink(target.to_owned()));
         Ok(())
     }
 }
@@ -292,6 +288,13 @@ fn same_tar_packs_identically() {
     let a = pack_tar(&mut tar_bytes.as_slice()).bytes;
     let b = pack_tar(&mut tar_bytes.as_slice()).bytes;
     assert_eq!(a, b);
+}
+
+/// Tree paths key with `/` regardless of host OS: the walk yields
+/// native separators (correct for a &Path), tests compare against
+/// the image-relative `/` names.
+fn tree_key(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 fn pseudo_random(seed: u64, count: usize) -> Vec<u8> {
