@@ -1,7 +1,7 @@
 //! Warm-start window probe (TODO.features/35).
 //!
 //! Settles whether seeding chunk N's encoder with chunk N-1's tail
-//! can EVER be net-positive at LimniFS chunk sizes, before any
+//! can EVER be net-positive at `LimniFS` chunk sizes, before any
 //! upstream omnizip-zstd API work:
 //!
 //! - COST is exact: a self-contained warm frame must contain the
@@ -14,6 +14,7 @@
 //! net = gain - cost. Run: `cargo run -p limnifs-bench --example
 //! warm_window_probe -- <file>...` (or `random:BYTES` for the
 //! incompressible control).
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_wrap)]
 
 use std::collections::HashMap;
 
