@@ -33,13 +33,13 @@ jobs:
     name: Rust matrix
     uses: limnifs/.github/.github/workflows/rust-ci.yml@main
     with:
-      # Restored: omnizip 0.21.112 (their PR #644, our issue #638)
-      # rewrote the 1.82+ API uses and declared the 1.75 floor in
-      # code. Known hole (omnizip#715): the aarch64-only cpubits
-      # dep is edition2024 — cargo 1.75 on aarch64 hosts can't
-      # parse it; this x86_64 leg is blind to target-gated deps,
-      # matching upstream's own leg until they add an aarch64 one.
-      msrv: "1.75"
+      # PARKED again (omnizip#715 + comment): 0.21.112's crypto
+      # edge (omnizip-crypto -> aes 0.9 -> cipher 0.5 -> inout
+      # 0.2.2) is edition2024 across the board — the 1.75 floor is
+      # broken on every host, not fixable by consumer lock pins.
+      # Upstream has the finding (aes 0.8 would restore it); the
+      # floor decision here (1.75 until upstream re-pins, or 1.85)
+      # is a product call. The reusable leg is ready either way.
 
   # Native Windows build check. The Linux+macOS matrices above do not
   # compile Windows-only cfg branches; v0.3.2 shipped a broken Windows
