@@ -39,6 +39,7 @@ jobs:
       # dep is edition2024 — cargo 1.75 on aarch64 hosts can't
       # parse it; this x86_64 leg is blind to target-gated deps,
       # matching upstream's own leg until they add an aarch64 one.
+      msrv: "1.75"
 
   # Native Windows build check. The Linux+macOS matrices above do not
   # compile Windows-only cfg branches; v0.3.2 shipped a broken Windows
