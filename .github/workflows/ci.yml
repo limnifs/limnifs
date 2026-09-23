@@ -37,7 +37,7 @@ jobs:
       # aes ^0.8 (edition2021 chain) per our omnizip#715 — the
       # declared 1.75 floor is buildable again, and the leg now
       # enforces it on every PR.
-      msrv: "1.75"
+      msrv: "1.85"
 
   # Native Windows build check. The Linux+macOS matrices above do not
   # compile Windows-only cfg branches; v0.3.2 shipped a broken Windows
