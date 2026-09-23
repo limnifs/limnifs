@@ -33,13 +33,11 @@ jobs:
     name: Rust matrix
     uses: limnifs/.github/.github/workflows/rust-ci.yml@main
     with:
-      # PARKED again (omnizip#715 + comment): 0.21.112's crypto
-      # edge (omnizip-crypto -> aes 0.9 -> cipher 0.5 -> inout
-      # 0.2.2) is edition2024 across the board — the 1.75 floor is
-      # broken on every host, not fixable by consumer lock pins.
-      # Upstream has the finding (aes 0.8 would restore it); the
-      # floor decision here (1.75 until upstream re-pins, or 1.85)
-      # is a product call. The reusable leg is ready either way.
+        # Restored: omnizip 0.21.113 downgraded omnizip-crypto to
+      # aes ^0.8 (edition2021 chain) per our omnizip#715 — the
+      # declared 1.75 floor is buildable again, and the leg now
+      # enforces it on every PR.
+      msrv: "1.75"
 
   # Native Windows build check. The Linux+macOS matrices above do not
   # compile Windows-only cfg branches; v0.3.2 shipped a broken Windows
