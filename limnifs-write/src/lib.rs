@@ -1740,7 +1740,11 @@ struct WriteContext {
     /// Compressed-metadata size above which the blob is externalized
     /// to a sidecar (issue #187). Defaults to
     /// [`METADATA_EXTERNALIZE_THRESHOLD`]; overridable via
-    /// `WriteConfig::defaults::metadata_externalize_threshold`.
+    /// `WriteConfig::defaults::metadata_externalize_threshold`. The
+    /// override is honored in BOTH directions: lowering tightens the
+    /// inline budget; raising past the default reader ceiling (1 MiB,
+    /// spec §5.3) is the caller's contract with ITS readers — the
+    /// image inlines, and default-ceiling readers refuse it by name.
     metadata_externalize_threshold: usize,
     /// Whether to dedup identical inline file contents into the
     /// shared-inline table (issue #189). `true` (default) keeps the
@@ -2358,12 +2362,16 @@ impl WriteContext {
             (limnifs_core::codec::CODEC_STORE, metadata_blob.clone())
         };
 
-        // Decide inline vs sidecar based on the COMPRESSED length,
-        // clamped to the reader's inline ceiling regardless of config
-        // (inline metadata above it is unreadable by default readers).
-        let externalize_at = self
-            .metadata_externalize_threshold
-            .min(limnifs_core::metadata_reference::DEFAULT_INLINE_METADATA_MAX_BYTES as usize);
+        // Decide inline vs sidecar based on the COMPRESSED length, at the
+        // caller's configured threshold. The default threshold stays under
+        // the default reader ceiling (1 MiB, spec §5.3), so a stock image
+        // is inline-or-sidecar exactly as its readers expect; a caller who
+        // RAISES the threshold past the default reader ceiling takes
+        // responsibility for its readers carrying the same raise (the
+        // documented per-image override, issue #187 — the raise direction
+        // was silently clamped before, making the override a lie for
+        // self-contained image contracts like tebako's).
+        let externalize_at = self.metadata_externalize_threshold;
         let (metadata_sidecar, inline_data, metadata_locator_count) =
             if on_wire_blob.len() > externalize_at {
                 // Content-derived sidecar name: an RW commit NEVER
