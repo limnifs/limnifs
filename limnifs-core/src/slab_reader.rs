@@ -112,21 +112,8 @@ impl SlabView<'_> {
         dict_lookup: &dyn Fn(u8) -> Option<Vec<u8>>,
     ) -> Option<Result<Vec<u8>, CoreError>> {
         let record = self.find_record(drop_id)?;
-        if record.representation.aead != 0x00 {
-            return Some(Err(CoreError::UnsupportedFeature {
-                feature: format!(
-                    "drop aead 0x{:02X} (only plaintext/0x00 supported in v0.1)",
-                    record.representation.aead
-                ),
-            }));
-        }
-        if record.solid_window_index != 0 {
-            return Some(Err(CoreError::UnsupportedFeature {
-                feature: format!(
-                    "solid_window_index {} (only single-window slabs supported in v0.1)",
-                    record.solid_window_index
-                ),
-            }));
+        if let Err(e) = check_drop_readable(record) {
+            return Some(Err(e));
         }
         let offset = usize::try_from(record.offset_in_window).ok()?;
         let len = usize::try_from(record.len_in_window).ok()?;
@@ -140,42 +127,11 @@ impl SlabView<'_> {
                 ),
             }));
         }
-        let raw = &self.bytes[start..end];
-        if record.flags & crate::seekable::DROP_FLAG_SEEKABLE != 0 {
-            if record.dict_id != crate::drop_record::NO_DICT {
-                return Some(Err(CoreError::UnsupportedFeature {
-                    feature: "seekable drop with trained dictionary (not combinable)".into(),
-                }));
-            }
-            return Some(crate::seekable::decode_seekable(
-                record.representation.codec,
-                raw,
-                record.plaintext_len,
-            ));
-        }
-        if record.dict_id == crate::drop_record::NO_DICT {
-            Some(crate::codec::decompress(
-                record.representation.codec,
-                raw,
-                record.plaintext_len,
-            ))
-        } else {
-            // Dictionary-compressed drop. Resolve the dict and use
-            // the dict-aware ZSTD decompress path.
-            let Some(dict_bytes) = dict_lookup(record.dict_id) else {
-                return Some(Err(CoreError::Corrupt {
-                    reason: format!(
-                        "drop references dict_id 0x{:02X} but no dictionary_section provided",
-                        record.dict_id
-                    ),
-                }));
-            };
-            Some(crate::codec::zstd_dict::decompress_with_dict(
-                raw,
-                record.plaintext_len,
-                &dict_bytes,
-            ))
-        }
+        Some(decode_drop_bytes(
+            record,
+            &self.bytes[start..end],
+            dict_lookup,
+        ))
     }
 
     /// Decompress only the plaintext bytes at `[off, off+len)` of
@@ -256,6 +212,70 @@ impl SlabView<'_> {
             });
         }
         Ok((start, end))
+    }
+}
+
+/// The record-level readability gates every drop reader applies before
+/// locating bytes: a non-plaintext AEAD and a non-zero
+/// `solid_window_index` are post-v0.1 features. Shared by
+/// [`SlabView`] (byte-slice slabs) and
+/// [`crate::paged_slab::PagedSlab`] (positioned-reader slabs) so the
+/// two never drift.
+pub(crate) fn check_drop_readable(record: &DropRecord) -> Result<(), CoreError> {
+    if record.representation.aead != 0x00 {
+        return Err(CoreError::UnsupportedFeature {
+            feature: format!(
+                "drop aead 0x{:02X} (only plaintext/0x00 supported in v0.1)",
+                record.representation.aead
+            ),
+        });
+    }
+    if record.solid_window_index != 0 {
+        return Err(CoreError::UnsupportedFeature {
+            feature: format!(
+                "solid_window_index {} (only single-window slabs supported in v0.1)",
+                record.solid_window_index
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Decode the located bytes of one drop: the codec dispatch — the
+/// seekable path for [`crate::seekable::DROP_FLAG_SEEKABLE`] records,
+/// the dictionary-aware ZSTD path when the record names a `dict_id`.
+/// Shared by [`SlabView`] and [`crate::paged_slab::PagedSlab`].
+pub(crate) fn decode_drop_bytes(
+    record: &DropRecord,
+    raw: &[u8],
+    dict_lookup: &dyn Fn(u8) -> Option<Vec<u8>>,
+) -> Result<Vec<u8>, CoreError> {
+    if record.flags & crate::seekable::DROP_FLAG_SEEKABLE != 0 {
+        if record.dict_id != crate::drop_record::NO_DICT {
+            return Err(CoreError::UnsupportedFeature {
+                feature: "seekable drop with trained dictionary (not combinable)".into(),
+            });
+        }
+        return crate::seekable::decode_seekable(
+            record.representation.codec,
+            raw,
+            record.plaintext_len,
+        );
+    }
+    if record.dict_id == crate::drop_record::NO_DICT {
+        crate::codec::decompress(record.representation.codec, raw, record.plaintext_len)
+    } else {
+        // Dictionary-compressed drop. Resolve the dict and use the
+        // dict-aware ZSTD decompress path.
+        let Some(dict_bytes) = dict_lookup(record.dict_id) else {
+            return Err(CoreError::Corrupt {
+                reason: format!(
+                    "drop references dict_id 0x{:02X} but no dictionary_section provided",
+                    record.dict_id
+                ),
+            });
+        };
+        crate::codec::zstd_dict::decompress_with_dict(raw, record.plaintext_len, &dict_bytes)
     }
 }
 

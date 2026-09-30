@@ -28,6 +28,7 @@
 //! | [`merkle`] | [`SectionHashes`], [`compute_merkle_root`] |
 //! | [`slab`] | [`SlabHeader`] + [`parse_slab_header`] |
 //! | [`slab_reader`] | [`SlabView`] + [`parse_slab`] — locate and read drop plaintexts |
+//! | [`paged_slab`] | [`PagedSlab`], [`PagedSlabSet`], [`PositionedReader`] + [`parse_slab_record_table`] — slabs over positioned (remote) byte sources |
 //! | [`drop_record`] | [`DropRecord`] + [`parse_drop_record`] |
 //! | [`locator`] | [`LocatorEntry`] + [`parse_locator_entry`] |
 
@@ -73,6 +74,7 @@ pub mod locator;
 pub mod merkle;
 pub mod metadata;
 pub mod metadata_reference;
+pub mod paged_slab;
 pub mod profile_descriptor;
 pub mod read;
 pub mod reed_solomon;
@@ -134,6 +136,10 @@ pub use metadata_reference::{
     parse_metadata_reference, parse_metadata_reference_with_ceilings, read_external_metadata,
     MetadataReference, DEFAULT_INLINE_METADATA_MAX_BYTES, METADATA_REFERENCE_SECTION_VERSION,
     METADATA_REFERENCE_SECTION_VERSION_2,
+};
+pub use paged_slab::{
+    parse_slab_record_table, PagedBytes, PagedSlab, PagedSlabSet, PositionedReader,
+    SlabRecordTable, PAGED_CACHE_PAGES, PAGED_PAGE_SIZE,
 };
 pub use slab::{
     parse_slab_header, parse_slab_header_with_ceiling, SlabHeader, CRYPTO_HINT_EXTENDED,
