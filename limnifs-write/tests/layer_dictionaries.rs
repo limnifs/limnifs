@@ -165,7 +165,7 @@ fn layer_adopts_base_dictionaries_and_round_trips() {
     // and the image is never larger because of the pass. Either way
     // the layer must be well-formed.
     if let Some(section) = dictionary_section_of(&layer_artifact.bytes) {
-        assert!(!section.dicts.is_empty());
+        assert_ne!(section.dicts.len(), 0);
         for d in &section.dicts {
             let base_match = crafted_section
                 .dicts
@@ -179,7 +179,7 @@ fn layer_adopts_base_dictionaries_and_round_trips() {
     }
 
     // Referenced drops: the layer's own slabs hold only new content.
-    assert!(!layer_artifact.slabs.is_empty());
+    assert_ne!(layer_artifact.slabs.len(), 0);
 }
 
 #[test]
