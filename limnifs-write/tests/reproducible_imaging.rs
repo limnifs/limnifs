@@ -50,10 +50,12 @@ fn make_workdir(name: &str) -> PathBuf {
 /// and permission bits (uid/gid cannot differ without root; the
 /// normalize knob zeroes them, which the canonicalization test pins).
 fn stage_tree(root: &Path, old: bool) {
-    let (mtime, plain_mode, exec_mode, dir_mode) = if old {
-        (EPOCH_A, 0o644, 0o755, 0o755)
+    let mtime = if old { EPOCH_A } else { EPOCH_B };
+    #[cfg(unix)]
+    let (plain_mode, exec_mode, dir_mode) = if old {
+        (0o644, 0o755, 0o755)
     } else {
-        (EPOCH_B, 0o600, 0o700, 0o700)
+        (0o600, 0o700, 0o700)
     };
     std::fs::create_dir_all(root.join("sub")).expect("mkdir sub");
     std::fs::write(root.join("note.txt"), b"reproducible me\n").expect("write note");
@@ -154,7 +156,17 @@ fn deterministic_mode_is_byte_identical_across_stagings() {
 
     // Every recorded mtime is exactly the pin — never the host's.
     let blob = parse_blob(&first);
-    assert!(blob.inodes.len() >= 6, "root + 4 files + link + subdir");
+    // Unix stagings add a symlink + hardlink; non-unix trees stop at
+    // root + subdir + 3 files.
+    #[cfg(unix)]
+    let min_inodes = 6;
+    #[cfg(not(unix))]
+    let min_inodes = 5;
+    assert!(
+        blob.inodes.len() >= min_inodes,
+        "expected at least {min_inodes} inodes, got {}",
+        blob.inodes.len()
+    );
     for inode in &blob.inodes {
         assert_eq!(
             inode.mtime_ns, PIN_NS,
