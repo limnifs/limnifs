@@ -108,6 +108,30 @@ pub struct WriteConfig {
     /// `max-write` profile where speed >> ratio.
     #[serde(default)]
     pub skip_chunking: bool,
+    /// Reproducible-builds timestamp pin, in seconds since the UNIX
+    /// epoch (the `SOURCE_DATE_EPOCH` convention). When `Some`, every
+    /// inode mtime recorded in the image is exactly this value —
+    /// pin-to-epoch, never clamp — so imaging the same tree at
+    /// different times produces byte-identical output. When `None`,
+    /// the writer honors the `SOURCE_DATE_EPOCH` environment variable
+    /// (a set-but-malformed value is a named error, never silently
+    /// ignored); when neither is set, real host mtimes are recorded
+    /// (the default, pre-knob behavior). Applies to filesystem-surveyed
+    /// metadata (`write_directory*` / `write_layer`); stream entries
+    /// carry caller-supplied [`crate::stream::EntryMeta`] verbatim.
+    #[serde(default)]
+    pub source_date_epoch: Option<u64>,
+    /// Normalize unix ownership and permission bits for reproducible
+    /// output: uid/gid become 0 and the mode's permission bits become
+    /// canonical — 0o755 for directories, 0o777 for symlinks, 0o755
+    /// for regular files with any exec bit set, 0o644 otherwise. The
+    /// file-type bits are preserved; setuid/setgid/sticky bits are
+    /// dropped. No-op off unix, where the writer already records fixed
+    /// identity values. Default false: real host metadata is recorded.
+    /// Reproducible pipelines want this together with
+    /// [`WriteConfig::source_date_epoch`].
+    #[serde(default)]
+    pub normalize_metadata: bool,
     /// Encryption configuration.
     pub encryption: EncryptionConfig,
     /// ZSTD dictionary configuration.
@@ -481,6 +505,8 @@ impl WriteConfig {
             write_codec: default_write_codec(),
             turnover_threshold: 0,
             skip_chunking: false,
+            source_date_epoch: None,
+            normalize_metadata: false,
         }
     }
 
@@ -523,6 +549,22 @@ impl WriteConfig {
     #[must_use]
     pub fn with_brotli_quality(mut self, quality: u8) -> Self {
         self.codec_tunables.brotli.quality = quality;
+        self
+    }
+
+    /// Pin every recorded mtime to `epoch` seconds (reproducible
+    /// builds; overrides the `SOURCE_DATE_EPOCH` environment variable).
+    #[must_use]
+    pub fn with_source_date_epoch(mut self, epoch: u64) -> Self {
+        self.source_date_epoch = Some(epoch);
+        self
+    }
+
+    /// Normalize uid/gid to 0 and permission bits to the canonical
+    /// 0o644/0o755 forms (reproducible builds).
+    #[must_use]
+    pub fn with_normalized_metadata(mut self) -> Self {
+        self.normalize_metadata = true;
         self
     }
 
@@ -813,5 +855,76 @@ mod tests {
         let mut config = WriteConfig::default_v0_1();
         config.defaults.text_codec = "does-not-exist".into();
         assert!(config.codec_registry().is_err());
+    }
+
+    #[test]
+    fn reproducibility_knobs_default_off() {
+        let config = WriteConfig::default_v0_1();
+        assert_eq!(config.source_date_epoch, None);
+        assert!(!config.normalize_metadata);
+        for name in [
+            "max-ratio",
+            "max-speed",
+            "balanced",
+            "competitive",
+            "max-read",
+            "max-write",
+            "max-write-rw",
+            "max-read-rw",
+            "balanced-rw",
+        ] {
+            let profile = WriteConfig::from_profile(name).expect("known profile");
+            assert_eq!(profile.source_date_epoch, None, "profile {name}");
+            assert!(!profile.normalize_metadata, "profile {name}");
+        }
+    }
+
+    #[test]
+    fn reproducibility_knobs_parse_from_toml() {
+        let config: WriteConfig = ::toml::from_str(
+            r#"
+source_date_epoch = 1735689600
+normalize_metadata = true
+
+[defaults]
+text_codec = "brotli"
+binary_codec = "lz4"
+metadata_codec = "brotli"
+metadata_quality = 5
+inline_threshold = 4096
+
+[chunking]
+[tournament]
+codecs = ["store", "lz4"]
+min_size_threshold = 256
+skip_for_binary = true
+
+[encryption]
+aead = "chacha20-poly1305"
+key_wrap = "x25519-hkdf"
+
+[dictionaries]
+enabled = true
+min_class_size = 100
+max_dict_size = 65536
+"#,
+        )
+        .expect("parse");
+        assert_eq!(config.source_date_epoch, Some(1_735_689_600));
+        assert!(config.normalize_metadata);
+        config.validate().expect("validate");
+        // Round-trips through the serializer.
+        let s = config.to_toml().expect("serialise");
+        let reparsed: WriteConfig = ::toml::from_str(&s).expect("reparse");
+        assert_eq!(reparsed, config);
+    }
+
+    #[test]
+    fn reproducibility_builders() {
+        let config = WriteConfig::default_v0_1()
+            .with_source_date_epoch(1_735_689_600)
+            .with_normalized_metadata();
+        assert_eq!(config.source_date_epoch, Some(1_735_689_600));
+        assert!(config.normalize_metadata);
     }
 }

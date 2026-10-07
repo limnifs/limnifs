@@ -11,6 +11,11 @@ The TOML example shows every section with its defaults; omit what you
 don't care about.
 
 ```toml
+# Top-level reproducibility knobs (defaults shown; see below).
+# source_date_epoch — unset by default; the SOURCE_DATE_EPOCH
+#   environment variable is honored when this is absent.
+normalize_metadata = false
+
 [defaults]
 text_codec = "brotli"          # codec for text-classified chunks
 binary_codec = "lz4"           # codec for binary-classified chunks
@@ -74,6 +79,35 @@ memory_budget_mb = 256
 aead = "chacha20-poly1305"
 key_wrap = "x25519-hkdf"
 ```
+
+## Reproducible imaging
+
+Rebuilding an unchanged tree produces byte-identical image bytes when
+the two top-level knobs are on — the property OCI-style write-once
+registries and CI publish reruns need.
+
+```toml
+source_date_epoch = 1735689600   # seconds since the UNIX epoch
+normalize_metadata = true
+```
+
+- **`source_date_epoch`** — every inode mtime is recorded as exactly
+  this value (pin-to-epoch, never clamp), so checkout time cannot leak
+  into the image. When the field is unset, the writer honors the
+  `SOURCE_DATE_EPOCH` environment variable (the reproducible-builds
+  ecosystem standard — `SOURCE_DATE_EPOCH=… limni limn …` just works);
+  a set-but-malformed value is a named error, never silently ignored.
+  With neither set, real host mtimes are recorded (the default).
+- **`normalize_metadata`** — uid/gid become 0 and permission bits
+  canonicalize: 0o755 for directories and for regular files with any
+  exec bit, 0o777 for symlinks, 0o644 for other regular files.
+  File-type bits are preserved; setuid/setgid/sticky are dropped.
+  No-op off unix, where identity is already fixed.
+
+The knobs govern filesystem-surveyed metadata (`write_directory*` and
+`write_layer`, including the RW commit's staging walk). Stream entries
+keep their caller-supplied `EntryMeta` verbatim — stream callers own
+their metadata and can already pass fixed values.
 
 ## Built-in profiles
 

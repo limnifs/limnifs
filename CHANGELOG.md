@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Reproducible imaging knobs on `WriteConfig`** (tamatebako/tebako#718) —
+  `source_date_epoch: Option<u64>` pins every recorded inode mtime to
+  exactly that epoch (pin-to-epoch, never clamp), so imaging an
+  unchanged tree produces byte-identical bytes regardless of checkout
+  time. When the field is unset, the `SOURCE_DATE_EPOCH` environment
+  variable is honored (the reproducible-builds ecosystem standard); a
+  set-but-malformed value is a named error, never a silent fallback.
+  `normalize_metadata: bool` zeroes uid/gid and canonicalizes
+  permission bits (0o755 for directories and executable regular files,
+  0o777 for symlinks, 0o644 otherwise; type and exec bits preserved).
+  Builder methods: `with_source_date_epoch`, `with_normalized_metadata`.
+  Both govern filesystem-surveyed metadata (`write_directory*` /
+  `write_layer`, including the RW commit's staging walk); stream
+  entries keep their caller-supplied `EntryMeta` verbatim. Conformance
+  pin: `limnifs-write/tests/reproducible_imaging.rs` images the same
+  tree from two stagings with deliberately different host mtimes and
+  modes and asserts byte-identical manifest + slabs; a negative
+  control verifies the default mode still records real host mtimes.
+
+### Fixed
+
+- **Dictionary section emission order** — `trained_dicts_by_class` is
+  a `HashMap` whose iteration order is per-instance random; when both
+  the text and binary classes trained a dictionary, identical inputs
+  could assemble into different manifests. The section is now emitted
+  in ascending class-id order.
+
 ### Changed
 
 - Removed the unused `pipeline-parallelism` writer module/feature instead of wiring it: audit found the experimental producer/consumer code could pair bytes with the wrong `PendingFile` because read threads sent only data while the consumer assumed receive order. No public default path used it; deletion removes a footgun.
