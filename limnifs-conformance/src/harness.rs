@@ -205,7 +205,7 @@ mod tests {
     fn minimal_vector_has_expected_summary() {
         let minimal = crate::vectors::minimal_v0_1();
         let report = round_trip(&minimal);
-        assert_ne!(report.parsed_flags.len(), 0);
+        assert_eq!(report.parsed_flags.len(), 0);
         assert!(!report.parsed_metadata_inlined);
         assert_eq!(report.parsed_slab_count, 1);
         assert_eq!(report.parsed_history_count, 1);
