@@ -73,6 +73,9 @@ impl From<crate::WriteError> for DeltaError {
                 std::io::ErrorKind::Unsupported,
                 format!("unsupported file type ({kind}): {}", path.display()),
             )),
+            crate::WriteError::InvalidSourceDateEpoch { .. } => Self::Io(std::io::Error::other(
+                e.to_string(),
+            )),
         }
     }
 }

@@ -25,7 +25,7 @@ use limnifs_core::{
     parse_feature_flags_section, parse_manifest_header, parse_metadata_blob,
     parse_metadata_reference, ContentHandle, ManifestCursor, MetadataBlob,
 };
-use limnifs_write::{write_directory_with_config, WriteArtifact, WriteConfig};
+use limnifs_write::{write_directory_with_config, write_layer, WriteArtifact, WriteConfig};
 
 const EPOCH_A: u64 = 1_577_836_800; // 2020-01-01T00:00:00Z
 const EPOCH_B: u64 = 1_717_200_000; // 2024-04-01T00:00:00Z
@@ -271,8 +271,26 @@ fn source_date_epoch_env_precedence_and_default_mode() {
     let err = write_directory_with_config(&tree, &WriteConfig::default_v0_1())
         .expect_err("malformed SOURCE_DATE_EPOCH must fail");
     assert!(
-        err.to_string().contains("SOURCE_DATE_EPOCH"),
-        "error must name the variable: {err}"
+        matches!(
+            &err,
+            limnifs_write::WriteError::InvalidSourceDateEpoch { source, .. }
+                if *source == "SOURCE_DATE_EPOCH"
+        ),
+        "malformed env must be the named variant: {err}"
+    );
+
+    // 3b. An env epoch too large for nanosecond mtimes is the same
+    //     named error — never a silently saturated pin.
+    std::env::set_var("SOURCE_DATE_EPOCH", u64::MAX.to_string());
+    let err = write_directory_with_config(&tree, &WriteConfig::default_v0_1())
+        .expect_err("oversized SOURCE_DATE_EPOCH must fail");
+    assert!(
+        matches!(
+            &err,
+            limnifs_write::WriteError::InvalidSourceDateEpoch { source, value }
+                if *source == "SOURCE_DATE_EPOCH" && value == &u64::MAX.to_string()
+        ),
+        "oversized env epoch must be the named variant: {err}"
     );
 
     // 4. Negative control: no knob, no env → real host mtimes are
@@ -313,6 +331,83 @@ fn source_date_epoch_env_precedence_and_default_mode() {
         artifact_bytes(&art_t1),
         artifact_bytes(&art_t2),
         "default mode: different host mtimes must yield different images"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn source_date_epoch_ceiling_is_a_named_error_and_boundary_pins() {
+    // The largest epoch representable in u64 nanoseconds (year 2554 —
+    // far beyond any plausible SOURCE_DATE_EPOCH, but the boundary
+    // must be honest, not saturated).
+    const MAX_SECS: u64 = u64::MAX / 1_000_000_000;
+    let base = make_workdir("ceiling");
+    let tree = base.join("tree");
+    stage_tree(&tree, true);
+
+    // The boundary pins exactly.
+    let cfg = WriteConfig::default_v0_1().with_source_date_epoch(MAX_SECS);
+    let art = write_directory_with_config(&tree, &cfg).expect("boundary epoch packs");
+    let blob = parse_blob(&art);
+    for inode in &blob.inodes {
+        assert_eq!(
+            inode.mtime_ns,
+            MAX_SECS * 1_000_000_000,
+            "boundary epoch must pin exactly, inode {}",
+            inode.number
+        );
+    }
+
+    // One second past the ceiling is the named error — never a
+    // saturated u64::MAX pin.
+    let err = write_directory_with_config(
+        &tree,
+        &WriteConfig::default_v0_1().with_source_date_epoch(MAX_SECS + 1),
+    )
+    .expect_err("epoch past the nanosecond ceiling must fail");
+    assert!(
+        matches!(
+            &err,
+            limnifs_write::WriteError::InvalidSourceDateEpoch { source, value }
+                if *source == "source_date_epoch" && value == &(MAX_SECS + 1).to_string()
+        ),
+        "oversized config epoch must name the field: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// `write_layer` resolves the same policy as the directory writer:
+/// layer entries recorded under the pin carry it, not host mtimes.
+#[test]
+fn write_layer_honors_source_date_epoch() {
+    let base = make_workdir("layer");
+    let base_dir = base.join("base");
+    std::fs::create_dir_all(&base_dir).expect("base dir");
+    std::fs::write(base_dir.join("seed.txt"), b"base payload\n").expect("seed");
+
+    let base_artifact =
+        write_directory_with_config(&base_dir, &WriteConfig::default_v0_1()).expect("base packs");
+    let base_image = base.join("base.lim");
+    std::fs::write(&base_image, &base_artifact.bytes).expect("write base image");
+
+    let layer_dir = base.join("layer");
+    std::fs::create_dir_all(&layer_dir).expect("layer dir");
+    std::fs::write(layer_dir.join("seed.txt"), b"base payload\n").expect("carry base file");
+    std::fs::write(layer_dir.join("new.txt"), b"layer payload\n").expect("new file");
+
+    let layer_artifact = write_layer(&base_image, &layer_dir, &reproducible_config())
+        .expect("layer packs under the pin");
+    let blob = parse_blob(&layer_artifact);
+    let new_inode = blob
+        .inodes
+        .iter()
+        .find(|i| matches!(&i.content_handle, ContentHandle::InlineData(d) if d == b"layer payload\n"))
+        .expect("new.txt inode");
+    assert_eq!(
+        new_inode.mtime_ns, PIN_NS,
+        "layer-surveyed entries must carry the pinned epoch"
     );
 
     let _ = std::fs::remove_dir_all(&base);

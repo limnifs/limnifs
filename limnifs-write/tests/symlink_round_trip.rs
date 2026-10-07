@@ -81,6 +81,6 @@ fn unsupported_types_raise_the_named_error_issue_190() {
                 "guidance mentions symlinks: {msg}"
             );
         }
-        other @ WriteError::Io(_) => panic!("expected UnsupportedFileType, got {other:?}"),
+        other => panic!("expected UnsupportedFileType, got {other:?}"),
     }
 }
