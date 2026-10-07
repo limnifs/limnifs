@@ -191,6 +191,15 @@ pub enum WriteError {
         path: PathBuf,
         kind: String,
     },
+    /// The reproducible-builds epoch pin could not be honored:
+    /// malformed (not a non-negative integer of seconds) or too
+    /// large to represent as nanoseconds (above `u64::MAX / 1e9`,
+    /// i.e. beyond year 2554). `source` names the config field or
+    /// environment variable that supplied the value.
+    InvalidSourceDateEpoch {
+        source: &'static str,
+        value: String,
+    },
 }
 
 impl std::fmt::Display for WriteError {
@@ -203,6 +212,11 @@ impl std::fmt::Display for WriteError {
                  directories, and symlinks; remove the entry or file an issue \
                  if you need it carried",
                 path.display()
+            ),
+            Self::InvalidSourceDateEpoch { source, value } => write!(
+                f,
+                "invalid {source}={value}: expected a non-negative integer of \
+                 seconds that fits in u64 nanoseconds (at most 18_446_744_073)"
             ),
         }
     }
@@ -1512,15 +1526,26 @@ impl MetadataPolicy {
     /// Resolve the effective policy. The config field wins; when it is
     /// `None`, the `SOURCE_DATE_EPOCH` environment variable (the
     /// reproducible-builds ecosystem standard) supplies the pin. A
-    /// set-but-malformed variable is a named error, never a silent
-    /// fallback to wall-clock metadata.
+    /// set-but-malformed variable, or an epoch too large to represent
+    /// as nanoseconds, is a named error — never a silent fallback to
+    /// wall-clock metadata or a saturated pin.
     pub(crate) fn resolve(config: &WriteConfig) -> Result<Self, WriteError> {
-        let epoch_secs = match config.source_date_epoch {
-            Some(secs) => Some(secs),
-            None => source_date_epoch_from_env()?,
+        let (epoch_secs, source): (Option<u64>, &'static str) = match config.source_date_epoch {
+            Some(secs) => (Some(secs), "source_date_epoch"),
+            None => (source_date_epoch_from_env()?, "SOURCE_DATE_EPOCH"),
         };
+        let pin_mtime_ns = epoch_secs
+            .map(|secs| {
+                secs.checked_mul(1_000_000_000).ok_or_else(|| {
+                    WriteError::InvalidSourceDateEpoch {
+                        source,
+                        value: secs.to_string(),
+                    }
+                })
+            })
+            .transpose()?;
         Ok(Self {
-            pin_mtime_ns: epoch_secs.map(|s| s.saturating_mul(1_000_000_000)),
+            pin_mtime_ns,
             normalize_identity: config.normalize_metadata,
         })
     }
@@ -1546,15 +1571,18 @@ impl MetadataPolicy {
 /// the UNIX epoch). Absent → `None`; present but not a non-negative
 /// integer → a named error.
 fn source_date_epoch_from_env() -> Result<Option<u64>, WriteError> {
-    match std::env::var("SOURCE_DATE_EPOCH") {
+    const SOURCE: &str = "SOURCE_DATE_EPOCH";
+    match std::env::var(SOURCE) {
         Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => Err(WriteError::Io(std::io::Error::other(
-            "SOURCE_DATE_EPOCH is not valid Unicode; expected seconds since the UNIX epoch",
-        ))),
+        Err(std::env::VarError::NotUnicode(_)) => Err(WriteError::InvalidSourceDateEpoch {
+            source: SOURCE,
+            value: String::from("<not valid Unicode>"),
+        }),
         Ok(raw) => raw.trim().parse::<u64>().map(Some).map_err(|_| {
-            WriteError::Io(std::io::Error::other(format!(
-                "SOURCE_DATE_EPOCH={raw:?} is not a non-negative integer number of seconds"
-            )))
+            WriteError::InvalidSourceDateEpoch {
+                source: SOURCE,
+                value: raw.clone(),
+            }
         }),
     }
 }
