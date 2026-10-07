@@ -328,6 +328,7 @@ pub fn write_layer(
 
     let mut ctx = WriteContext::new();
     ctx.chunker = chunker_from_config(config)?;
+    ctx.metadata_policy = MetadataPolicy::resolve(config)?;
     // Adopt the base's trained dictionaries for this layer (the
     // dictionary pass still gates on whether re-emitting them pays).
     ctx.base_dictionaries = if config.dictionaries.enabled {
@@ -690,6 +691,7 @@ fn write_directory_streaming(
     ctx.metadata_codec = config
         .metadata_codec_id()
         .unwrap_or(limnifs_core::codec::CODEC_BROTLI);
+    ctx.metadata_policy = MetadataPolicy::resolve(config)?;
 
     ctx.chunker = chunker_from_config(config)?;
 
@@ -746,7 +748,7 @@ fn write_directory_streaming(
         // the mutex) and deadlock. The survey must finish before the
         // first fold anyway, so hoisting it costs nothing and leaves
         // the producer thread pool-free.
-        let survey = survey_tree(root)?;
+        let survey = survey_tree(root, &ctx.metadata_policy)?;
         std::thread::scope(|scope| {
             let producer = {
                 let ctx = &mut *ctx;
@@ -1488,6 +1490,92 @@ impl SurveyNode {
     }
 }
 
+/// Reproducible-imaging metadata policy, resolved once per write from
+/// [`WriteConfig::source_date_epoch`] / `WriteConfig::normalize_metadata`
+/// (with the `SOURCE_DATE_EPOCH` environment fallback) and applied at
+/// the single metadata-capture funnel, [`survey_meta_of`]. Stream-path
+/// entries are unaffected: their caller-supplied
+/// [`crate::stream::EntryMeta`] lands verbatim by contract.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct MetadataPolicy {
+    /// When set, every inode mtime is recorded as exactly this value
+    /// (nanoseconds since the UNIX epoch) — pin-to-epoch, never clamp,
+    /// so identical inputs image to identical bytes regardless of
+    /// checkout time.
+    pin_mtime_ns: Option<u64>,
+    /// When set, uid/gid normalize to 0 and permission bits to the
+    /// canonical forms (see [`canonical_mode`]). No-op off unix.
+    normalize_identity: bool,
+}
+
+impl MetadataPolicy {
+    /// Resolve the effective policy. The config field wins; when it is
+    /// `None`, the `SOURCE_DATE_EPOCH` environment variable (the
+    /// reproducible-builds ecosystem standard) supplies the pin. A
+    /// set-but-malformed variable is a named error, never a silent
+    /// fallback to wall-clock metadata.
+    pub(crate) fn resolve(config: &WriteConfig) -> Result<Self, WriteError> {
+        let epoch_secs = match config.source_date_epoch {
+            Some(secs) => Some(secs),
+            None => source_date_epoch_from_env()?,
+        };
+        Ok(Self {
+            pin_mtime_ns: epoch_secs.map(|s| s.saturating_mul(1_000_000_000)),
+            normalize_identity: config.normalize_metadata,
+        })
+    }
+
+    fn apply(&self, meta: &mut SurveyMeta) {
+        if let Some(pin) = self.pin_mtime_ns {
+            meta.mtime_ns = pin;
+        }
+        #[cfg(unix)]
+        if self.normalize_identity {
+            meta.uid = 0;
+            meta.gid = 0;
+            meta.mode = canonical_mode(meta.mode);
+        }
+        // Off unix the survey already records fixed identity values
+        // (see `SurveyMeta::identity`); the knob is a no-op there.
+        #[cfg(not(unix))]
+        let _ = self.normalize_identity;
+    }
+}
+
+/// Read the `SOURCE_DATE_EPOCH` environment variable (seconds since
+/// the UNIX epoch). Absent → `None`; present but not a non-negative
+/// integer → a named error.
+fn source_date_epoch_from_env() -> Result<Option<u64>, WriteError> {
+    match std::env::var("SOURCE_DATE_EPOCH") {
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(WriteError::Io(std::io::Error::other(
+            "SOURCE_DATE_EPOCH is not valid Unicode; expected seconds since the UNIX epoch",
+        ))),
+        Ok(raw) => raw.trim().parse::<u64>().map(Some).map_err(|_| {
+            WriteError::Io(std::io::Error::other(format!(
+                "SOURCE_DATE_EPOCH={raw:?} is not a non-negative integer number of seconds"
+            )))
+        }),
+    }
+}
+
+/// Canonical permission bits for reproducible images: directories
+/// 0o755, symlinks 0o777, regular files with any exec bit 0o755,
+/// other files 0o644. The file-type bits are preserved; setuid,
+/// setgid, sticky, and every other permission variance are dropped.
+#[cfg(unix)]
+fn canonical_mode(mode: u32) -> u32 {
+    use limnifs_core::inode::{S_IFDIR, S_IFLNK, S_IFMT, S_IFREG};
+    let ty = mode & S_IFMT;
+    let perms = match ty {
+        S_IFDIR => 0o755,
+        S_IFLNK => 0o777,
+        S_IFREG if mode & 0o111 != 0 => 0o755,
+        _ => 0o644,
+    };
+    ty | perms
+}
+
 fn survey_meta_of(meta: &std::fs::Metadata) -> SurveyMeta {
     #[cfg(unix)]
     use std::os::unix::fs::FileTypeExt as _;
@@ -1582,10 +1670,11 @@ fn collect_xattrs(path: &Path) -> Vec<(String, Vec<u8>)> {
     out
 }
 
-fn survey_node(path: &Path) -> Result<SurveyNode, WriteError> {
+fn survey_node(path: &Path, policy: &MetadataPolicy) -> Result<SurveyNode, WriteError> {
     use rayon::prelude::*;
     let meta = std::fs::symlink_metadata(path)?;
     let mut sm = survey_meta_of(&meta);
+    policy.apply(&mut sm);
     #[cfg(all(unix, feature = "xattr"))]
     {
         if !sm.is_symlink {
@@ -1624,7 +1713,7 @@ fn survey_node(path: &Path) -> Result<SurveyNode, WriteError> {
     named.sort_by(|a, b| a.0.cmp(&b.0));
     named
         .par_iter()
-        .map(|(name, child)| survey_node(child).map(|node| (name.clone(), node)))
+        .map(|(name, child)| survey_node(child, policy).map(|node| (name.clone(), node)))
         .collect::<Result<Vec<_>, WriteError>>()
         .map(|children| SurveyNode {
             meta: sm,
@@ -1637,8 +1726,8 @@ fn survey_node(path: &Path) -> Result<SurveyNode, WriteError> {
 /// rayon workers. The returned structure fully determines the
 /// fold's output — the fold itself never touches the filesystem
 /// except to read file payloads.
-fn survey_tree(root: &Path) -> Result<SurveyNode, WriteError> {
-    survey_node(root)
+fn survey_tree(root: &Path, policy: &MetadataPolicy) -> Result<SurveyNode, WriteError> {
+    survey_node(root, policy)
 }
 
 struct PendingInode {
@@ -1752,6 +1841,10 @@ struct WriteContext {
     /// so images stay readable by pre-#186 readers whose reserved
     /// mask rejects the `SHARED_INLINE` flag.
     emit_shared_inline: bool,
+    /// Reproducible-imaging metadata policy (mtime pin + identity
+    /// normalization), resolved from the config and the
+    /// `SOURCE_DATE_EPOCH` environment variable before the survey.
+    metadata_policy: MetadataPolicy,
     /// Inline-data cutoff from `WriteConfig::defaults.inline_threshold`.
     /// Files at or below this size are stored inline in the metadata
     /// blob instead of being chunked into slabs. Set from the profile
@@ -1803,6 +1896,7 @@ impl WriteContext {
             inline_threshold: INLINE_THRESHOLD,
             metadata_externalize_threshold: METADATA_EXTERNALIZE_THRESHOLD,
             emit_shared_inline: true,
+            metadata_policy: MetadataPolicy::default(),
         }
     }
 
@@ -1928,7 +2022,7 @@ impl WriteContext {
         // the previous single-threaded walk so inode numbering,
         // dir-node ordering, and error order are byte-identical
         // (pinned by the pack-twice determinism test).
-        let survey = survey_tree(path)?;
+        let survey = survey_tree(path, &self.metadata_policy)?;
         self.fold_survey(path, &survey, None)
     }
 
@@ -2480,7 +2574,12 @@ impl WriteContext {
         // records' `dict_id` field. One entry per class with enough
         // samples to train: text (id 0), binary (id 1).
         if !self.trained_dicts_by_class.is_empty() {
-            let dicts: Vec<_> = self
+            // Deterministic emission order: `trained_dicts_by_class`
+            // is a HashMap whose iteration order is per-instance
+            // random, so identical writes could assemble different
+            // manifests whenever two classes (text + binary) both
+            // trained. Sort by class id — the section's semantic key.
+            let mut dicts: Vec<_> = self
                 .trained_dicts_by_class
                 .values()
                 .map(|d| limnifs_core::dictionary_section::Dictionary {
@@ -2489,6 +2588,7 @@ impl WriteContext {
                     data: d.content.clone(),
                 })
                 .collect();
+            dicts.sort_by_key(|d| (d.class_id, d.codec_id));
             let section = limnifs_core::dictionary_section::DictionarySection {
                 version: limnifs_core::dictionary_section::DICTIONARY_SECTION_VERSION,
                 dicts,
@@ -3362,6 +3462,48 @@ mod tests {
         assert_eq!(
             total_drop_ids, artifact.drop_count,
             "drop_ids count across slabs must match WriteArtifact.drop_count",
+        );
+    }
+
+    #[test]
+    fn dictionary_section_is_emitted_in_class_id_order() {
+        // `trained_dicts_by_class` is a HashMap — its iteration order
+        // is per-instance random. With two trained classes (text +
+        // binary) the manifest must still emit the section in
+        // ascending class-id order, or identical inputs can assemble
+        // different bytes (tebako#718's class of bug). Insert in
+        // reverse order so an unsorted drain would emit [1, 0].
+        let mut ctx = WriteContext::new();
+        ctx.trained_dicts_by_class.insert(
+            classifier::Class::Binary,
+            crate::dictionary::TrainedDictionary {
+                id: 1,
+                codec: limnifs_core::codec::CODEC_ZSTD,
+                content: b"binary-dict".to_vec(),
+            },
+        );
+        ctx.trained_dicts_by_class.insert(
+            classifier::Class::Text,
+            crate::dictionary::TrainedDictionary {
+                id: 0,
+                codec: limnifs_core::codec::CODEC_ZSTD,
+                content: b"text-dict".to_vec(),
+            },
+        );
+        let artifact = ctx.assemble();
+
+        let mut cursor = ManifestCursor::new(&artifact.bytes);
+        parse_manifest_header(&mut cursor).expect("header");
+        limnifs_core::parse_feature_flags_section(&mut cursor).expect("flags");
+        limnifs_core::parse_metadata_reference(&mut cursor).expect("metadata reference");
+        limnifs_core::parse_slab_index(&mut cursor).expect("slab index");
+        limnifs_core::parse_history(&mut cursor).expect("history");
+        let section = parse_dictionary_section(&mut cursor).expect("dictionary section");
+        let order: Vec<u8> = section.dicts.iter().map(|d| d.class_id).collect();
+        assert_eq!(
+            order,
+            vec![0, 1],
+            "dictionary section must be class-id ordered regardless of map iteration order"
         );
     }
 }

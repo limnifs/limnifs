@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(tag.len(), TAG_SIZE);
         ocb.decrypt_in_place_detached(&NONCE, b"", &mut buffer, &tag)
             .expect("round-trip empty");
-        assert!(buffer.is_empty());
+        assert_eq!(buffer.len(), 0);
     }
 
     #[test]

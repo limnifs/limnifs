@@ -155,6 +155,8 @@ pub fn max_ratio() -> WriteConfig {
         write_codec: "lz4".into(),
         turnover_threshold: 0,
         skip_chunking: false,
+        source_date_epoch: None,
+        normalize_metadata: false,
     }
 }
 
@@ -214,6 +216,8 @@ pub fn max_speed() -> WriteConfig {
         write_codec: "lz4".into(),
         turnover_threshold: 0,
         skip_chunking: false,
+        source_date_epoch: None,
+        normalize_metadata: false,
     }
 }
 
@@ -272,6 +276,8 @@ pub fn balanced() -> WriteConfig {
         write_codec: "lz4".into(),
         turnover_threshold: 0,
         skip_chunking: false,
+        source_date_epoch: None,
+        normalize_metadata: false,
     }
 }
 
@@ -327,6 +333,8 @@ pub fn competitive() -> WriteConfig {
         write_codec: "lz4".into(),
         turnover_threshold: 0,
         skip_chunking: false,
+        source_date_epoch: None,
+        normalize_metadata: false,
     }
 }
 
@@ -393,6 +401,8 @@ pub fn max_read() -> WriteConfig {
         write_codec: "lz4".into(),
         turnover_threshold: 0,
         skip_chunking: false,
+        source_date_epoch: None,
+        normalize_metadata: false,
     }
 }
 
@@ -447,6 +457,8 @@ pub fn max_write() -> WriteConfig {
         write_codec: "lz4".into(),
         turnover_threshold: 0,
         skip_chunking: true,
+        source_date_epoch: None,
+        normalize_metadata: false,
     }
 }
 
@@ -490,6 +502,8 @@ pub fn max_write_rw() -> WriteConfig {
         write_codec: "lz4".into(),
         turnover_threshold: 500,
         skip_chunking: true,
+        source_date_epoch: None,
+        normalize_metadata: false,
         encryption: EncryptionConfig {
             aead: "chacha20-poly1305".into(),
             key_wrap: "x25519-hkdf".into(),
@@ -549,6 +563,8 @@ pub fn max_read_rw() -> WriteConfig {
         write_codec: "zstd".into(),
         turnover_threshold: 1000,
         skip_chunking: false,
+        source_date_epoch: None,
+        normalize_metadata: false,
         encryption: EncryptionConfig {
             aead: "chacha20-poly1305".into(),
             key_wrap: "x25519-hkdf".into(),
@@ -607,6 +623,8 @@ pub fn balanced_rw() -> WriteConfig {
         write_codec: "zstd".into(),
         turnover_threshold: 1000,
         skip_chunking: false,
+        source_date_epoch: None,
+        normalize_metadata: false,
         encryption: EncryptionConfig {
             aead: "chacha20-poly1305".into(),
             key_wrap: "x25519-hkdf".into(),
