@@ -1536,12 +1536,11 @@ impl MetadataPolicy {
         };
         let pin_mtime_ns = epoch_secs
             .map(|secs| {
-                secs.checked_mul(1_000_000_000).ok_or_else(|| {
-                    WriteError::InvalidSourceDateEpoch {
+                secs.checked_mul(1_000_000_000)
+                    .ok_or_else(|| WriteError::InvalidSourceDateEpoch {
                         source,
                         value: secs.to_string(),
-                    }
-                })
+                    })
             })
             .transpose()?;
         Ok(Self {
@@ -1578,12 +1577,15 @@ fn source_date_epoch_from_env() -> Result<Option<u64>, WriteError> {
             source: SOURCE,
             value: String::from("<not valid Unicode>"),
         }),
-        Ok(raw) => raw.trim().parse::<u64>().map(Some).map_err(|_| {
-            WriteError::InvalidSourceDateEpoch {
-                source: SOURCE,
-                value: raw.clone(),
-            }
-        }),
+        Ok(raw) => {
+            raw.trim()
+                .parse::<u64>()
+                .map(Some)
+                .map_err(|_| WriteError::InvalidSourceDateEpoch {
+                    source: SOURCE,
+                    value: raw.clone(),
+                })
+        }
     }
 }
 
